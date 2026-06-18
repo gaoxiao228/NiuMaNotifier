@@ -84,7 +84,10 @@ NiumaNotifier 启动外部插件时会注入：
 | `NIUMA_LOCAL_API_URL` | Local API 地址，例如 `http://127.0.0.1:27874`。 |
 | `NIUMA_PLUGIN_ID` | 当前插件 ID。 |
 | `NIUMA_TOOL_ID` | 当前插件对应的工具 ID。 |
+| `NIUMA_PARENT_PID` | 主 App 进程 PID。插件可定时检测该进程是否仍存在；如果不存在，应主动退出，避免主 App 闪退后遗留插件进程。 |
 | `NIUMA_STATE_PATH` | 当前实例使用的 SQLite 状态文件路径，仅用于诊断，不应直接写入。 |
+
+建议外部插件把 `NIUMA_PARENT_PID` 作为自清理信号使用。该变量缺失或格式错误时，插件应保持兼容并继续运行；只有确认父进程不存在时才主动退出。
 
 ## 事件上报
 
