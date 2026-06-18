@@ -178,10 +178,11 @@ fn project_name_from_path(path: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn tool_key(tool: &ToolKind) -> &'static str {
+fn tool_key(tool: &ToolKind) -> &str {
     match tool {
         ToolKind::Codex => "codex",
         ToolKind::ClaudeCode => "claude_code",
+        ToolKind::Custom(value) => value.as_str(),
     }
 }
 

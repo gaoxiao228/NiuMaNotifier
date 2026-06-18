@@ -272,10 +272,11 @@ fn detailed_notification_body(event: &NiumaEvent, body: &str, text: Notification
     )
 }
 
-fn tool_label(tool: &ToolKind) -> &'static str {
+fn tool_label(tool: &ToolKind) -> &str {
     match tool {
         ToolKind::Codex => "Codex",
         ToolKind::ClaudeCode => "Claude Code",
+        ToolKind::Custom(value) => value.as_str(),
     }
 }
 

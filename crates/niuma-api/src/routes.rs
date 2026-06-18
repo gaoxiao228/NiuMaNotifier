@@ -1,5 +1,6 @@
 use axum::routing::{get, post};
 use axum::Router;
+use niuma_core::plugin::{default_user_plugin_dir, PluginRegistry};
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::SqliteStateStore;
@@ -7,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::handlers::{
     dismiss_blocker, get_events, get_listener_config, get_main_state, get_notification_config,
-    get_notification_records, get_sessions, post_event, reset_state, save_listener_config,
-    save_notification_config,
+    get_notification_records, get_sessions, post_event, post_plugin_events, reset_state,
+    save_listener_config, save_notification_config,
 };
 use crate::manual_test::manual_test_scenario;
 use crate::response::{preflight, route_not_found};
@@ -21,11 +22,17 @@ pub fn app(store: SqliteStateStore) -> Router {
 
 pub fn app_with_bus(store: SqliteStateStore, runtime_events: RuntimeEventBus) -> Router {
     let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
+    let plugin_registry = PluginRegistry::with_builtin_plugins()
+        .discover_external_plugins(&default_user_plugin_dir());
     Router::new()
         .route("/api/v1/main-state", get(get_main_state).options(preflight))
         .route(
             "/api/v1/events",
             get(get_events).post(post_event).options(preflight),
+        )
+        .route(
+            "/api/v1/plugin-events",
+            post(post_plugin_events).options(preflight),
         )
         .route("/api/v1/sessions", get(get_sessions).options(preflight))
         .route("/api/v1/stream", get(sse_stream).options(preflight))
@@ -63,6 +70,7 @@ pub fn app_with_bus(store: SqliteStateStore, runtime_events: RuntimeEventBus) ->
             store,
             runtime_events,
             mutation_service,
+            plugin_registry,
             main_state_broadcaster: Arc::new(Mutex::new(MainStateBroadcaster::default())),
         })
 }

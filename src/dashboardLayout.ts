@@ -21,13 +21,7 @@ export function renderDashboardShell() {
         <aside class="side-panel">
           <section id="codex-listener-card" class="side-card">
             <h2 id="listener-health-title"></h2>
-            <label class="listener-toggle">
-              <span class="listener-toggle-copy">
-                <strong id="codex-listener-label"></strong>
-                <span id="codex-listener-state"></span>
-              </span>
-              <input id="codex-listener-toggle" type="checkbox">
-            </label>
+            <div id="tool-listener-list" class="listener-tool-list"></div>
             <p id="codex-listener-description" class="listener-description"></p>
           </section>
           <section id="local-sse-card" class="side-card" hidden>

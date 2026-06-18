@@ -59,6 +59,111 @@ async fn post_event_then_get_main_state_returns_waiting_approval() {
 }
 
 #[tokio::test]
+async fn post_plugin_events_accepts_builtin_codex_events() {
+    let store = SqliteStateStore::new(test_path("post_plugin_events"));
+    enable_codex_listener(&store);
+    let router = app(store);
+    let event = sample_event();
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "events": [event]
+    });
+
+    let post = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugin-events")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(post).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["plugin_id"], "builtin-codex");
+    assert_eq!(value["data"]["applied_count"], 1);
+
+    let get = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/main-state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(get).await;
+    assert_eq!(value["data"]["state"]["status"], "waiting_approval");
+}
+
+#[tokio::test]
+async fn post_plugin_events_dedupes_repeated_events() {
+    let router = app(SqliteStateStore::new(test_path(
+        "post_plugin_events_dedupe",
+    )));
+    let event = sample_event();
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "events": [event]
+    })
+    .to_string();
+
+    for expected_applied in [1, 0] {
+        let post = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/plugin-events")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let value = response_json(post).await;
+        assert_eq!(value["code"], 0);
+        assert_eq!(value["data"]["applied_count"], expected_applied);
+    }
+}
+
+#[tokio::test]
+async fn post_plugin_events_rejects_tool_mismatch() {
+    let router = app(SqliteStateStore::new(test_path(
+        "post_plugin_events_mismatch",
+    )));
+    let mut event = sample_event();
+    event.tool = ToolKind::ClaudeCode;
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "events": [event]
+    });
+
+    let post = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugin-events")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(post).await;
+
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("只能上报 codex"));
+}
+
+#[tokio::test]
 async fn get_sessions_returns_standard_list_envelope() {
     let store = SqliteStateStore::new(test_path("get_sessions_list"));
     store.append_event(sample_event()).unwrap();
@@ -372,6 +477,9 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
     let get_value = response_json(get).await;
     assert_eq!(get_value["code"], 0);
     assert_eq!(get_value["data"]["codex_listening_enabled"], false);
+    assert_eq!(get_value["data"]["tool_listening_enabled"]["codex"], false);
+    assert_eq!(get_value["data"]["tools"][0]["id"], "codex");
+    assert_eq!(get_value["data"]["tools"][0]["plugin_id"], "builtin-codex");
 
     let save = router
         .clone()
@@ -390,6 +498,7 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
     assert_eq!(save_value["code"], 0);
     assert_eq!(save_value["data"]["saved"], true);
     assert_eq!(save_value["data"]["codex_listening_enabled"], true);
+    assert_eq!(save_value["data"]["tool_listening_enabled"]["codex"], true);
 
     let get = router
         .oneshot(
@@ -402,6 +511,37 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
         .unwrap();
     let get_value = response_json(get).await;
     assert_eq!(get_value["data"]["codex_listening_enabled"], true);
+    assert_eq!(get_value["data"]["tools"][0]["enabled"], true);
+}
+
+#[tokio::test]
+async fn listener_config_accepts_dynamic_tool_map() {
+    let router = app(SqliteStateStore::new(test_path(
+        "listener_config_dynamic_map",
+    )));
+
+    let save = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/listener-config/save")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"tool_listening_enabled":{"codex":true,"claude_code":false}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(save).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["tool_listening_enabled"]["codex"], true);
+    assert_eq!(
+        value["data"]["tool_listening_enabled"]["claude_code"],
+        false
+    );
 }
 
 #[tokio::test]

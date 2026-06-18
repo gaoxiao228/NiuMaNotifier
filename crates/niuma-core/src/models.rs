@@ -1,12 +1,55 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // MVP-0 的核心模型集中放在这里，后续 CLI、Tauri 和 hook helper 共用同一套类型。
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum ToolId {
     Codex,
     ClaudeCode,
+    Custom(String),
+}
+
+pub type ToolKind = ToolId;
+
+impl ToolId {
+    pub const CODEX: &'static str = "codex";
+    pub const CLAUDE_CODE: &'static str = "claude_code";
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            ToolId::Codex => Self::CODEX,
+            ToolId::ClaudeCode => Self::CLAUDE_CODE,
+            ToolId::Custom(value) => value.as_str(),
+        }
+    }
+
+    pub fn from_id(value: impl Into<String>) -> Self {
+        let value = value.into();
+        match value.as_str() {
+            Self::CODEX => ToolId::Codex,
+            Self::CLAUDE_CODE => ToolId::ClaudeCode,
+            _ => ToolId::Custom(value),
+        }
+    }
+}
+
+impl Serialize for ToolId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(ToolId::from_id(value))
+    }
 }
 
 // 状态枚举使用产品文档中的命名，序列化时保持 API 友好的 snake_case。

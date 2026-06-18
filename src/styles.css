@@ -323,6 +323,11 @@ select {
   min-height: 56px;
 }
 
+.listener-tool-list {
+  display: grid;
+  gap: 10px;
+}
+
 .listener-toggle input {
   appearance: none;
   background: #d8dde7;

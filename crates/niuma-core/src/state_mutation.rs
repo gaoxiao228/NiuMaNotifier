@@ -80,19 +80,48 @@ impl StateMutationService {
     ) -> Result<ListenerConfigUpdateResult, String> {
         let previous = self.store.listener_config()?;
         let config = previous.clone().with_tool_enabled(&tool, enabled);
+        let disabled_tools = if enabled { Vec::new() } else { vec![tool] };
+        self.apply_listener_config_update(previous, config, disabled_tools)
+    }
+
+    pub fn set_listener_config(
+        &self,
+        config: ListenerConfig,
+    ) -> Result<ListenerConfigUpdateResult, String> {
+        let previous = self.store.listener_config()?;
+        let disabled_tools = previous
+            .tool_enabled_map()
+            .into_iter()
+            .filter_map(|(tool_id, was_enabled)| {
+                let tool = ToolKind::from_id(tool_id);
+                if was_enabled && !config.is_tool_enabled(&tool) {
+                    Some(tool)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.apply_listener_config_update(previous, config, disabled_tools)
+    }
+
+    fn apply_listener_config_update(
+        &self,
+        previous: ListenerConfig,
+        config: ListenerConfig,
+        disabled_tools: Vec<ToolKind>,
+    ) -> Result<ListenerConfigUpdateResult, String> {
         self.store.save_listener_config(&config)?;
 
         let mut changed = previous != config;
-        let state = if enabled {
-            None
-        } else {
+        let mut state = None;
+        for tool in disabled_tools {
             let before = self.store.load()?;
             let after = self.store.clear_tool_state(&tool)?;
             if before != after {
                 changed = true;
             }
-            Some(after)
-        };
+            state = Some(after);
+        }
 
         if changed {
             self.runtime_events
@@ -233,6 +262,7 @@ mod tests {
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,
                 claude_code_listening_enabled: true,
+                ..ListenerConfig::default()
             })
             .unwrap();
         store

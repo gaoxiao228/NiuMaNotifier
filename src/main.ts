@@ -9,6 +9,7 @@ import {
   saveLanguagePreference,
   saveNotificationConfig,
   sendTestNotification,
+  type ListenerToolConfig,
   type MainStatePayload,
   type NotificationChannel,
   type NotificationChannelConfig
@@ -31,7 +32,7 @@ import {
 } from './notificationView'
 import {
   isBlockingStatus,
-  renderListenerToggle as renderListenerToggleView,
+  renderListenerTools,
   renderRequestDetail,
   renderStatusSummary
 } from './statusView'
@@ -58,9 +59,9 @@ let notificationBusyChannel: NotificationChannel | null = null
 let notificationConfigLoaded = false
 let notificationAutoSaveTimer: number | undefined
 let notificationAutoSaveVersion = 0
-let codexListeningEnabled = false
+let listenerTools: ListenerToolConfig[] = []
 let listenerConfigLoaded = false
-let listenerBusy = false
+let listenerBusyToolId: string | null = null
 let localApiUrlText = ''
 let localSseConnected = false
 
@@ -85,9 +86,7 @@ const notificationFormEl = document.querySelector<HTMLElement>('#notification-fo
 const notificationTestButton = document.querySelector<HTMLButtonElement>('#notification-test')
 const statusSummaryEl = document.querySelector<HTMLElement>('#status-summary')
 const updatedEl = document.querySelector<HTMLElement>('#updated')
-const codexListenerToggle = document.querySelector<HTMLInputElement>('#codex-listener-toggle')
-const codexListenerLabelEl = document.querySelector<HTMLElement>('#codex-listener-label')
-const codexListenerStateEl = document.querySelector<HTMLElement>('#codex-listener-state')
+const toolListenerListEl = document.querySelector<HTMLElement>('#tool-listener-list')
 const codexListenerDescriptionEl = document.querySelector<HTMLElement>(
   '#codex-listener-description'
 )
@@ -107,9 +106,9 @@ async function refreshDashboard() {
 
 async function refreshListenerConfig() {
   const config = await getListenerConfig()
-  codexListeningEnabled = config.codex_listening_enabled
+  listenerTools = normalizeListenerTools(config)
   listenerConfigLoaded = true
-  renderListenerToggle()
+  renderToolListeners()
 }
 
 function renderDashboard() {
@@ -140,20 +139,37 @@ function renderDashboard() {
       language: currentLanguage
     })
   }
-  renderListenerToggle()
+  renderToolListeners()
   renderLocalSseStatus()
 }
 
-function renderListenerToggle() {
-  renderListenerToggleView({
-    toggle: codexListenerToggle,
-    label: codexListenerLabelEl,
-    state: codexListenerStateEl,
+function renderToolListeners() {
+  renderListenerTools({
+    element: toolListenerListEl,
+    tools: listenerTools,
     language: currentLanguage,
-    busy: listenerBusy,
-    enabled: codexListeningEnabled,
+    busyToolId: listenerBusyToolId,
     loaded: listenerConfigLoaded
   })
+}
+
+function normalizeListenerTools(config: {
+  codex_listening_enabled: boolean
+  tools?: ListenerToolConfig[]
+}) {
+  if (config.tools && config.tools.length > 0) {
+    return config.tools
+  }
+  return [
+    {
+      id: 'codex',
+      plugin_id: 'builtin-codex',
+      display_name: 'Codex',
+      enabled: config.codex_listening_enabled,
+      source: 'builtin',
+      icon_url: null
+    }
+  ]
 }
 
 function renderNotificationPage() {
@@ -264,8 +280,8 @@ function applyLanguage() {
   localSsePortLabelEl!.textContent = t.localSsePort
   localSsePathLabelEl!.textContent = t.localSsePath
   localSseUrlLabelEl!.textContent = t.localSseUrl
-  codexListenerDescriptionEl!.textContent = t.codexListenerDescription
-  renderListenerToggle()
+  codexListenerDescriptionEl!.textContent = t.toolListenerDescription
+  renderToolListeners()
   if (languageSelectEl) {
     languageSelectEl.value = currentLanguage
     languageSelectEl.setAttribute('aria-label', t.language)
@@ -288,26 +304,36 @@ refreshButton?.addEventListener('click', () => {
     })
 })
 
-codexListenerToggle?.addEventListener('change', async () => {
-  const nextEnabled = codexListenerToggle.checked
-  const previousEnabled = codexListeningEnabled
-  codexListeningEnabled = nextEnabled
-  listenerBusy = true
-  renderListenerToggle()
+toolListenerListEl?.addEventListener('change', async (event) => {
+  const toggle = event.target instanceof HTMLInputElement ? event.target : null
+  const toolId = toggle?.dataset.toolToggle
+  if (!toggle || !toolId) {
+    return
+  }
+  const nextEnabled = toggle.checked
+  const previousTools = listenerTools.map((tool) => ({ ...tool }))
+  listenerTools = listenerTools.map((tool) =>
+    tool.id === toolId ? { ...tool, enabled: nextEnabled } : tool
+  )
+  listenerBusyToolId = toolId
+  renderToolListeners()
   try {
     const saved = await saveListenerConfig({
-      codex_listening_enabled: nextEnabled
+      codex_listening_enabled:
+        listenerTools.find((tool) => tool.id === 'codex')?.enabled ?? false,
+      tool_listening_enabled: Object.fromEntries(
+        listenerTools.map((tool) => [tool.id, tool.enabled])
+      )
     })
-    codexListeningEnabled = saved.codex_listening_enabled
+    listenerTools = normalizeListenerTools(saved)
     listenerConfigLoaded = true
     await refreshDashboard()
   } catch (error) {
-    codexListeningEnabled = previousEnabled
-    codexListenerToggle.checked = previousEnabled
+    listenerTools = previousTools
     updatedEl!.textContent = error instanceof Error ? error.message : String(error)
   } finally {
-    listenerBusy = false
-    renderListenerToggle()
+    listenerBusyToolId = null
+    renderToolListeners()
   }
 })
 

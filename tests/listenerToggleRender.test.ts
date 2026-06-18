@@ -1,4 +1,4 @@
-import { renderListenerToggle } from '../src/statusView'
+import { renderListenerToggle, renderListenerTools } from '../src/statusView'
 
 class FakeTextElement {
   textContent = ''
@@ -51,4 +51,46 @@ if (!enabledListener.label.className.includes('enabled')) {
 
 if (enabledListener.state.textContent !== '监听中') {
   throw new Error('启用监听时应显示监听中文案')
+}
+
+class FakeHtmlElement {
+  innerHTML = ''
+}
+
+const list = new FakeHtmlElement()
+renderListenerTools({
+  element: list as unknown as HTMLElement,
+  language: 'zh-CN',
+  loaded: true,
+  busyToolId: 'claude_code',
+  tools: [
+    {
+      id: 'codex',
+      plugin_id: 'builtin-codex',
+      display_name: 'Codex',
+      enabled: true,
+      source: 'builtin',
+      icon_url: null
+    },
+    {
+      id: 'claude_code',
+      plugin_id: 'claude-code',
+      display_name: 'Claude Code',
+      enabled: false,
+      source: 'external',
+      icon_url: null
+    }
+  ]
+})
+
+if (!list.innerHTML.includes('data-tool-toggle="codex"')) {
+  throw new Error('工具监听列表应渲染 Codex 开关')
+}
+
+if (!list.innerHTML.includes('Claude Code')) {
+  throw new Error('工具监听列表应渲染 Claude Code 名称')
+}
+
+if (!list.innerHTML.includes('disabled')) {
+  throw new Error('保存中的工具开关应被禁用')
 }

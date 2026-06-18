@@ -18,10 +18,11 @@ fn tool_notification_icons() -> Value {
         .unwrap_or_else(|_| Value::Object(Default::default()))
 }
 
-fn tool_key(tool: &ToolKind) -> &'static str {
+fn tool_key(tool: &ToolKind) -> &str {
     match tool {
         ToolKind::Codex => "codex",
         ToolKind::ClaudeCode => "claude_code",
+        ToolKind::Custom(value) => value.as_str(),
     }
 }
 

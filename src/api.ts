@@ -80,6 +80,17 @@ export type NotificationConfigPayload = {
 
 export type ListenerConfigPayload = {
   codex_listening_enabled: boolean
+  tool_listening_enabled?: Record<string, boolean>
+  tools?: ListenerToolConfig[]
+}
+
+export type ListenerToolConfig = {
+  id: string
+  plugin_id: string
+  display_name: string
+  enabled: boolean
+  source: string
+  icon_url?: string | null
 }
 
 export type TestNotificationResult = {
@@ -224,7 +235,7 @@ export async function getListenerConfig() {
 
 export async function saveListenerConfig(config: ListenerConfigPayload) {
   try {
-    return await requestLocalApi<{ saved: boolean; codex_listening_enabled: boolean }>(
+    return await requestLocalApi<ListenerConfigPayload & { saved: boolean }>(
       '/api/v1/listener-config/save',
       {
         method: 'POST',
@@ -234,7 +245,7 @@ export async function saveListenerConfig(config: ListenerConfigPayload) {
     )
   } catch {
     const response = await invoke<
-      ApiResponse<{ saved: boolean; codex_listening_enabled: boolean }>
+      ApiResponse<ListenerConfigPayload & { saved: boolean }>
     >('save_listener_config', {
       codexListeningEnabled: config.codex_listening_enabled
     })

@@ -22,6 +22,10 @@ if (!html.includes('id="main-status-panel"')) {
   throw new Error('主界面应渲染合并后的主状态面板')
 }
 
+if (!html.includes('id="tool-listener-list"')) {
+  throw new Error('监听状态应渲染工具插件列表容器')
+}
+
 if (
   html.includes('id="codex-listener-detail"') ||
   html.includes('id="codex-listener-detail-label"') ||

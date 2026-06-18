@@ -2,10 +2,12 @@ use chrono::Utc;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::dashboard::DashboardService;
 use niuma_core::main_state::MainStateService;
+use niuma_core::models::ToolId;
 use niuma_core::notification_config::{NotificationConfigErrorKind, NotificationConfigService};
 use niuma_core::platform::locale::{
     active_language, active_language_preference, set_active_language_preference, LanguagePreference,
 };
+use niuma_core::plugin::{default_user_plugin_dir, PluginRegistry, ToolPluginInfo};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::SqliteStateStore;
 use serde_json::json;
@@ -161,7 +163,9 @@ pub(crate) fn dismiss_active_blocker(
 fn get_listener_config_from_store(store: SqliteStateStore) -> ApiResponse<serde_json::Value> {
     match store.listener_config() {
         Ok(config) => ApiResponse::ok(json!({
-            "codex_listening_enabled": config.codex_listening_enabled
+            "codex_listening_enabled": config.is_tool_enabled(&ToolId::Codex),
+            "tool_listening_enabled": config.tool_enabled_map(),
+            "tools": listener_tools(&config)
         })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
@@ -174,10 +178,36 @@ fn save_listener_config_with_service(
     match service.set_codex_listening_enabled(codex_listening_enabled) {
         Ok(result) => ApiResponse::ok(json!({
             "saved": true,
-            "codex_listening_enabled": result.config.codex_listening_enabled
+            "codex_listening_enabled": result.config.is_tool_enabled(&ToolId::Codex),
+            "tool_listening_enabled": result.config.tool_enabled_map(),
+            "tools": listener_tools(&result.config)
         })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
+}
+
+fn listener_tools(config: &niuma_core::listener_config::ListenerConfig) -> Vec<serde_json::Value> {
+    let registry = PluginRegistry::with_builtin_plugins()
+        .discover_external_plugins(&default_user_plugin_dir());
+    registry
+        .tools()
+        .iter()
+        .map(|plugin| listener_tool(plugin, config))
+        .collect()
+}
+
+fn listener_tool(
+    plugin: &ToolPluginInfo,
+    config: &niuma_core::listener_config::ListenerConfig,
+) -> serde_json::Value {
+    json!({
+        "id": plugin.tool_id.as_str(),
+        "plugin_id": plugin.id,
+        "display_name": plugin.display_name,
+        "enabled": config.is_tool_enabled(&plugin.tool_id),
+        "source": format!("{:?}", plugin.source).to_lowercase(),
+        "icon_url": plugin.icon_url
+    })
 }
 
 fn dashboard_service() -> DashboardService {

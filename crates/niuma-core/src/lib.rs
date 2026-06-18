@@ -11,6 +11,7 @@ pub mod notification;
 pub mod notification_config;
 pub mod notification_store;
 pub mod platform;
+pub mod plugin;
 pub mod runtime_event;
 pub mod state;
 pub mod state_mutation;

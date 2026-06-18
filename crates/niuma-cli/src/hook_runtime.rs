@@ -66,10 +66,11 @@ fn submit_parsed_event(
     }
 }
 
-fn tool_listening_disabled_reason(tool: &ToolKind) -> &'static str {
+fn tool_listening_disabled_reason(tool: &ToolKind) -> String {
     match tool {
-        ToolKind::Codex => "codex_listening_disabled",
-        ToolKind::ClaudeCode => "claude_code_listening_disabled",
+        ToolKind::Codex => "codex_listening_disabled".to_string(),
+        ToolKind::ClaudeCode => "claude_code_listening_disabled".to_string(),
+        ToolKind::Custom(value) => format!("{value}_listening_disabled"),
     }
 }
 
@@ -106,6 +107,7 @@ mod tests {
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,
                 claude_code_listening_enabled: false,
+                ..ListenerConfig::default()
             })
             .unwrap();
 

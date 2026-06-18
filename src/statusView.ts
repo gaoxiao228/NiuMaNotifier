@@ -1,4 +1,4 @@
-import type { MainStatePayload, NiumaEvent, NiumaSession } from './api'
+import type { ListenerToolConfig, MainStatePayload, NiumaEvent, NiumaSession } from './api'
 import {
   translateEventType,
   translateStatus,
@@ -15,6 +15,14 @@ export type ListenerToggleRenderOptions = {
   language: LanguageCode
   busy: boolean
   enabled: boolean
+  loaded: boolean
+}
+
+export type ListenerToolsRenderOptions = {
+  element: HTMLElement | null
+  tools: ListenerToolConfig[]
+  language: LanguageCode
+  busyToolId: string | null
   loaded: boolean
 }
 
@@ -90,6 +98,43 @@ export function renderListenerToggle(options: ListenerToggleRenderOptions) {
   options.toggle.checked = options.enabled
   options.toggle.disabled = options.busy || !options.loaded
   options.toggle.setAttribute('aria-label', t.codexListening)
+}
+
+export function renderListenerTools(options: ListenerToolsRenderOptions) {
+  if (!options.element) {
+    return
+  }
+  const t = translations[options.language]
+  const tools = options.tools.length > 0 ? options.tools : fallbackCodexTool(false)
+  options.element.innerHTML = tools
+    .map((tool) => {
+      const busy = options.busyToolId === tool.id
+      const titleClass = tool.enabled ? 'listener-toggle-title enabled' : 'listener-toggle-title'
+      const stateText = busy ? t.listenerSaving : tool.enabled ? t.codexListeningOn : t.codexListeningOff
+      return `
+        <label class="listener-toggle" data-tool-id="${escapeHtml(tool.id)}">
+          <span class="listener-toggle-copy">
+            <strong class="${titleClass}">${escapeHtml(tool.display_name || translateTool(options.language, tool.id))}</strong>
+            <span>${escapeHtml(stateText)}</span>
+          </span>
+          <input type="checkbox" data-tool-toggle="${escapeHtml(tool.id)}" ${tool.enabled ? 'checked' : ''} ${busy || !options.loaded ? 'disabled' : ''} aria-label="${escapeHtml(tool.display_name)}">
+        </label>
+      `
+    })
+    .join('')
+}
+
+function fallbackCodexTool(enabled: boolean): ListenerToolConfig[] {
+  return [
+    {
+      id: 'codex',
+      plugin_id: 'builtin-codex',
+      display_name: 'Codex',
+      enabled,
+      source: 'builtin',
+      icon_url: null
+    }
+  ]
 }
 
 export function renderRequestDetail(options: RequestDetailRenderOptions) {

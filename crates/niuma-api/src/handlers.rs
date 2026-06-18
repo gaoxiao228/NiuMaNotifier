@@ -5,9 +5,10 @@ use chrono::Utc;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::dashboard::DashboardService;
 use niuma_core::main_state::MainStateService;
-use niuma_core::models::NiumaEvent;
+use niuma_core::models::{NiumaEvent, ToolId};
 use niuma_core::notification_config::{NotificationConfigErrorKind, NotificationConfigService};
-use serde::Deserialize;
+use niuma_core::plugin::ToolPluginInfo;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::response::json_response;
@@ -25,6 +26,22 @@ pub(crate) struct ResetStateRequest {
     confirm: String,
     #[allow(dead_code)]
     reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct PluginEventsRequest {
+    plugin_id: String,
+    events: Vec<NiumaEvent>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ListenerToolView {
+    id: String,
+    plugin_id: String,
+    display_name: String,
+    enabled: bool,
+    source: String,
+    icon_url: Option<String>,
 }
 
 pub(crate) async fn get_main_state(State(state): State<AppState>) -> Response {
@@ -70,6 +87,61 @@ pub(crate) async fn post_event(State(state): State<AppState>, body: Bytes) -> Re
                 format!("请求体无法解析：{error}"),
             ),
         ),
+    }
+}
+
+pub(crate) async fn post_plugin_events(State(state): State<AppState>, body: Bytes) -> Response {
+    let request = match serde_json::from_slice::<PluginEventsRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterFormat,
+                    format!("请求体无法解析：{error}"),
+                ),
+            )
+        }
+    };
+    let Some(plugin) = state.plugin_registry.plugin_by_id(&request.plugin_id) else {
+        return json_response(
+            200,
+            ApiResponse::fail(
+                ApiErrorCode::BusinessValidation,
+                format!("未知插件：{}", request.plugin_id),
+            ),
+        );
+    };
+    if let Some(event) = request
+        .events
+        .iter()
+        .find(|event| event.tool != plugin.tool_id)
+    {
+        return json_response(
+            200,
+            ApiResponse::fail(
+                ApiErrorCode::BusinessValidation,
+                format!(
+                    "插件 {} 只能上报 {} 事件，收到 {}",
+                    plugin.id,
+                    plugin.tool_id.as_str(),
+                    event.tool.as_str()
+                ),
+            ),
+        );
+    }
+
+    match state.mutation_service.append_events(request.events) {
+        Ok(result) => json_response(
+            200,
+            ApiResponse::ok(json!({
+                "plugin_id": plugin.id,
+                "event_count": result.state.events.len(),
+                "applied_count": result.applied_events.len(),
+                "session_count": result.state.sessions.len()
+            })),
+        ),
+        Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
     }
 }
 
@@ -147,7 +219,9 @@ pub(crate) async fn get_listener_config(State(state): State<AppState>) -> Respon
         Ok(config) => json_response(
             200,
             ApiResponse::ok(json!({
-                "codex_listening_enabled": config.codex_listening_enabled
+                "codex_listening_enabled": config.is_tool_enabled(&ToolId::Codex),
+                "tool_listening_enabled": config.tool_enabled_map(),
+                "tools": listener_tools(&state.plugin_registry.tools(), &config)
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
@@ -167,30 +241,56 @@ pub(crate) async fn save_listener_config(State(state): State<AppState>, body: By
             )
         }
     };
-    let Some(enabled_value) = value.get("codex_listening_enabled") else {
-        return json_response(
-            200,
-            ApiResponse::fail(
-                ApiErrorCode::BusinessValidation,
-                "codex_listening_enabled 不能为空",
-            ),
-        );
+    let mut config = match state.store.listener_config() {
+        Ok(config) => config,
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
     };
-    let Some(enabled) = enabled_value.as_bool() else {
-        return json_response(
-            200,
-            ApiResponse::fail(
-                ApiErrorCode::BusinessValidation,
-                "codex_listening_enabled 必须是布尔值",
-            ),
-        );
-    };
-    match state.mutation_service.set_codex_listening_enabled(enabled) {
+    if let Some(map) = value
+        .get("tool_listening_enabled")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (tool_id, enabled_value) in map {
+            let Some(enabled) = enabled_value.as_bool() else {
+                return json_response(
+                    200,
+                    ApiResponse::fail(
+                        ApiErrorCode::BusinessValidation,
+                        "tool_listening_enabled 的值必须是布尔值",
+                    ),
+                );
+            };
+            config = config.with_tool_enabled(&ToolId::from_id(tool_id.clone()), enabled);
+        }
+    } else {
+        let Some(enabled_value) = value.get("codex_listening_enabled") else {
+            return json_response(
+                200,
+                ApiResponse::fail(
+                    ApiErrorCode::BusinessValidation,
+                    "codex_listening_enabled 不能为空",
+                ),
+            );
+        };
+        let Some(enabled) = enabled_value.as_bool() else {
+            return json_response(
+                200,
+                ApiResponse::fail(
+                    ApiErrorCode::BusinessValidation,
+                    "codex_listening_enabled 必须是布尔值",
+                ),
+            );
+        };
+        config = config.with_tool_enabled(&ToolId::Codex, enabled);
+    }
+    let enabled = config.is_tool_enabled(&ToolId::Codex);
+    match state.mutation_service.set_listener_config(config.clone()) {
         Ok(result) => json_response(
             200,
             ApiResponse::ok(json!({
                 "saved": true,
-                "codex_listening_enabled": result.config.codex_listening_enabled
+                "codex_listening_enabled": enabled,
+                "tool_listening_enabled": result.config.tool_enabled_map(),
+                "tools": listener_tools(&state.plugin_registry.tools(), &result.config)
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
@@ -233,4 +333,21 @@ pub(crate) async fn get_notification_records(State(state): State<AppState>) -> R
         Ok(records) => json_response(200, ApiResponse::ok(json!({ "list": records }))),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
     }
+}
+
+fn listener_tools(
+    plugins: &[ToolPluginInfo],
+    config: &niuma_core::listener_config::ListenerConfig,
+) -> Vec<ListenerToolView> {
+    plugins
+        .iter()
+        .map(|plugin| ListenerToolView {
+            id: plugin.tool_id.as_str().to_string(),
+            plugin_id: plugin.id.clone(),
+            display_name: plugin.display_name.clone(),
+            enabled: config.is_tool_enabled(&plugin.tool_id),
+            source: format!("{:?}", plugin.source).to_lowercase(),
+            icon_url: plugin.icon_url.clone(),
+        })
+        .collect()
 }

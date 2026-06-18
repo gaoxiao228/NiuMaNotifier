@@ -54,6 +54,7 @@ export type Translation = {
   notifyCompletion: string
   codexListening: string
   codexListenerDescription: string
+  toolListenerDescription: string
   codexListeningOn: string
   codexListeningOff: string
   listenerSaving: string
@@ -149,6 +150,7 @@ export const translations: Record<LanguageCode, Translation> = {
     notifyCompletion: '任务完成时通知，用户主动中断和回滚除外',
     codexListening: 'Codex 监听',
     codexListenerDescription: '监听 Codex 阻塞通知并接收请求',
+    toolListenerDescription: '启用工具插件后，NiumaNotifier 会监听对应工具的运行状态和阻塞请求。',
     codexListeningOn: '监听中',
     codexListeningOff: '未监听',
     listenerSaving: '保存中...',
@@ -270,6 +272,7 @@ export const translations: Record<LanguageCode, Translation> = {
     notifyCompletion: '任務完成時通知，使用者主動中斷和回滾除外',
     codexListening: 'Codex 監聽',
     codexListenerDescription: '監聽 Codex 阻塞通知並接收請求',
+    toolListenerDescription: '啟用工具外掛後，NiumaNotifier 會監聽對應工具的執行狀態和阻塞請求。',
     codexListeningOn: '監聽中',
     codexListeningOff: '未監聽',
     listenerSaving: '儲存中...',
@@ -391,6 +394,7 @@ export const translations: Record<LanguageCode, Translation> = {
     notifyCompletion: 'Task completions notify except user interruptions and rollbacks',
     codexListening: 'Codex listener',
     codexListenerDescription: 'Listen for Codex blocker notifications and requests',
+    toolListenerDescription: 'Enable tool plugins to let NiumaNotifier listen for matching tool activity and blocker requests.',
     codexListeningOn: 'Listening',
     codexListeningOff: 'Not listening',
     listenerSaving: 'Saving...',
@@ -512,6 +516,7 @@ export const translations: Record<LanguageCode, Translation> = {
     notifyCompletion: 'タスク完了時に通知、ユーザー中断とロールバックは除外',
     codexListening: 'Codex 監視',
     codexListenerDescription: 'Codex のブロック通知とリクエストを監視',
+    toolListenerDescription: 'ツールプラグインを有効にすると、対応するツールの実行状態とブロック要求を監視します。',
     codexListeningOn: '監視中',
     codexListeningOff: '未監視',
     listenerSaving: '保存中...',
@@ -633,6 +638,7 @@ export const translations: Record<LanguageCode, Translation> = {
     notifyCompletion: '작업 완료 시 알림, 사용자 중단 및 롤백 제외',
     codexListening: 'Codex 수신',
     codexListenerDescription: 'Codex 차단 알림과 요청을 수신',
+    toolListenerDescription: '도구 플러그인을 활성화하면 NiumaNotifier가 해당 도구의 실행 상태와 차단 요청을 수신합니다.',
     codexListeningOn: '수신 중',
     codexListeningOff: '수신 안 함',
     listenerSaving: '저장 중...',
@@ -754,6 +760,7 @@ export const translations: Record<LanguageCode, Translation> = {
     notifyCompletion: 'Aufgabenabschlüsse werden benachrichtigt, außer Benutzerabbruch und Rollback',
     codexListening: 'Codex-Überwachung',
     codexListenerDescription: 'Codex-Blocker-Benachrichtigungen und Anfragen überwachen',
+    toolListenerDescription: 'Aktivierte Tool-Plugins lassen NiumaNotifier passende Tool-Aktivitäten und Blocker-Anfragen überwachen.',
     codexListeningOn: 'Aktiv',
     codexListeningOff: 'Inaktiv',
     listenerSaving: 'Speichert...',
