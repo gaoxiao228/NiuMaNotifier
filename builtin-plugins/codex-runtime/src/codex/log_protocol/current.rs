@@ -1,14 +1,15 @@
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::models::{EventType, FailureReason, NiumaEvent, ToolKind};
-use crate::tools::codex::log_protocol::CodexLogProtocolParser;
-use crate::tools::codex::log_watcher::CodexLogRow;
+use crate::codex::log_protocol::CodexLogProtocolParser;
+use crate::codex::log_watcher::CodexLogRow;
+use niuma_core::models::{EventType, FailureReason, NiumaEvent, ToolKind};
 
 const HIGH_DEMAND_ERROR: &str =
     "We're currently experiencing high demand, which may cause temporary errors.";
 const ERROR_DEDUPE_BUCKET_SECONDS: i64 = 10;
 
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
 pub struct CurrentLogProtocol;
 
 impl CodexLogProtocolParser for CurrentLogProtocol {

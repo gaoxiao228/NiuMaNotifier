@@ -176,9 +176,10 @@ fn active_file_stays_active_when_recently_modified() {
         SqliteStateStore::new(path.with_extension("sqlite")),
         RuntimeEventBus::new(),
     );
+    let event_sink = StoreCodexEventSink::new(mutation_service);
 
     scan_active_files(
-        &mutation_service,
+        &event_sink,
         &mut CodexSessionScanner::default(),
         &mut active_files,
         &mut status_log_state,
@@ -203,9 +204,10 @@ fn active_file_expires_when_not_recently_seen_or_modified() {
         ))),
         RuntimeEventBus::new(),
     );
+    let event_sink = StoreCodexEventSink::new(mutation_service);
 
     scan_active_files(
-        &mutation_service,
+        &event_sink,
         &mut CodexSessionScanner::default(),
         &mut active_files,
         &mut status_log_state,

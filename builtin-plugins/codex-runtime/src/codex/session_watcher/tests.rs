@@ -1,6 +1,6 @@
 use super::*;
-use crate::models::{CompletionReason, EventType, FailureReason};
-use crate::tools::codex::session_protocol::{detect_session_protocol_family, CodexProtocolFamily};
+use crate::codex::session_protocol::{detect_session_protocol_family, CodexProtocolFamily};
+use niuma_core::models::{CompletionReason, EventType, FailureReason};
 use std::io::Write;
 
 #[test]
@@ -461,9 +461,9 @@ fn parses_plan_item_completed_as_input_requested() {
 
 #[test]
 fn plan_confirmation_task_complete_does_not_clear_waiting_input() {
-    use crate::listener_config::ListenerConfig;
-    use crate::main_state::{MainStateService, MainStateStatus};
-    use crate::store::SqliteStateStore;
+    use niuma_core::listener_config::ListenerConfig;
+    use niuma_core::main_state::{MainStateService, MainStateStatus};
+    use niuma_core::store::SqliteStateStore;
 
     let mut parser = CodexJsonlParser::default();
     parser

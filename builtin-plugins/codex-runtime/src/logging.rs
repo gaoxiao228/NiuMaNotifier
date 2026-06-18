@@ -5,6 +5,7 @@ use niuma_core::config;
 use niuma_core::state::InternalStateEngine;
 use niuma_core::store::StoredState;
 
+#[allow(dead_code)]
 pub(super) const STATUS_LOG_REFRESH_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(2);
 
@@ -25,6 +26,7 @@ pub(super) fn watcher_trace_log(message: String) {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub(super) struct MainStatusLogState {
     // Debug 日志既要降噪，也要能看出 Running session 仍在持续活动。
     last_status_key: Option<String>,
@@ -33,6 +35,7 @@ pub(super) struct MainStatusLogState {
 }
 
 impl MainStatusLogState {
+    #[allow(dead_code)]
     pub(super) fn should_log(
         &mut self,
         status_key: String,
@@ -60,6 +63,7 @@ impl MainStatusLogState {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn log_main_status(
     reason: &str,
     state: &StoredState,

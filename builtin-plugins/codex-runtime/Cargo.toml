@@ -1,5 +1,5 @@
 [package]
-name = "niuma-cli"
+name = "niuma-codex-plugin-runtime"
 description.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -8,17 +8,19 @@ readme.workspace = true
 repository.workspace = true
 version.workspace = true
 
-[[bin]]
-name = "niuma"
-path = "src/main.rs"
-
 [dependencies]
 chrono.workspace = true
-clap = { version = "4", features = ["derive"] }
-niuma-api = { path = "../niuma-api" }
-niuma-core = { path = "../niuma-core" }
+libc = "0.2"
+niuma-core = { path = "../../crates/niuma-core" }
+notify = "8"
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
+ureq = { version = "2", default-features = true }
+
+[[bin]]
+name = "niuma-codex-plugin"
+path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3"

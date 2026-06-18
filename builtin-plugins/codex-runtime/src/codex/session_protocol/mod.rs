@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 pub mod current;
 
-use crate::models::NiumaEvent;
+use niuma_core::models::NiumaEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodexProtocolFamily {
@@ -10,6 +10,7 @@ pub enum CodexProtocolFamily {
     Unsupported,
 }
 
+#[allow(dead_code)]
 pub trait CodexSessionProtocolParser {
     fn parse_line(&mut self, line: &str, fallback_path: &str)
         -> Result<Option<NiumaEvent>, String>;

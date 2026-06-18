@@ -2,13 +2,12 @@ use chrono::{TimeZone, Utc};
 use std::time::Duration;
 
 use crate::listener_config::ListenerConfig;
-use crate::models::{EventType, NiumaEvent, SessionStatus, ToolKind};
+use crate::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
 use crate::notification_config::{NotificationConfigErrorKind, NotificationConfigService};
 use crate::notification_store::{
     NotificationChannel, NotificationChannelConfig, NotificationRecord, NotificationRecordStatus,
 };
 use crate::store::SqliteStateStore;
-use crate::tools::codex::session_watcher::CodexJsonlParser;
 
 #[test]
 fn append_event_updates_session_status() {
@@ -1330,20 +1329,38 @@ fn session_activity_after_completion_does_not_reopen_session() {
 #[test]
 fn codex_rollback_sequence_finishes_even_with_late_token_count() {
     let store = SqliteStateStore::new(test_sqlite_path("rollback_sequence_late_token_count"));
-    let mut parser = CodexJsonlParser::default();
-    let lines = [
-        r#"{"timestamp":"2026-06-12T07:29:47.192Z","type":"session_meta","payload":{"id":"session-rollback","cwd":"/tmp/demo"}}"#,
-        r#"{"timestamp":"2026-06-12T07:30:30.139Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#,
-        r#"{"timestamp":"2026-06-12T07:30:35.284Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted"}}"#,
-        r#"{"timestamp":"2026-06-12T07:30:35.290Z","type":"event_msg","payload":{"type":"token_count","info":{"total_tokens":14077}}}"#,
-        r#"{"timestamp":"2026-06-12T07:31:47.232Z","type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}"#,
-    ];
-
-    for line in lines {
-        if let Some(event) = parser.parse_line(line, "rollout.jsonl").unwrap() {
-            store.append_event(event).unwrap();
-        }
-    }
+    store
+        .append_event(sample_session_event(
+            "rollback-started",
+            "session-rollback",
+            EventType::SessionStarted,
+            1_000,
+        ))
+        .unwrap();
+    let mut aborted = sample_session_event(
+        "rollback-aborted",
+        "session-rollback",
+        EventType::AssistantMessageCompleted,
+        1_001,
+    );
+    aborted.completion_reason = Some(CompletionReason::Interrupted);
+    store.append_event(aborted).unwrap();
+    store
+        .append_event(sample_session_event(
+            "rollback-late-activity",
+            "session-rollback",
+            EventType::SessionActivity,
+            1_002,
+        ))
+        .unwrap();
+    let mut rolled_back = sample_session_event(
+        "rollback-finished",
+        "session-rollback",
+        EventType::AssistantMessageCompleted,
+        1_003,
+    );
+    rolled_back.completion_reason = Some(CompletionReason::RolledBack);
+    store.append_event(rolled_back).unwrap();
 
     let snapshot = store.internal_status_snapshot().unwrap();
     let state = store.load().unwrap();

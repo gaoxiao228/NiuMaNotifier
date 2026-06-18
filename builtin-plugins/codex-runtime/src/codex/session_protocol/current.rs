@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::models::{CompletionReason, EventType, FailureReason, NiumaEvent, ToolKind};
-use crate::tools::codex::session_protocol::{
+use crate::codex::session_protocol::{
     detect_session_protocol_family, CodexProtocolFamily, CodexSessionProtocolParser,
 };
+use niuma_core::models::{CompletionReason, EventType, FailureReason, NiumaEvent, ToolKind};
 
 // 只负责把单行 Codex JSONL 转换为核心事件，文件扫描和运行时监听由后续任务处理。
 #[derive(Clone, Default)]

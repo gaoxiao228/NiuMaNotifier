@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tauri::{RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 mod commands;
 #[cfg(target_os = "macos")]
@@ -17,6 +17,8 @@ mod tray;
 
 const LOCAL_API_START_DELAY: Duration = Duration::ZERO;
 const WATCHER_START_DELAY: Duration = Duration::from_secs(1);
+const STALE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+const CODEX_PLUGIN_BINARY_NAME: &str = "niuma-codex-plugin";
 
 fn spawn_background_services(runtime_events: RuntimeEventBus) {
     let spawn_result = thread::Builder::new()
@@ -49,6 +51,7 @@ fn spawn_background_services(runtime_events: RuntimeEventBus) {
                     eprintln!("NiumaNotifier Local API not started: {error}");
                 }
             }
+            spawn_stale_sweep_runtime(runtime_events.clone());
 
             // Codex session 扫描放到首屏之后，避免文件系统监听和活跃文件轮询抢首屏资源。
             thread::sleep(WATCHER_START_DELAY);
@@ -57,6 +60,61 @@ fn spawn_background_services(runtime_events: RuntimeEventBus) {
 
     if let Err(error) = spawn_result {
         eprintln!("NiumaNotifier background services startup thread not started: {error}");
+    }
+}
+
+fn spawn_stale_sweep_runtime(runtime_events: RuntimeEventBus) {
+    if let Err(error) = thread::Builder::new()
+        .name("stale-sweep-runtime".to_string())
+        .spawn(move || {
+            let service = StateMutationService::new(
+                SqliteStateStore::new(SqliteStateStore::default_path()),
+                runtime_events,
+            );
+            loop {
+                thread::sleep(STALE_SWEEP_INTERVAL);
+                if let Err(error) = run_stale_sweep_once(&service, chrono::Utc::now()) {
+                    eprintln!("NiumaNotifier stale sweep failed: {error}");
+                }
+            }
+        })
+    {
+        eprintln!("NiumaNotifier stale sweep runtime not started: {error}");
+    }
+}
+
+fn run_stale_sweep_once(
+    service: &StateMutationService,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    service
+        .mark_stale_running_sessions(now, chrono::Duration::minutes(10))
+        .map(|_| ())
+}
+
+fn configure_builtin_codex_plugin_command(app: &tauri::App) {
+    if std::env::var_os(niuma_core::plugin::CODEX_PLUGIN_COMMAND_ENV).is_some() {
+        return;
+    }
+
+    let executable_name =
+        niuma_core::platform::executable::executable_name(CODEX_PLUGIN_BINARY_NAME);
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(&executable_name));
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            candidates.push(exe_dir.join(&executable_name));
+        }
+    }
+
+    if let Some(command) = candidates.into_iter().find(|candidate| candidate.is_file()) {
+        // 只设置命令路径，不直接启动 Codex；启动仍由通用插件管理器按 manifest 完成。
+        std::env::set_var(
+            niuma_core::plugin::CODEX_PLUGIN_COMMAND_ENV,
+            command.to_string_lossy().to_string(),
+        );
     }
 }
 
@@ -81,6 +139,7 @@ fn main() {
                 if let Err(error) = commands::restore_language_preference_from_store() {
                     eprintln!("NiumaNotifier language preference not restored: {error}");
                 }
+                configure_builtin_codex_plugin_command(app);
                 let _tray = tray::register_tray(
                     app.handle(),
                     Arc::clone(&is_quitting),
@@ -159,7 +218,56 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+    use niuma_core::models::{EventType, NiumaEvent, SessionStatus, ToolKind};
 
+    #[test]
+    fn stale_sweep_once_marks_old_running_sessions() {
+        let path = std::env::temp_dir().join(format!(
+            "niuma-desktop-stale-sweep-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let store = SqliteStateStore::new(path.clone());
+        store
+            .append_event(sample_event("event-running", 1_000))
+            .unwrap();
+        let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
+
+        run_stale_sweep_once(
+            &service,
+            chrono::Utc.timestamp_opt(1_700, 0).single().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.load().unwrap().sessions[0].status,
+            SessionStatus::Stale
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn sample_event(id: &str, timestamp: i64) -> NiumaEvent {
+        NiumaEvent {
+            id: id.to_string(),
+            dedupe_key: id.to_string(),
+            source: "test".to_string(),
+            tool: ToolKind::Codex,
+            session_id: "session-1".to_string(),
+            project_path: "/tmp/demo".to_string(),
+            project_name: "demo".to_string(),
+            event_type: EventType::SessionStarted,
+            severity: "info".to_string(),
+            summary: "started".to_string(),
+            content: None,
+            error_message: None,
+            attention_resolve_key: None,
+            completion_reason: None,
+            failure_reason: None,
+            payload_ref: None,
+            created_at: chrono::Utc.timestamp_opt(timestamp, 0).single().unwrap(),
+        }
+    }
     #[test]
     fn startup_keeps_local_api_immediate_and_delays_watcher_only() {
         assert_eq!(LOCAL_API_START_DELAY, Duration::ZERO);

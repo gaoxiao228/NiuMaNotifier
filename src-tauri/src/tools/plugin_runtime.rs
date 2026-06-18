@@ -5,87 +5,36 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use niuma_core::plugin::{
-    current_plugin_registry, PluginManifest, PluginRegistry, PluginRuntimeState, PluginSource,
+    current_plugin_registry, PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState,
 };
 use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
 use niuma_core::store::SqliteStateStore;
 
 const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
-
-pub trait ToolPlugin {
-    fn manifest(&self) -> PluginManifest;
-    fn spawn(
-        &self,
-        store: SqliteStateStore,
-        runtime_events: RuntimeEventBus,
-    ) -> std::io::Result<thread::JoinHandle<()>>;
-}
-
-pub struct CodexBuiltinPlugin;
-
-impl ToolPlugin for CodexBuiltinPlugin {
-    fn manifest(&self) -> PluginManifest {
-        niuma_core::plugin::builtin_codex_manifest()
-    }
-
-    fn spawn(
-        &self,
-        store: SqliteStateStore,
-        runtime_events: RuntimeEventBus,
-    ) -> std::io::Result<thread::JoinHandle<()>> {
-        crate::tools::codex::session_runtime::spawn_codex_session_runtime(store, runtime_events)
-    }
-}
+const PARENT_PID_ENV: &str = "NIUMA_PARENT_PID";
 
 pub fn spawn_plugin_runtimes(runtime_events: RuntimeEventBus) {
-    let registry = current_plugin_registry();
-    spawn_builtin_codex(&registry, runtime_events.clone());
-    spawn_external_plugin_manager(runtime_events);
+    spawn_plugin_manager(runtime_events);
 }
 
-fn spawn_builtin_codex(registry: &PluginRegistry, runtime_events: RuntimeEventBus) {
-    let plugin = CodexBuiltinPlugin;
-    let manifest = plugin.manifest();
-    if registry.plugin_by_id(&manifest.id).is_none() {
-        return;
-    }
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
-    match plugin.spawn(store.clone(), runtime_events) {
-        Ok(_detached_watcher_thread) => {
-            // JoinHandle 在这里丢弃会 detach 后台线程，避免阻塞 Tauri 主循环。
-            eprintln!("NiumaNotifier Codex builtin plugin runtime thread started");
-            save_runtime_state(&store, &manifest.id, PluginRuntimeState::running());
-        }
-        Err(error) => {
-            // 文件监听只是状态增强能力，启动失败不能影响状态栏应用常驻。
-            eprintln!("NiumaNotifier Codex builtin plugin not started: {error}");
-            save_runtime_state(
-                &store,
-                &manifest.id,
-                PluginRuntimeState::failed(error.to_string()),
-            );
-        }
-    }
-}
-
-fn spawn_external_plugin_manager(runtime_events: RuntimeEventBus) {
+fn spawn_plugin_manager(runtime_events: RuntimeEventBus) {
     if let Err(error) = thread::Builder::new()
         .name("plugin-runtime-manager".to_string())
-        .spawn(move || run_external_plugin_manager(runtime_events))
+        .spawn(move || run_plugin_manager(runtime_events))
     {
-        eprintln!("NiumaNotifier external plugin manager not started: {error}");
+        eprintln!("NiumaNotifier plugin manager not started: {error}");
     }
 }
 
-struct ManagedExternalPlugin {
+struct ManagedPlugin {
     manifest: PluginManifest,
     child: Option<Child>,
     next_start: Instant,
 }
 
-fn run_external_plugin_manager(runtime_events: RuntimeEventBus) {
+fn run_plugin_manager(runtime_events: RuntimeEventBus) {
     let store = SqliteStateStore::new(SqliteStateStore::default_path());
-    let mut managed = HashMap::<String, ManagedExternalPlugin>::new();
+    let mut managed = HashMap::<String, ManagedPlugin>::new();
     let mut receiver = runtime_events.subscribe();
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -96,22 +45,17 @@ fn run_external_plugin_manager(runtime_events: RuntimeEventBus) {
     };
 
     loop {
-        reconcile_external_plugins(&store, &mut managed);
+        reconcile_managed_plugins(&store, &mut managed);
         wait_for_plugin_reconcile_signal(&runtime, &mut receiver);
     }
 }
 
-fn reconcile_external_plugins(
+fn reconcile_managed_plugins(
     store: &SqliteStateStore,
-    managed: &mut HashMap<String, ManagedExternalPlugin>,
+    managed: &mut HashMap<String, ManagedPlugin>,
 ) {
     let registry = current_plugin_registry();
-    let manifests = registry
-        .manifests()
-        .iter()
-        .filter(|manifest| manifest.source == PluginSource::External)
-        .cloned()
-        .collect::<Vec<_>>();
+    let manifests = managed_event_watcher_manifests(&registry);
     let current_ids = manifests
         .iter()
         .map(|manifest| manifest.id.clone())
@@ -132,7 +76,7 @@ fn reconcile_external_plugins(
     for manifest in manifests {
         let entry = managed
             .entry(manifest.id.clone())
-            .or_insert_with(|| ManagedExternalPlugin {
+            .or_insert_with(|| ManagedPlugin {
                 manifest: manifest.clone(),
                 child: None,
                 next_start: Instant::now(),
@@ -144,6 +88,19 @@ fn reconcile_external_plugins(
         }
         tick_external_plugin(store, entry);
     }
+}
+
+fn managed_event_watcher_manifests(registry: &PluginRegistry) -> Vec<PluginManifest> {
+    registry
+        .manifests()
+        .iter()
+        .filter(|manifest| {
+            manifest
+                .capabilities
+                .contains(&PluginCapability::EventWatcher)
+        })
+        .cloned()
+        .collect()
 }
 
 fn wait_for_plugin_reconcile_signal(
@@ -169,7 +126,7 @@ fn wait_for_plugin_reconcile_signal(
     });
 }
 
-fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedExternalPlugin) {
+fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
     let enabled = store
         .listener_config()
         .map(|config| config.is_tool_enabled(&entry.manifest.tool_id))
@@ -215,18 +172,15 @@ fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedExternalPlu
 
     if entry.child.is_none() && Instant::now() >= entry.next_start {
         save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::starting());
-        match spawn_external_plugin_process(&entry.manifest) {
+        match spawn_plugin_process(&entry.manifest) {
             Ok(process) => {
-                eprintln!(
-                    "NiumaNotifier external plugin {} started",
-                    entry.manifest.id
-                );
+                eprintln!("NiumaNotifier plugin {} started", entry.manifest.id);
                 entry.child = Some(process);
                 save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::running());
             }
             Err(error) => {
                 eprintln!(
-                    "NiumaNotifier external plugin {} not started: {error}",
+                    "NiumaNotifier plugin {} not started: {error}",
                     entry.manifest.id
                 );
                 entry.next_start = Instant::now() + Duration::from_secs(10);
@@ -236,7 +190,13 @@ fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedExternalPlu
     }
 }
 
-fn spawn_external_plugin_process(manifest: &PluginManifest) -> Result<Child, String> {
+fn spawn_plugin_process(manifest: &PluginManifest) -> Result<Child, String> {
+    build_plugin_command(manifest)?
+        .spawn()
+        .map_err(|error| format!("启动插件进程失败：{error}"))
+}
+
+fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
     let command = manifest
         .command
         .as_ref()
@@ -251,6 +211,7 @@ fn spawn_external_plugin_process(manifest: &PluginManifest) -> Result<Child, Str
         )
         .env("NIUMA_PLUGIN_ID", &manifest.id)
         .env("NIUMA_TOOL_ID", manifest.tool_id.as_str())
+        .env(PARENT_PID_ENV, std::process::id().to_string())
         .env(
             "NIUMA_STATE_PATH",
             SqliteStateStore::default_path()
@@ -265,9 +226,7 @@ fn spawn_external_plugin_process(manifest: &PluginManifest) -> Result<Child, Str
     if let Some(base_dir) = &manifest.base_dir {
         process.current_dir(base_dir);
     }
-    process
-        .spawn()
-        .map_err(|error| format!("启动插件进程失败：{error}"))
+    Ok(process)
 }
 
 fn stop_child(store: &SqliteStateStore, manifest: &PluginManifest, child: &mut Option<Child>) {
@@ -396,5 +355,50 @@ mod tests {
         wait_for_plugin_reconcile_signal(&runtime, &mut receiver);
 
         assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn managed_event_watcher_manifests_include_builtin_codex() {
+        let registry = PluginRegistry::with_builtin_plugins();
+        let manifests = managed_event_watcher_manifests(&registry);
+
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].id, "builtin-codex");
+        assert_eq!(manifests[0].source, PluginSource::Builtin);
+    }
+
+    #[test]
+    fn build_plugin_command_injects_parent_pid() {
+        let manifest = PluginManifest {
+            id: "demo".to_string(),
+            tool_id: ToolKind::Custom("demo".to_string()),
+            display_name: "Demo".to_string(),
+            version: "0.1.0".to_string(),
+            command: Some("definitely-missing-niuma-command".to_string()),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            platforms: Vec::new(),
+            capabilities: vec![PluginCapability::EventWatcher],
+            icon_url: None,
+            source: PluginSource::External,
+            base_dir: Some(PathBuf::from("/tmp/plugin-demo")),
+        };
+
+        let command = build_plugin_command(&manifest).unwrap();
+
+        assert_eq!(
+            command_env_value(&command, "NIUMA_PARENT_PID"),
+            Some(std::process::id().to_string())
+        );
+    }
+
+    fn command_env_value(command: &Command, key: &str) -> Option<String> {
+        command.get_envs().find_map(|(name, value)| {
+            if name == std::ffi::OsStr::new(key) {
+                value.map(|value| value.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })
     }
 }

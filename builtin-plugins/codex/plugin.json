@@ -1,0 +1,11 @@
+{
+  "id": "builtin-codex",
+  "tool_id": "codex",
+  "display_name": "Codex",
+  "version": "0.1.0",
+  "command": "niuma-codex-plugin",
+  "args": [],
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_watcher"],
+  "source": "builtin"
+}

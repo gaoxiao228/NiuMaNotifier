@@ -1,5 +1,5 @@
 use super::*;
-use crate::tools::codex::log_protocol::{detect_log_protocol_family, CodexProtocolFamily};
+use crate::codex::log_protocol::{detect_log_protocol_family, CodexProtocolFamily};
 
 #[test]
 fn log_protocol_detector_recognizes_current_schema() {
@@ -101,13 +101,13 @@ fn parses_context_too_large_log_as_task_failed() {
     let event = parse_codex_log_row(&row, "/Users/me/.codex/logs_2.sqlite")
         .expect("context_too_large 日志应该转换为事件");
 
-    assert_eq!(event.event_type, crate::models::EventType::TaskFailed);
+    assert_eq!(event.event_type, niuma_core::models::EventType::TaskFailed);
     assert_eq!(event.session_id, "019eb542-a886-72e0-86fd-e5730054991c");
     assert_eq!(event.severity, "urgent");
     assert_eq!(event.completion_reason, None);
     assert_eq!(
         event.failure_reason,
-        Some(crate::models::FailureReason::ContextWindowExceeded)
+        Some(niuma_core::models::FailureReason::ContextWindowExceeded)
     );
     assert!(event.summary.contains("context window"));
     assert_eq!(event.source, "codex-internal-log");
@@ -130,11 +130,11 @@ fn parses_received_message_context_too_large_error_as_task_failed() {
     let event = parse_codex_log_row(&row, "/Users/me/.codex/logs_2.sqlite")
         .expect("Received message 中的 context_too_large 应该转换为事件");
 
-    assert_eq!(event.event_type, crate::models::EventType::TaskFailed);
+    assert_eq!(event.event_type, niuma_core::models::EventType::TaskFailed);
     assert_eq!(event.session_id, "019ebee7-f62e-79b1-9823-73a1aa652fb2");
     assert_eq!(
         event.failure_reason,
-        Some(crate::models::FailureReason::ContextWindowExceeded)
+        Some(niuma_core::models::FailureReason::ContextWindowExceeded)
     );
     assert_eq!(event.source, "codex-internal-log");
 }
@@ -173,11 +173,11 @@ fn parses_turn_error_404_as_task_failed() {
     let event = parse_codex_log_row(&row, "/Users/me/.codex/logs_2.sqlite")
         .expect("Turn error 404 应该转换为失败事件");
 
-    assert_eq!(event.event_type, crate::models::EventType::TaskFailed);
+    assert_eq!(event.event_type, niuma_core::models::EventType::TaskFailed);
     assert_eq!(event.session_id, "019ec46b-231b-7d02-86ae-2452d25b5a96");
     assert_eq!(
         event.failure_reason,
-        Some(crate::models::FailureReason::Fatal)
+        Some(niuma_core::models::FailureReason::Fatal)
     );
     assert_eq!(event.summary, "Codex turn failed");
     assert_eq!(
@@ -299,7 +299,10 @@ fn scanner_reads_new_error_rows_once() {
     let second = scanner.scan_file(temp.path()).unwrap();
 
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].event_type, crate::models::EventType::TaskFailed);
+    assert_eq!(
+        first[0].event_type,
+        niuma_core::models::EventType::TaskFailed
+    );
     assert!(second.is_empty());
 }
 
@@ -343,10 +346,13 @@ fn scanner_reads_received_message_context_too_large_error_rows_once() {
     let second = scanner.scan_file(temp.path()).unwrap();
 
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].event_type, crate::models::EventType::TaskFailed);
+    assert_eq!(
+        first[0].event_type,
+        niuma_core::models::EventType::TaskFailed
+    );
     assert_eq!(
         first[0].failure_reason,
-        Some(crate::models::FailureReason::ContextWindowExceeded)
+        Some(niuma_core::models::FailureReason::ContextWindowExceeded)
     );
     assert!(second.is_empty());
 }
@@ -434,7 +440,10 @@ fn scanner_reads_turn_error_rows_once() {
     let second = scanner.scan_file(temp.path()).unwrap();
 
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].event_type, crate::models::EventType::TaskFailed);
+    assert_eq!(
+        first[0].event_type,
+        niuma_core::models::EventType::TaskFailed
+    );
     assert_eq!(first[0].summary, "Codex turn failed");
     assert!(second.is_empty());
 }

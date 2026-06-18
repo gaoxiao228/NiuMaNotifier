@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "builtin-plugins/codex-runtime",
     "crates/niuma-api",
     "crates/niuma-cli",
     "crates/niuma-core",

@@ -3,9 +3,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::models::NiumaEvent;
+use niuma_core::models::NiumaEvent;
 
-pub use crate::tools::codex::session_protocol::current::CodexJsonlParser;
+pub use crate::codex::session_protocol::current::CodexJsonlParser;
 
 const PRIME_METADATA_MAX_BYTES: u64 = 64 * 1024;
 
@@ -29,6 +29,7 @@ struct FileIdentity {
 }
 
 impl CodexSessionScanner {
+    #[allow(dead_code)]
     pub fn scan_file_tail(
         &mut self,
         path: &Path,

@@ -2,9 +2,9 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::models::NiumaEvent;
-pub use crate::tools::codex::log_protocol::current::parse_codex_log_row;
-use crate::tools::codex::log_protocol::{detect_log_protocol_family, CodexProtocolFamily};
+pub use crate::codex::log_protocol::current::parse_codex_log_row;
+use crate::codex::log_protocol::{detect_log_protocol_family, CodexProtocolFamily};
+use niuma_core::models::NiumaEvent;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodexLogRow {

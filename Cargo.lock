@@ -2446,7 +2446,24 @@ dependencies = [
  "clap",
  "niuma-api",
  "niuma-core",
+ "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "niuma-codex-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "niuma-core",
+ "notify",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]
@@ -2469,7 +2486,6 @@ dependencies = [
  "chrono",
  "niuma-api",
  "niuma-core",
- "notify",
  "objc2",
  "objc2-app-kit",
  "rfd",

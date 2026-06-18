@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::codex::session_watcher::{codex_session_dirs, CodexSessionScanner};
 use chrono::Utc;
-use niuma_core::tools::codex::session_watcher::{codex_session_dirs, CodexSessionScanner};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use super::logging::{

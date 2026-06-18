@@ -1,8 +1,8 @@
-use niuma_api::local_api_addr;
-use niuma_core::api_response::{ApiErrorCode, ApiResponse};
-use niuma_core::tools::codex::hook::{
+use crate::tools::codex::hook::{
     install_codex_hook, read_codex_hook_status, uninstall_codex_hook, CodexHookCommand,
 };
+use niuma_api::local_api_addr;
+use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use serde_json::json;
 
 use crate::cli::{HookCommand, ToolArg};

@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 use crate::listener_config::ListenerConfig;
 use crate::models::ToolKind;
 
+pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
+
+const CODEX_PLUGIN_COMMAND: &str = "niuma-codex-plugin";
+const BUILTIN_CODEX_PLUGIN_MANIFEST_JSON: &str =
+    include_str!("../../../builtin-plugins/codex/plugin.json");
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginCapability {
@@ -161,6 +167,17 @@ impl PluginRegistry {
                     Ok(mut manifest) => {
                         manifest.source = PluginSource::External;
                         if manifest.supports_current_platform() {
+                            if self
+                                .plugin_by_id(&manifest.id)
+                                .is_some_and(|item| item.source == PluginSource::Builtin)
+                            {
+                                eprintln!(
+                                    "NiumaNotifier external plugin manifest ignored {}: 不能覆盖内置插件 {}",
+                                    manifest_path.display(),
+                                    manifest.id
+                                );
+                                continue;
+                            }
                             self.register(manifest);
                         }
                     }
@@ -178,7 +195,7 @@ impl PluginRegistry {
     }
 
     pub fn register(&mut self, manifest: PluginManifest) {
-        // 同 id 后注册覆盖先注册，方便用户插件在后续版本覆盖内置实现。
+        // 同 id 后注册覆盖先注册，方便外部插件导入新版时替换旧 manifest。
         self.manifests.retain(|item| item.id != manifest.id);
         self.manifests.push(manifest);
     }
@@ -235,8 +252,7 @@ impl PluginManifest {
     pub fn from_path(path: &Path) -> Result<Self, String> {
         let content =
             fs::read_to_string(path).map_err(|error| format!("读取插件 manifest 失败：{error}"))?;
-        let mut manifest: PluginManifest = serde_json::from_str(&content)
-            .map_err(|error| format!("解析插件 manifest 失败：{error}"))?;
+        let mut manifest = parse_plugin_manifest(&content)?;
         manifest.base_dir = path.parent().map(Path::to_path_buf);
         Ok(manifest)
     }
@@ -265,20 +281,13 @@ impl From<&PluginManifest> for ToolPluginInfo {
 }
 
 pub fn builtin_codex_manifest() -> PluginManifest {
-    PluginManifest {
-        id: "builtin-codex".to_string(),
-        tool_id: ToolKind::Codex,
-        display_name: "Codex".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        command: None,
-        args: Vec::new(),
-        env: BTreeMap::new(),
-        platforms: vec![current_platform_id().to_string()],
-        capabilities: vec![PluginCapability::EventWatcher],
-        icon_url: None,
-        source: PluginSource::Builtin,
-        base_dir: None,
-    }
+    let mut manifest = parse_plugin_manifest(BUILTIN_CODEX_PLUGIN_MANIFEST_JSON)
+        .expect("内置 Codex 插件 manifest 必须是有效 plugin.json");
+    manifest.source = PluginSource::Builtin;
+    manifest.command = Some(builtin_codex_plugin_command(manifest.command));
+    // 内置插件的 binary 路径由桌面端/环境变量解析，不使用源码目录作为运行目录。
+    manifest.base_dir = None;
+    manifest
 }
 
 pub fn default_user_plugin_dir() -> PathBuf {
@@ -390,6 +399,19 @@ fn current_platform_id() -> &'static str {
     }
 }
 
+fn parse_plugin_manifest(content: &str) -> Result<PluginManifest, String> {
+    serde_json::from_str(content).map_err(|error| format!("解析插件 manifest 失败：{error}"))
+}
+
+fn builtin_codex_plugin_command(default_command: Option<String>) -> String {
+    // 桌面端或打包脚本可覆盖命令路径；默认值来自内置 plugin.json，最后回退到普通裸命令。
+    std::env::var(CODEX_PLUGIN_COMMAND_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| default_command.filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| CODEX_PLUGIN_COMMAND.to_string())
+}
+
 fn external_source() -> PluginSource {
     PluginSource::External
 }
@@ -429,6 +451,7 @@ mod tests {
     use super::*;
     use crate::listener_config::ListenerConfig;
     use crate::models::ToolId;
+    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn parses_manifest_with_string_tool_id() {
@@ -475,6 +498,85 @@ mod tests {
         let plugin = registry.plugin_for_tool(&ToolKind::Codex).unwrap();
 
         assert_eq!(plugin.id, "builtin-codex");
+        assert_eq!(plugin.tool_id, ToolKind::Codex);
+    }
+
+    #[test]
+    fn builtin_codex_manifest_runs_as_independent_plugin_process() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(CODEX_PLUGIN_COMMAND_ENV);
+
+        let manifest = builtin_codex_manifest();
+
+        assert_eq!(manifest.source, PluginSource::Builtin);
+        assert!(manifest
+            .command
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(manifest.args, Vec::<String>::new());
+        assert_ne!(
+            manifest.command.as_deref(),
+            std::env::current_exe()
+                .ok()
+                .as_deref()
+                .and_then(Path::to_str)
+        );
+    }
+
+    #[test]
+    fn builtin_codex_manifest_is_backed_by_builtin_plugin_json() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(CODEX_PLUGIN_COMMAND_ENV);
+
+        let manifest_path = builtin_codex_plugin_manifest_path();
+        assert!(
+            manifest_path.exists(),
+            "内置 Codex 插件应该有 plugin.json: {}",
+            manifest_path.display()
+        );
+
+        let file_manifest = PluginManifest::from_path(&manifest_path).unwrap();
+        let manifest = builtin_codex_manifest();
+
+        assert_eq!(manifest.id, file_manifest.id);
+        assert_eq!(manifest.tool_id, file_manifest.tool_id);
+        assert_eq!(manifest.display_name, file_manifest.display_name);
+        assert_eq!(manifest.version, file_manifest.version);
+        assert_eq!(manifest.command, file_manifest.command);
+        assert_eq!(manifest.args, file_manifest.args);
+        assert_eq!(manifest.platforms, file_manifest.platforms);
+        assert_eq!(manifest.capabilities, file_manifest.capabilities);
+        assert_eq!(manifest.source, PluginSource::Builtin);
+        assert_eq!(manifest.base_dir, None);
+    }
+
+    #[test]
+    fn builtin_codex_manifest_uses_command_override_from_env() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(CODEX_PLUGIN_COMMAND_ENV, "/tmp/niuma-codex-plugin-test");
+
+        let manifest = builtin_codex_manifest();
+
+        std::env::remove_var(CODEX_PLUGIN_COMMAND_ENV);
+        assert_eq!(
+            manifest.command.as_deref(),
+            Some("/tmp/niuma-codex-plugin-test")
+        );
+        assert!(manifest.args.is_empty());
+    }
+
+    #[test]
+    fn external_manifest_cannot_override_builtin_codex_plugin() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp.path().join("builtin-codex");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        write_demo_plugin(&plugin_dir, "builtin-codex");
+
+        let registry =
+            PluginRegistry::with_builtin_plugins().discover_external_plugins(temp.path());
+        let plugin = registry.plugin_by_id("builtin-codex").unwrap();
+
+        assert_eq!(plugin.source, PluginSource::Builtin);
         assert_eq!(plugin.tool_id, ToolKind::Codex);
     }
 
@@ -646,5 +748,18 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn builtin_codex_plugin_manifest_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new("."))
+            .join("builtin-plugins/codex/plugin.json")
     }
 }

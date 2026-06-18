@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 pub mod current;
 
-use crate::models::NiumaEvent;
-use crate::tools::codex::log_watcher::CodexLogRow;
+use crate::codex::log_watcher::CodexLogRow;
+use niuma_core::models::NiumaEvent;
 
 pub const REQUIRED_LOG_COLUMNS: &[&str] = &[
     "id",
@@ -21,6 +21,7 @@ pub enum CodexProtocolFamily {
     Unsupported,
 }
 
+#[allow(dead_code)]
 pub trait CodexLogProtocolParser {
     fn parse_row(&self, row: &CodexLogRow, source_path: &str) -> Option<NiumaEvent>;
 }

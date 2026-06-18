@@ -2,18 +2,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use niuma_core::state_mutation::StateMutationService;
-use niuma_core::tools::codex::log_watcher::CodexLogScanner;
-use niuma_core::tools::codex::session_watcher::CodexSessionScanner;
+use crate::codex::log_watcher::CodexLogScanner;
+use crate::codex::session_watcher::CodexSessionScanner;
 
 use super::discovery::{add_active_file, discover_recent_dir_files, path_recently_modified};
-use super::logging::{
-    log_main_status, watcher_trace_enabled, watcher_trace_log, MainStatusLogState,
-};
-use super::{ACTIVE_FILE_TTL, DISCOVERY_FILE_LIMIT};
+use super::logging::{watcher_trace_enabled, watcher_trace_log, MainStatusLogState};
+use super::{CodexEventSink, ACTIVE_FILE_TTL, DISCOVERY_FILE_LIMIT};
 
 pub(super) fn flush_pending(
-    mutation_service: &StateMutationService,
+    event_sink: &dyn CodexEventSink,
     scanner: &mut CodexSessionScanner,
     pending_files: &mut Vec<PathBuf>,
     pending_dirs: &mut Vec<PathBuf>,
@@ -24,7 +21,7 @@ pub(super) fn flush_pending(
     let paths = std::mem::take(pending_files);
     for path in paths {
         add_active_file(active_files, path.clone(), now);
-        scan_jsonl_file(mutation_service, scanner, status_log_state, &path, true);
+        scan_jsonl_file(event_sink, scanner, status_log_state, &path, true);
     }
     let dirs = std::mem::take(pending_dirs);
     for dir in dirs {
@@ -33,7 +30,7 @@ pub(super) fn flush_pending(
 }
 
 pub(super) fn scan_active_files(
-    mutation_service: &StateMutationService,
+    event_sink: &dyn CodexEventSink,
     scanner: &mut CodexSessionScanner,
     active_files: &mut HashMap<PathBuf, Instant>,
     status_log_state: &mut MainStatusLogState,
@@ -46,12 +43,12 @@ pub(super) fn scan_active_files(
     });
 
     for path in active_files.keys().cloned().collect::<Vec<_>>() {
-        scan_jsonl_file(mutation_service, scanner, status_log_state, &path, false);
+        scan_jsonl_file(event_sink, scanner, status_log_state, &path, false);
     }
 }
 
 fn scan_jsonl_file(
-    mutation_service: &StateMutationService,
+    event_sink: &dyn CodexEventSink,
     scanner: &mut CodexSessionScanner,
     status_log_state: &mut MainStatusLogState,
     path: &Path,
@@ -66,13 +63,8 @@ fn scan_jsonl_file(
                     path.display()
                 ));
             }
-            match mutation_service.append_events(events) {
-                Ok(result) => {
-                    log_main_status("scan", &result.state, status_log_state);
-                }
-                Err(error) => {
-                    eprintln!("NiumaNotifier append Codex session events failed: {error}")
-                }
+            if let Err(error) = event_sink.append_events(events, "scan", status_log_state) {
+                eprintln!("NiumaNotifier append Codex session events failed: {error}");
             }
         }
         Ok(_) if log_empty => {
@@ -89,18 +81,17 @@ fn scan_jsonl_file(
 }
 
 pub(super) fn scan_codex_internal_log(
-    mutation_service: &StateMutationService,
+    event_sink: &dyn CodexEventSink,
     scanner: &mut CodexLogScanner,
     path: &Path,
     status_log_state: &mut MainStatusLogState,
 ) {
     match scanner.scan_file(path) {
-        Ok(events) if !events.is_empty() => match mutation_service.append_events(events) {
-            Ok(result) => {
-                log_main_status("codex-log", &result.state, status_log_state);
+        Ok(events) if !events.is_empty() => {
+            if let Err(error) = event_sink.append_events(events, "codex-log", status_log_state) {
+                eprintln!("NiumaNotifier append Codex log events failed: {error}");
             }
-            Err(error) => eprintln!("NiumaNotifier append Codex log events failed: {error}"),
-        },
+        }
         Ok(_) => {}
         Err(error) => eprintln!("NiumaNotifier scan Codex internal log failed: {error}"),
     }

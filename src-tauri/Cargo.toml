@@ -15,17 +15,12 @@ tauri-build = { version = "2", features = [] }
 chrono.workspace = true
 niuma-api = { path = "../crates/niuma-api" }
 niuma-core = { path = "../crates/niuma-core" }
-notify = "8"
 rfd = "0.15"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 ureq = { version = "2", default-features = true }
-
-[[test]]
-name = "codex_session_runtime"
-path = "src/tools/codex/session_runtime.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

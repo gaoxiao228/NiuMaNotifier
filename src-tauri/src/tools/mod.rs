@@ -1,4 +1,3 @@
-pub mod codex;
 pub mod plugin_runtime;
 
 use niuma_core::runtime_event::RuntimeEventBus;
