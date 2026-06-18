@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::time::Duration;
 use tower::ServiceExt;
 
-use crate::{app, app_with_bus};
+use crate::{app, app_with_bus, app_with_bus_and_plugin_dir};
 
 #[tokio::test]
 async fn post_event_then_get_main_state_returns_waiting_approval() {
@@ -515,6 +515,196 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
 }
 
 #[tokio::test]
+async fn plugins_list_returns_builtin_plugin_status() {
+    let store = SqliteStateStore::new(test_path("plugins_list"));
+    store
+        .save_plugin_runtime_state(
+            "builtin-codex",
+            niuma_core::plugin::PluginRuntimeState::running(),
+        )
+        .unwrap();
+    let router = app_with_bus_and_plugin_dir(
+        store,
+        RuntimeEventBus::new(),
+        test_dir("plugins_list_plugin_dir"),
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["list"][0]["id"], "builtin-codex");
+    assert_eq!(value["data"]["list"][0]["runtime_status"], "running");
+    assert_eq!(value["data"]["list"][0]["enabled"], false);
+}
+
+#[tokio::test]
+async fn plugin_import_copies_folder_and_returns_plugin_list() {
+    let source_dir = test_dir("plugin_import_source");
+    let plugin_dir = test_dir("plugin_import_destination");
+    write_demo_plugin(&source_dir, "niuma-plugin-import-test");
+    std::fs::create_dir_all(source_dir.join("bin")).unwrap();
+    std::fs::write(source_dir.join("bin/demo.mjs"), "console.log('demo')").unwrap();
+    let router = app_with_bus_and_plugin_dir(
+        SqliteStateStore::new(test_path("plugin_import")),
+        RuntimeEventBus::new(),
+        plugin_dir.clone(),
+    );
+
+    let body = serde_json::json!({
+        "source_dir": source_dir.to_string_lossy()
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/import")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["imported"], true);
+    assert_eq!(value["data"]["plugin"]["id"], "niuma-plugin-import-test");
+    assert!(plugin_dir
+        .join("niuma-plugin-import-test/bin/demo.mjs")
+        .exists());
+}
+
+#[tokio::test]
+async fn plugin_import_rejects_builtin_plugin_id() {
+    let source_dir = test_dir("plugin_import_builtin_source");
+    let plugin_dir = test_dir("plugin_import_builtin_destination");
+    write_demo_plugin(&source_dir, "builtin-codex");
+    let router = app_with_bus_and_plugin_dir(
+        SqliteStateStore::new(test_path("plugin_import_builtin")),
+        RuntimeEventBus::new(),
+        plugin_dir,
+    );
+
+    let body = serde_json::json!({
+        "source_dir": source_dir.to_string_lossy()
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/import")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("不能覆盖内置插件"));
+}
+
+#[tokio::test]
+async fn plugin_remove_deletes_external_plugin_and_disables_tool() {
+    let plugin_dir = test_dir("plugin_remove_destination");
+    let installed_dir = plugin_dir.join("niuma-plugin-remove-test");
+    std::fs::create_dir_all(&installed_dir).unwrap();
+    write_demo_plugin(&installed_dir, "niuma-plugin-remove-test");
+    let store = SqliteStateStore::new(test_path("plugin_remove"));
+    store
+        .save_listener_config(
+            &ListenerConfig::default()
+                .with_tool_enabled(&ToolKind::Custom("demo_tool".to_string()), true),
+        )
+        .unwrap();
+    store
+        .save_plugin_runtime_state(
+            "niuma-plugin-remove-test",
+            niuma_core::plugin::PluginRuntimeState::running(),
+        )
+        .unwrap();
+    let router =
+        app_with_bus_and_plugin_dir(store.clone(), RuntimeEventBus::new(), plugin_dir.clone());
+
+    let body = serde_json::json!({
+        "plugin_id": "niuma-plugin-remove-test"
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/remove")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["removed"], true);
+    assert!(!installed_dir.exists());
+    assert!(value["data"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|plugin| plugin["id"] != "niuma-plugin-remove-test"));
+    assert!(!store
+        .listener_config()
+        .unwrap()
+        .is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())));
+    assert!(!store
+        .plugin_runtime_states()
+        .unwrap()
+        .contains_key("niuma-plugin-remove-test"));
+}
+
+#[tokio::test]
+async fn plugin_remove_rejects_builtin_plugin_id() {
+    let router = app_with_bus_and_plugin_dir(
+        SqliteStateStore::new(test_path("plugin_remove_builtin")),
+        RuntimeEventBus::new(),
+        test_dir("plugin_remove_builtin_destination"),
+    );
+
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex"
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/remove")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("不能移除内置插件"));
+}
+
+#[tokio::test]
 async fn listener_config_accepts_dynamic_tool_map() {
     let router = app(SqliteStateStore::new(test_path(
         "listener_config_dynamic_map",
@@ -906,4 +1096,30 @@ fn test_path(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("niuma-api-{name}-{}.sqlite", std::process::id()));
     let _ = std::fs::remove_file(&path);
     path
+}
+
+fn test_dir(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("niuma-api-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn write_demo_plugin(dir: &std::path::Path, id: &str) {
+    std::fs::write(
+        dir.join("plugin.json"),
+        format!(
+            r#"{{
+                "id": "{id}",
+                "tool_id": "demo_tool",
+                "display_name": "Demo Tool",
+                "version": "0.1.0",
+                "command": "node",
+                "args": ["./bin/demo.mjs"],
+                "platforms": ["macos", "windows", "linux"],
+                "capabilities": ["event_watcher"]
+            }}"#
+        ),
+    )
+    .unwrap();
 }

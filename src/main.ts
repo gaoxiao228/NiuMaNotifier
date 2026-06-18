@@ -3,16 +3,21 @@ import {
   getActiveLanguage,
   getListenerConfig,
   getNotificationConfig,
+  getPlugins,
   getLocalApiUrl,
   refreshMainState,
+  removePlugin,
   saveListenerConfig,
   saveLanguagePreference,
   saveNotificationConfig,
+  selectAndImportPluginDir,
   sendTestNotification,
   type ListenerToolConfig,
   type MainStatePayload,
   type NotificationChannel,
-  type NotificationChannelConfig
+  type NotificationChannelConfig,
+  type PluginManagementItem,
+  type PluginRuntimeStatus
 } from './api'
 import { listen } from '@tauri-apps/api/event'
 import {
@@ -36,10 +41,23 @@ import {
   renderRequestDetail,
   renderStatusSummary
 } from './statusView'
+import {
+  renderPluginImportResult,
+  renderPluginManagement,
+  renderSettingsShell
+} from './settingsView'
+import {
+  hasPluginReachedTransitionTarget,
+  isPluginTransitioning,
+  mergePendingPluginTransition,
+  type PluginTransitionTarget
+} from './pluginTransition'
 import { formatLocalTime } from './viewUtils'
 import './styles.css'
 
 const languageChangedEvent = 'niuma-language-changed'
+const pluginTransitionPollDelayMs = 500
+const pluginTransitionPollMaxAttempts = 20
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -62,12 +80,23 @@ let notificationAutoSaveVersion = 0
 let listenerTools: ListenerToolConfig[] = []
 let listenerConfigLoaded = false
 let listenerBusyToolId: string | null = null
+let plugins: PluginManagementItem[] = []
+let pluginBusyId: string | null = null
+let pendingPluginTransition: PluginTransitionTarget | null = null
+let pluginImportBusy = false
+let pluginImportResultText = ''
+let activeView: 'dashboard' | 'settings' = 'dashboard'
 let localApiUrlText = ''
 let localSseConnected = false
 
 app.innerHTML = renderDashboardShell()
 
 const subtitleEl = document.querySelector<HTMLElement>('#subtitle')
+const dashboardViewEl = document.querySelector<HTMLElement>('#dashboard-view')
+const settingsViewEl = document.querySelector<HTMLElement>('#settings-view')
+const settingsShellEl = document.querySelector<HTMLElement>('#settings-shell')
+const settingsOpenButton = document.querySelector<HTMLButtonElement>('#settings-open')
+const settingsBackButton = document.querySelector<HTMLButtonElement>('#settings-back')
 const languageLabelEl = document.querySelector<HTMLElement>('#language-label')
 const languageSelectEl = document.querySelector<HTMLSelectElement>('#language-select')
 const currentStatusLabelEl = document.querySelector<HTMLElement>('#current-status-label')
@@ -111,6 +140,16 @@ async function refreshListenerConfig() {
   renderToolListeners()
 }
 
+async function refreshPlugins() {
+  const data = await getPlugins()
+  applyPluginSnapshot(data.list)
+  renderPluginSettings()
+}
+
+function applyPluginSnapshot(snapshot: PluginManagementItem[]) {
+  plugins = snapshot.map((plugin) => mergePendingPluginTransition(plugin, pendingPluginTransition))
+}
+
 function renderDashboard() {
   if (latestMainState) {
     updatedEl!.textContent = formatLocalTime(latestMainState.updated_at, currentLanguage)
@@ -143,6 +182,30 @@ function renderDashboard() {
   renderLocalSseStatus()
 }
 
+function renderActiveView() {
+  if (dashboardViewEl) {
+    dashboardViewEl.hidden = activeView !== 'dashboard'
+  }
+  if (settingsViewEl) {
+    settingsViewEl.hidden = activeView !== 'settings'
+  }
+}
+
+function showDashboardView() {
+  activeView = 'dashboard'
+  renderActiveView()
+}
+
+function showSettingsView() {
+  activeView = 'settings'
+  renderActiveView()
+  renderSettings()
+  refreshPlugins().catch((error) => {
+    pluginImportResultText = error instanceof Error ? error.message : String(error)
+    renderPluginSettings()
+  })
+}
+
 function renderToolListeners() {
   renderListenerTools({
     element: toolListenerListEl,
@@ -170,6 +233,36 @@ function normalizeListenerTools(config: {
       icon_url: null
     }
   ]
+}
+
+function renderSettings() {
+  if (!settingsShellEl) {
+    return
+  }
+  settingsShellEl.innerHTML = renderSettingsShell({ language: currentLanguage })
+  renderPluginSettings()
+}
+
+function renderPluginSettings() {
+  renderPluginManagement({
+    element: document.querySelector<HTMLElement>('#plugin-management-list'),
+    language: currentLanguage,
+    plugins,
+    busyPluginId: pluginBusyId,
+    importBusy: pluginImportBusy,
+    resultText: pluginImportResultText
+  })
+  const importButton = document.querySelector<HTMLButtonElement>('#plugin-import')
+  if (importButton) {
+    const t = translations[currentLanguage]
+    importButton.textContent = pluginImportBusy ? t.importingPlugin : t.importPlugin
+    importButton.disabled = pluginImportBusy
+  }
+  renderPluginImportResult(
+    document.querySelector<HTMLElement>('#plugin-import-result'),
+    currentLanguage,
+    pluginImportResultText
+  )
 }
 
 function renderNotificationPage() {
@@ -260,6 +353,8 @@ function applyLanguage() {
   const t = translations[currentLanguage]
   document.documentElement.lang = currentLanguage
   subtitleEl!.textContent = t.appSubtitle
+  settingsOpenButton!.textContent = t.settingsButton
+  settingsBackButton!.textContent = t.backToDashboard
   if (languageLabelEl) {
     languageLabelEl.textContent = t.language
   }
@@ -288,7 +383,9 @@ function applyLanguage() {
   }
   renderNotificationSettings()
   renderLocalSseStatus()
+  renderSettings()
   renderDashboard()
+  renderActiveView()
 }
 
 function renderStatePayload(payload: MainStatePayload) {
@@ -303,6 +400,128 @@ refreshButton?.addEventListener('click', () => {
       updatedEl!.textContent = error instanceof Error ? error.message : String(error)
     })
 })
+
+settingsOpenButton?.addEventListener('click', showSettingsView)
+settingsBackButton?.addEventListener('click', showDashboardView)
+
+settingsViewEl?.addEventListener('click', async (event) => {
+  const target = event.target instanceof HTMLElement ? event.target : null
+  const t = translations[currentLanguage]
+  const pluginIdToRemove = target?.dataset.pluginRemove
+  if (pluginIdToRemove) {
+    if (isPluginTransitioning(plugins.find((plugin) => plugin.id === pluginIdToRemove))) {
+      return
+    }
+    pluginBusyId = pluginIdToRemove
+    pluginImportResultText = ''
+    renderPluginSettings()
+    try {
+      const result = await removePlugin(pluginIdToRemove)
+      applyPluginSnapshot(result.plugins)
+      pluginImportResultText = t.pluginRemoveSuccess
+      await Promise.all([refreshListenerConfig(), refreshDashboard()])
+    } catch (error) {
+      pluginImportResultText = error instanceof Error ? error.message : String(error)
+    } finally {
+      pluginBusyId = null
+      renderPluginSettings()
+    }
+    return
+  }
+  if (target?.id !== 'plugin-import') {
+    return
+  }
+  pluginImportBusy = true
+  pluginImportResultText = ''
+  renderPluginSettings()
+  try {
+    const result = await selectAndImportPluginDir()
+    applyPluginSnapshot(result.plugins)
+    pluginImportResultText = result.cancelled ? t.pluginImportCancelled : t.pluginImportSuccess
+    await refreshListenerConfig()
+  } catch (error) {
+    pluginImportResultText = error instanceof Error ? error.message : String(error)
+  } finally {
+    pluginImportBusy = false
+    renderPluginSettings()
+  }
+})
+
+settingsViewEl?.addEventListener('change', async (event) => {
+  const toggle = event.target instanceof HTMLInputElement ? event.target : null
+  const pluginId = toggle?.dataset.pluginToggle
+  if (!toggle || !pluginId) {
+    return
+  }
+  const nextEnabled = toggle.checked
+  const previousPlugins = plugins.map((plugin) => ({ ...plugin }))
+  const selectedPlugin = plugins.find((plugin) => plugin.id === pluginId)
+  const tracksRuntimeTransition = selectedPlugin?.source === 'external'
+  pendingPluginTransition = tracksRuntimeTransition
+    ? {
+        pluginId,
+        desiredEnabled: nextEnabled,
+        optimisticStatus: (nextEnabled ? 'starting' : 'stopping') as PluginRuntimeStatus
+      }
+    : null
+  plugins = plugins.map((plugin) =>
+    plugin.id === pluginId
+      ? {
+          ...plugin,
+          enabled: nextEnabled,
+          runtime_status: tracksRuntimeTransition
+            ? ((nextEnabled ? 'starting' : 'stopping') as PluginRuntimeStatus)
+            : plugin.runtime_status
+        }
+      : plugin
+  )
+  pluginBusyId = pluginId
+  renderPluginSettings()
+  try {
+    await saveListenerConfig({
+      codex_listening_enabled: plugins.find((plugin) => plugin.tool_id === 'codex')?.enabled ?? false,
+      tool_listening_enabled: Object.fromEntries(
+        plugins.map((plugin) => [plugin.tool_id, plugin.enabled])
+      )
+    })
+    if (tracksRuntimeTransition) {
+      const reachedTarget = await waitForPluginTargetState(pluginId, nextEnabled)
+      if (!reachedTarget) {
+        pendingPluginTransition = null
+        await refreshPlugins()
+      }
+    } else {
+      await refreshPlugins()
+    }
+    await Promise.all([refreshListenerConfig(), refreshDashboard()])
+  } catch (error) {
+    pendingPluginTransition = null
+    plugins = previousPlugins
+    pluginImportResultText = error instanceof Error ? error.message : String(error)
+  } finally {
+    pendingPluginTransition = null
+    pluginBusyId = null
+    renderPluginSettings()
+  }
+})
+
+async function waitForPluginTargetState(pluginId: string, desiredEnabled: boolean) {
+  for (let attempt = 0; attempt < pluginTransitionPollMaxAttempts; attempt += 1) {
+    const data = await getPlugins()
+    const plugin = data.list.find((item) => item.id === pluginId)
+    applyPluginSnapshot(data.list)
+    renderPluginSettings()
+    if (hasPluginReachedTransitionTarget(plugin, desiredEnabled)) {
+      return true
+    }
+    await delay(pluginTransitionPollDelayMs)
+  }
+  return false
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+}
 
 toolListenerListEl?.addEventListener('change', async (event) => {
   const toggle = event.target instanceof HTMLInputElement ? event.target : null

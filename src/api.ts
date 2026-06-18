@@ -93,6 +93,38 @@ export type ListenerToolConfig = {
   icon_url?: string | null
 }
 
+export type PluginRuntimeStatus = 'starting' | 'stopped' | 'stopping' | 'running' | 'failed'
+
+export type PluginManagementItem = {
+  id: string
+  tool_id: string
+  display_name: string
+  version: string
+  source: string
+  enabled: boolean
+  runtime_status: PluginRuntimeStatus
+  last_error: string | null
+  icon_url: string | null
+  install_path: string | null
+}
+
+export type PluginsPayload = {
+  list: PluginManagementItem[]
+}
+
+export type PluginImportResult = {
+  imported: boolean
+  cancelled?: boolean
+  plugin?: PluginManagementItem
+  plugins: PluginManagementItem[]
+}
+
+export type PluginRemoveResult = {
+  removed: boolean
+  plugin_id: string
+  plugins: PluginManagementItem[]
+}
+
 export type TestNotificationResult = {
   sent: boolean
   channel: string
@@ -223,18 +255,29 @@ export async function saveNotificationConfig(channels: NotificationChannelConfig
 
 export async function getListenerConfig() {
   try {
-    return await requestLocalApi<ListenerConfigPayload>('/api/v1/listener-config')
-  } catch {
     const response = await invoke<ApiResponse<ListenerConfigPayload>>('get_listener_config')
     if (response.code !== 0) {
       throw new Error(response.message)
     }
     return response.data
+  } catch {
+    return await requestLocalApi<ListenerConfigPayload>('/api/v1/listener-config')
   }
 }
 
 export async function saveListenerConfig(config: ListenerConfigPayload) {
   try {
+    const response = await invoke<
+      ApiResponse<ListenerConfigPayload & { saved: boolean }>
+    >('save_listener_config', {
+      codexListeningEnabled: config.codex_listening_enabled,
+      toolListeningEnabled: config.tool_listening_enabled
+    })
+    if (response.code !== 0) {
+      throw new Error(response.message)
+    }
+    return response.data
+  } catch {
     return await requestLocalApi<ListenerConfigPayload & { saved: boolean }>(
       '/api/v1/listener-config/save',
       {
@@ -243,11 +286,47 @@ export async function saveListenerConfig(config: ListenerConfigPayload) {
         body: JSON.stringify(config)
       }
     )
+  }
+}
+
+export async function getPlugins() {
+  try {
+    const response = await invoke<ApiResponse<PluginsPayload>>('get_plugins')
+    if (response.code !== 0) {
+      throw new Error(response.message)
+    }
+    return response.data
   } catch {
-    const response = await invoke<
-      ApiResponse<ListenerConfigPayload & { saved: boolean }>
-    >('save_listener_config', {
-      codexListeningEnabled: config.codex_listening_enabled
+    return await requestLocalApi<PluginsPayload>('/api/v1/plugins')
+  }
+}
+
+export async function importPluginDir(sourceDir: string) {
+  return await requestLocalApi<PluginImportResult>('/api/v1/plugins/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_dir: sourceDir })
+  })
+}
+
+export async function selectAndImportPluginDir() {
+  const response = await invoke<ApiResponse<PluginImportResult>>('select_and_import_plugin_dir')
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data
+}
+
+export async function removePlugin(pluginId: string) {
+  try {
+    return await requestLocalApi<PluginRemoveResult>('/api/v1/plugins/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plugin_id: pluginId })
+    })
+  } catch {
+    const response = await invoke<ApiResponse<PluginRemoveResult>>('remove_plugin', {
+      pluginId
     })
     if (response.code !== 0) {
       throw new Error(response.message)

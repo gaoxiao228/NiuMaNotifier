@@ -69,7 +69,10 @@ fn main() {
     );
 
     let app = tauri::Builder::default()
-        .manage(commands::AppRuntimeState { mutation_service })
+        .manage(commands::AppRuntimeState {
+            mutation_service,
+            runtime_events: runtime_events.clone(),
+        })
         .enable_macos_default_menu(tray::enable_macos_default_menu())
         .setup({
             let is_quitting = Arc::clone(&is_quitting);
@@ -111,6 +114,9 @@ fn main() {
             commands::save_language_preference,
             commands::get_listener_config,
             commands::save_listener_config,
+            commands::get_plugins,
+            commands::remove_plugin,
+            commands::select_and_import_plugin_dir,
             commands::get_notification_config,
             commands::save_notification_config,
             commands::get_notification_records,

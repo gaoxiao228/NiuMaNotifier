@@ -7,7 +7,11 @@ use niuma_core::dashboard::DashboardService;
 use niuma_core::main_state::MainStateService;
 use niuma_core::models::{NiumaEvent, ToolId};
 use niuma_core::notification_config::{NotificationConfigErrorKind, NotificationConfigService};
-use niuma_core::plugin::ToolPluginInfo;
+use niuma_core::plugin::{
+    import_external_plugin_dir, remove_external_plugin, PluginRegistry, PluginSource,
+    ToolPluginInfo,
+};
+use niuma_core::runtime_event::StateChangeReason;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -32,6 +36,16 @@ pub(crate) struct ResetStateRequest {
 pub(crate) struct PluginEventsRequest {
     plugin_id: String,
     events: Vec<NiumaEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct PluginImportRequest {
+    source_dir: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct PluginRemoveRequest {
+    plugin_id: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -103,7 +117,8 @@ pub(crate) async fn post_plugin_events(State(state): State<AppState>, body: Byte
             )
         }
     };
-    let Some(plugin) = state.plugin_registry.plugin_by_id(&request.plugin_id) else {
+    let registry = plugin_registry(&state);
+    let Some(plugin) = registry.plugin_by_id(&request.plugin_id) else {
         return json_response(
             200,
             ApiResponse::fail(
@@ -142,6 +157,133 @@ pub(crate) async fn post_plugin_events(State(state): State<AppState>, body: Byte
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    }
+}
+
+pub(crate) async fn get_plugins(State(state): State<AppState>) -> Response {
+    match plugin_management_items(&state) {
+        Ok(plugins) => json_response(200, ApiResponse::ok(json!({ "list": plugins }))),
+        Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    }
+}
+
+pub(crate) async fn import_plugin(State(state): State<AppState>, body: Bytes) -> Response {
+    let request = match serde_json::from_slice::<PluginImportRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterFormat,
+                    format!("请求体无法解析：{error}"),
+                ),
+            )
+        }
+    };
+    let config = match state.store.listener_config() {
+        Ok(config) => config,
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+    let runtime_states = match state.store.plugin_runtime_states() {
+        Ok(states) => states,
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+
+    match import_external_plugin_dir(
+        std::path::Path::new(&request.source_dir),
+        &state.plugin_dir,
+        &config,
+        &runtime_states,
+    ) {
+        Ok(result) => {
+            state
+                .runtime_events
+                .publish_state_changed(StateChangeReason::ListenerConfigChanged);
+            json_response(200, ApiResponse::ok(json!(result)))
+        }
+        Err(error) => json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+        ),
+    }
+}
+
+pub(crate) async fn remove_plugin(State(state): State<AppState>, body: Bytes) -> Response {
+    let request = match serde_json::from_slice::<PluginRemoveRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterFormat,
+                    format!("请求体无法解析：{error}"),
+                ),
+            )
+        }
+    };
+    let registry = plugin_registry(&state);
+    if PluginRegistry::with_builtin_plugins()
+        .plugin_by_id(&request.plugin_id)
+        .is_some()
+    {
+        return json_response(
+            200,
+            ApiResponse::fail(
+                ApiErrorCode::BusinessValidation,
+                format!("不能移除内置插件：{}", request.plugin_id),
+            ),
+        );
+    }
+    let Some(plugin) = registry.plugin_by_id(&request.plugin_id).cloned() else {
+        return json_response(
+            200,
+            ApiResponse::fail(
+                ApiErrorCode::BusinessValidation,
+                format!("未知插件：{}", request.plugin_id),
+            ),
+        );
+    };
+    if plugin.source == PluginSource::Builtin {
+        return json_response(
+            200,
+            ApiResponse::fail(
+                ApiErrorCode::BusinessValidation,
+                format!("不能移除内置插件：{}", request.plugin_id),
+            ),
+        );
+    }
+
+    let config = match state
+        .mutation_service
+        .set_tool_listening_enabled(plugin.tool_id.clone(), false)
+    {
+        Ok(result) => result.config,
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+    if let Err(error) = state.store.remove_plugin_runtime_state(&plugin.id) {
+        return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
+    }
+    let runtime_states = match state.store.plugin_runtime_states() {
+        Ok(states) => states,
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+
+    match remove_external_plugin(
+        &request.plugin_id,
+        &state.plugin_dir,
+        &config,
+        &runtime_states,
+    ) {
+        Ok(result) => {
+            state
+                .runtime_events
+                .publish_state_changed(StateChangeReason::ListenerConfigChanged);
+            json_response(200, ApiResponse::ok(json!(result)))
+        }
+        Err(error) => json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+        ),
     }
 }
 
@@ -221,7 +363,7 @@ pub(crate) async fn get_listener_config(State(state): State<AppState>) -> Respon
             ApiResponse::ok(json!({
                 "codex_listening_enabled": config.is_tool_enabled(&ToolId::Codex),
                 "tool_listening_enabled": config.tool_enabled_map(),
-                "tools": listener_tools(&state.plugin_registry.tools(), &config)
+                "tools": listener_tools(&plugin_registry(&state).tools(), &config)
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
@@ -290,7 +432,7 @@ pub(crate) async fn save_listener_config(State(state): State<AppState>, body: By
                 "saved": true,
                 "codex_listening_enabled": enabled,
                 "tool_listening_enabled": result.config.tool_enabled_map(),
-                "tools": listener_tools(&state.plugin_registry.tools(), &result.config)
+                "tools": listener_tools(&plugin_registry(&state).tools(), &result.config)
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
@@ -350,4 +492,16 @@ fn listener_tools(
             icon_url: plugin.icon_url.clone(),
         })
         .collect()
+}
+
+fn plugin_management_items(
+    state: &AppState,
+) -> Result<Vec<niuma_core::plugin::PluginManagementItem>, String> {
+    let config = state.store.listener_config()?;
+    let runtime_states = state.store.plugin_runtime_states()?;
+    Ok(plugin_registry(state).management_items(&config, &runtime_states))
+}
+
+fn plugin_registry(state: &AppState) -> PluginRegistry {
+    PluginRegistry::with_builtin_plugins().discover_external_plugins(&state.plugin_dir)
 }

@@ -22,6 +22,14 @@ if (!html.includes('id="main-status-panel"')) {
   throw new Error('主界面应渲染合并后的主状态面板')
 }
 
+if (!html.includes('id="settings-open"')) {
+  throw new Error('主界面应渲染设置入口按钮')
+}
+
+if (!html.includes('id="settings-view"')) {
+  throw new Error('主界面应包含设置页容器')
+}
+
 if (!html.includes('id="tool-listener-list"')) {
   throw new Error('监听状态应渲染工具插件列表容器')
 }

@@ -7,8 +7,9 @@ export function renderDashboardShell() {
           <h1>NiumaNotifier</h1>
           <p id="subtitle"></p>
         </div>
+        <button id="settings-open" class="icon-action" type="button"></button>
       </header>
-      <main class="dashboard-grid">
+      <main id="dashboard-view" class="dashboard-grid">
         <section id="main-status-panel" class="status-panel">
           <div class="panel-heading">
             <h2 id="current-status-label"></h2>
@@ -45,6 +46,12 @@ export function renderDashboardShell() {
             <div id="notification-form" class="notification-form"></div>
           </section>
         </aside>
+      </main>
+      <main id="settings-view" class="settings-view" hidden>
+        <div class="settings-topline">
+          <button id="settings-back" type="button"></button>
+        </div>
+        <div id="settings-shell" class="settings-shell"></div>
       </main>
     </section>
   `

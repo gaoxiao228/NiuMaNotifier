@@ -12,7 +12,7 @@ mod routes;
 mod sse;
 mod state;
 
-pub use routes::{app, app_with_bus};
+pub use routes::{app, app_with_bus, app_with_bus_and_plugin_dir};
 
 pub fn local_api_addr() -> String {
     config::local_api_addr()

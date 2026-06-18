@@ -15,6 +15,7 @@ use crate::notification_store::{
     NotificationChannelConfig, NotificationRecord, NotificationRecordStatus,
 };
 use crate::platform::locale::LanguagePreference;
+use crate::plugin::PluginRuntimeState;
 use crate::state::InternalStateEngine;
 
 mod persistence;
@@ -85,6 +86,7 @@ pub struct MainStateInput {
 
 const LISTENER_CONFIG_KEY: &str = "listener_config";
 const LANGUAGE_PREFERENCE_KEY: &str = "language_preference";
+const PLUGIN_RUNTIME_STATES_KEY: &str = "plugin_runtime_states";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl SqliteStateStore {
@@ -367,6 +369,67 @@ impl SqliteStateStore {
                 params![LANGUAGE_PREFERENCE_KEY, payload, Utc::now().to_rfc3339()],
             )
             .map_err(|error| format!("保存语言偏好失败：{error}"))?;
+        Ok(())
+    }
+
+    pub fn plugin_runtime_states(
+        &self,
+    ) -> Result<std::collections::HashMap<String, PluginRuntimeState>, String> {
+        let connection = self.open()?;
+        let payload = connection
+            .query_row(
+                "SELECT payload FROM app_settings WHERE key = ?1",
+                [PLUGIN_RUNTIME_STATES_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("读取插件运行状态失败：{error}"))?;
+        match payload {
+            Some(payload) => serde_json::from_str(&payload)
+                .map_err(|error| format!("解析插件运行状态失败：{error}")),
+            None => Ok(std::collections::HashMap::new()),
+        }
+    }
+
+    pub fn save_plugin_runtime_state(
+        &self,
+        plugin_id: &str,
+        runtime_state: PluginRuntimeState,
+    ) -> Result<(), String> {
+        let mut states = self.plugin_runtime_states()?;
+        states.insert(plugin_id.to_string(), runtime_state);
+        let connection = self.open()?;
+        let payload = serde_json::to_string(&states)
+            .map_err(|error| format!("序列化插件运行状态失败：{error}"))?;
+        connection
+            .execute(
+                "INSERT INTO app_settings (key, payload, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at",
+                params![PLUGIN_RUNTIME_STATES_KEY, payload, Utc::now().to_rfc3339()],
+            )
+            .map_err(|error| format!("保存插件运行状态失败：{error}"))?;
+        Ok(())
+    }
+
+    pub fn remove_plugin_runtime_state(&self, plugin_id: &str) -> Result<(), String> {
+        let mut states = self.plugin_runtime_states()?;
+        states.remove(plugin_id);
+        let connection = self.open()?;
+        let payload = serde_json::to_string(&states)
+            .map_err(|error| format!("序列化插件运行状态失败：{error}"))?;
+        connection
+            .execute(
+                "INSERT INTO app_settings (key, payload, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at",
+                params![PLUGIN_RUNTIME_STATES_KEY, payload, Utc::now().to_rfc3339()],
+            )
+            .map_err(|error| format!("移除插件运行状态失败：{error}"))?;
         Ok(())
     }
 

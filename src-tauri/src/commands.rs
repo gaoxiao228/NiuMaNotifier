@@ -7,14 +7,20 @@ use niuma_core::notification_config::{NotificationConfigErrorKind, NotificationC
 use niuma_core::platform::locale::{
     active_language, active_language_preference, set_active_language_preference, LanguagePreference,
 };
-use niuma_core::plugin::{default_user_plugin_dir, PluginRegistry, ToolPluginInfo};
+use niuma_core::plugin::{
+    current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
+    remove_external_plugin, PluginManagementItem, PluginRegistry, PluginSource, ToolPluginInfo,
+};
+use niuma_core::runtime_event::{RuntimeEventBus, StateChangeReason};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::SqliteStateStore;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 pub(crate) struct AppRuntimeState {
     pub(crate) mutation_service: StateMutationService,
+    pub(crate) runtime_events: RuntimeEventBus,
 }
 
 #[tauri::command]
@@ -90,8 +96,53 @@ pub(crate) fn get_listener_config() -> ApiResponse<serde_json::Value> {
 pub(crate) fn save_listener_config(
     runtime_state: tauri::State<'_, AppRuntimeState>,
     codex_listening_enabled: bool,
+    tool_listening_enabled: Option<BTreeMap<String, bool>>,
 ) -> ApiResponse<serde_json::Value> {
-    save_listener_config_with_service(&runtime_state.mutation_service, codex_listening_enabled)
+    save_listener_config_with_service(
+        &runtime_state.mutation_service,
+        codex_listening_enabled,
+        tool_listening_enabled,
+    )
+}
+
+#[tauri::command]
+pub(crate) fn get_plugins() -> ApiResponse<serde_json::Value> {
+    match plugin_management_items() {
+        Ok(plugins) => ApiResponse::ok(json!({ "list": plugins })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn select_and_import_plugin_dir(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    let Some(path) = rfd::FileDialog::new().pick_folder() else {
+        return ApiResponse::ok(json!({
+            "imported": false,
+            "cancelled": true,
+            "plugins": plugin_management_items().unwrap_or_default()
+        }));
+    };
+    let response = import_plugin_dir_from_path(path);
+    if response.code == 0 {
+        runtime_state
+            .runtime_events
+            .publish_state_changed(StateChangeReason::ListenerConfigChanged);
+    }
+    response
+}
+
+#[tauri::command]
+pub(crate) fn remove_plugin(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    plugin_id: String,
+) -> ApiResponse<serde_json::Value> {
+    remove_plugin_by_id(
+        &runtime_state.mutation_service,
+        &runtime_state.runtime_events,
+        &plugin_id,
+    )
 }
 
 #[tauri::command]
@@ -174,8 +225,23 @@ fn get_listener_config_from_store(store: SqliteStateStore) -> ApiResponse<serde_
 fn save_listener_config_with_service(
     service: &StateMutationService,
     codex_listening_enabled: bool,
+    tool_listening_enabled: Option<BTreeMap<String, bool>>,
 ) -> ApiResponse<serde_json::Value> {
-    match service.set_codex_listening_enabled(codex_listening_enabled) {
+    let result = if let Some(tool_map) = tool_listening_enabled {
+        let mut config = match default_store().listener_config() {
+            Ok(config) => config,
+            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+        };
+        // Tauri 回退路径也支持动态工具表，避免外部插件开关只能依赖 Local API。
+        for (tool_id, enabled) in tool_map {
+            config = config.with_tool_enabled(&ToolId::from_id(tool_id), enabled);
+        }
+        service.set_listener_config(config)
+    } else {
+        service.set_codex_listening_enabled(codex_listening_enabled)
+    };
+
+    match result {
         Ok(result) => ApiResponse::ok(json!({
             "saved": true,
             "codex_listening_enabled": result.config.is_tool_enabled(&ToolId::Codex),
@@ -194,6 +260,82 @@ fn listener_tools(config: &niuma_core::listener_config::ListenerConfig) -> Vec<s
         .iter()
         .map(|plugin| listener_tool(plugin, config))
         .collect()
+}
+
+fn plugin_management_items() -> Result<Vec<PluginManagementItem>, String> {
+    let store = default_store();
+    let config = store.listener_config()?;
+    let runtime_states = store.plugin_runtime_states()?;
+    Ok(current_plugin_registry().management_items(&config, &runtime_states))
+}
+
+fn import_plugin_dir_from_path(path: std::path::PathBuf) -> ApiResponse<serde_json::Value> {
+    let store = default_store();
+    let config = match store.listener_config() {
+        Ok(config) => config,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    let runtime_states = match store.plugin_runtime_states() {
+        Ok(states) => states,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    match import_external_plugin_dir(&path, &default_user_plugin_dir(), &config, &runtime_states) {
+        Ok(result) => ApiResponse::ok(json!(result)),
+        Err(error) => ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+    }
+}
+
+fn remove_plugin_by_id(
+    service: &StateMutationService,
+    runtime_events: &RuntimeEventBus,
+    plugin_id: &str,
+) -> ApiResponse<serde_json::Value> {
+    let store = default_store();
+    if PluginRegistry::with_builtin_plugins()
+        .plugin_by_id(plugin_id)
+        .is_some()
+    {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("不能移除内置插件：{plugin_id}"),
+        );
+    }
+    let registry = current_plugin_registry();
+    let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("未知插件：{plugin_id}"),
+        );
+    };
+    if plugin.source == PluginSource::Builtin {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("不能移除内置插件：{plugin_id}"),
+        );
+    }
+    let config = match service.set_tool_listening_enabled(plugin.tool_id.clone(), false) {
+        Ok(result) => result.config,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    if let Err(error) = store.remove_plugin_runtime_state(plugin_id) {
+        return ApiResponse::fail(ApiErrorCode::System, error);
+    }
+    let runtime_states = match store.plugin_runtime_states() {
+        Ok(states) => states,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    match remove_external_plugin(
+        plugin_id,
+        &default_user_plugin_dir(),
+        &config,
+        &runtime_states,
+    ) {
+        Ok(result) => {
+            runtime_events.publish_state_changed(StateChangeReason::ListenerConfigChanged);
+            ApiResponse::ok(json!(result))
+        }
+        Err(error) => ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+    }
 }
 
 fn listener_tool(
@@ -236,7 +378,7 @@ mod tests {
         let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
 
         let default_config = get_listener_config_from_store(store.clone());
-        let save = save_listener_config_with_service(&service, true);
+        let save = save_listener_config_with_service(&service, true, None);
         let reloaded = get_listener_config_from_store(store);
 
         assert_eq!(default_config.code, 0);
