@@ -1,0 +1,33 @@
+{
+  "name": "niuma-notifier",
+  "version": "0.1.0",
+  "description": "A local desktop notifier for AI coding tool status and blocking requests.",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gaoxiao228/NiuMaNotifier.git"
+  },
+  "homepage": "https://github.com/gaoxiao228/NiuMaNotifier#readme",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "npm run test:main-dashboard-layout && npm run test:responsive-layout-css && npm run test:status-summary && npm run test:listener-toggle && npm run test:notification-settings-layout && npm run test:notification-history",
+    "test:main-dashboard-layout": "tsc --target ES2022 --module commonjs --moduleResolution node --lib ES2022,DOM --skipLibCheck --strict --esModuleInterop --outDir /tmp/niuma-main-dashboard-test tests/mainDashboardLayout.test.ts && node /tmp/niuma-main-dashboard-test/tests/mainDashboardLayout.test.js",
+    "test:responsive-layout-css": "tsc --target ES2022 --module commonjs --moduleResolution node --lib ES2022,DOM --skipLibCheck --strict --esModuleInterop --outDir /tmp/niuma-responsive-layout-test tests/responsiveLayoutCss.test.ts && node /tmp/niuma-responsive-layout-test/responsiveLayoutCss.test.js",
+    "test:status-summary": "tsc --target ES2022 --module commonjs --moduleResolution node --lib ES2022,DOM --skipLibCheck --strict --esModuleInterop --outDir /tmp/niuma-status-summary-test tests/statusSummaryRender.test.ts && node /tmp/niuma-status-summary-test/tests/statusSummaryRender.test.js",
+    "test:listener-toggle": "tsc --target ES2022 --module commonjs --moduleResolution node --lib ES2022,DOM --skipLibCheck --strict --esModuleInterop --outDir /tmp/niuma-listener-toggle-test tests/listenerToggleRender.test.ts && node /tmp/niuma-listener-toggle-test/tests/listenerToggleRender.test.js",
+    "test:notification-settings-layout": "tsc --target ES2022 --module commonjs --moduleResolution node --lib ES2022,DOM --skipLibCheck --strict --esModuleInterop --outDir /tmp/niuma-notification-settings-layout-test tests/notificationSettingsLayout.test.ts && node /tmp/niuma-notification-settings-layout-test/tests/notificationSettingsLayout.test.js",
+    "test:notification-history": "tsc --target ES2022 --module commonjs --moduleResolution node --lib ES2022,DOM --skipLibCheck --strict --esModuleInterop --outDir /tmp/niuma-notification-history-test tests/notificationHistoryRender.test.ts && node /tmp/niuma-notification-history-test/tests/notificationHistoryRender.test.js",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7"
+  }
+}

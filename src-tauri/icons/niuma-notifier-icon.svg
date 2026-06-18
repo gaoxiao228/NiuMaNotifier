@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">NiumaNotifier Icon</title>
+  <desc id="desc">A monochrome tool-style icon showing an AI observer with a notification status dot.</desc>
+
+  <!-- 白色圆角底板用于 App 图标和 Dock 场景。 -->
+  <rect x="80" y="80" width="864" height="864" rx="192" fill="#ffffff" stroke="#0b0b0d" stroke-width="48" />
+
+  <!-- 外层监听环表达持续观察 AI 任务状态。 -->
+  <circle cx="512" cy="512" r="296" fill="none" stroke="#0b0b0d" stroke-width="56" />
+
+  <!-- 顶部短天线表达后台感知和状态采集。 -->
+  <rect x="476" y="174" width="72" height="144" rx="36" fill="#0b0b0d" />
+
+  <!-- AI 头部采用粗线框，保证小尺寸下仍能识别。 -->
+  <rect x="308" y="354" width="408" height="296" rx="104" fill="#ffffff" stroke="#0b0b0d" stroke-width="56" />
+
+  <!-- 双眼保留为实心点，避免小尺寸线条糊成一片。 -->
+  <circle cx="416" cy="502" r="34" fill="#0b0b0d" />
+  <circle cx="608" cy="502" r="34" fill="#0b0b0d" />
+
+  <!-- 右下状态点代表通知、待处理请求或状态变化。 -->
+  <circle cx="724" cy="724" r="108" fill="#0b0b0d" stroke="#ffffff" stroke-width="48" />
+</svg>

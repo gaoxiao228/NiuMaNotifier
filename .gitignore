@@ -1,0 +1,24 @@
+# Rust 构建产物
+/target/
+
+# 前端依赖与构建产物
+/node_modules/
+/dist/
+
+# 本地密钥、通知配置和数据库
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+
+# 本地隔离开发 worktree
+/.worktrees/
+
+# Superpowers 本地规划预览缓存
+/.superpowers/
+
+# 系统临时文件
+.DS_Store
+
+AGENTS.md

@@ -1,0 +1,20 @@
+[package]
+name = "niuma-cli"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "niuma"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+clap = { version = "4", features = ["derive"] }
+niuma-api = { path = "../niuma-api" }
+niuma-core = { path = "../niuma-core" }
+serde_json.workspace = true

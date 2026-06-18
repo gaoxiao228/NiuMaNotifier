@@ -1,0 +1,169 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+// MVP-0 的核心模型集中放在这里，后续 CLI、Tauri 和 hook helper 共用同一套类型。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolKind {
+    Codex,
+    ClaudeCode,
+}
+
+// 状态枚举使用产品文档中的命名，序列化时保持 API 友好的 snake_case。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionStatus {
+    Idle,
+    Running,
+    WaitingApproval,
+    WaitingInput,
+    Completed,
+    Error,
+    Stale,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NiumaSession {
+    pub id: String,
+    pub tool: ToolKind,
+    pub project_path: String,
+    pub project_name: String,
+    pub status: SessionStatus,
+    pub last_event_id: Option<String>,
+    pub last_activity_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AttentionItem {
+    pub event_id: String,
+    pub session_id: String,
+    pub status: SessionStatus,
+    pub summary: String,
+    // 用于把后续“已恢复运行”的事件精确匹配到某个待处理项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_resolve_key: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl AttentionItem {
+    pub fn from_event(event: &NiumaEvent, status: SessionStatus) -> Self {
+        Self {
+            event_id: event.id.clone(),
+            session_id: event.session_id.clone(),
+            status,
+            summary: event.summary.clone(),
+            attention_resolve_key: event.attention_resolve_key.clone(),
+            created_at: event.created_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LatestActivity {
+    pub event_id: Option<String>,
+    pub session_id: Option<String>,
+    pub status: SessionStatus,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl LatestActivity {
+    pub fn idle() -> Self {
+        Self {
+            event_id: None,
+            session_id: None,
+            status: SessionStatus::Idle,
+            updated_at: None,
+        }
+    }
+
+    pub fn from_event(event: &NiumaEvent, status: SessionStatus) -> Self {
+        Self {
+            event_id: Some(event.id.clone()),
+            session_id: Some(event.session_id.clone()),
+            status,
+            updated_at: Some(event.created_at),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventType {
+    SessionStarted,
+    SessionIdled,
+    ApprovalRequested,
+    InputRequested,
+    TaskFailed,
+    AssistantMessageCompleted,
+    ManualDismissed,
+    SessionStaled,
+    SessionActivity,
+}
+
+// 完成原因仅用于通知和诊断，不参与状态层的 event_type 聚合。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionReason {
+    Normal,
+    Interrupted,
+    RolledBack,
+    AbortedUnknown,
+}
+
+// 失败原因保留工具侧的可诊断分类，状态层仍以 TaskFailed 作为主语义。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureReason {
+    Timeout,
+    ContextWindowExceeded,
+    UsageLimitReached,
+    ServerOverloaded,
+    PolicyBlocked,
+    ResponseStreamFailed,
+    ConnectionFailed,
+    QuotaExceeded,
+    InternalServerError,
+    RetryLimit,
+    SandboxError,
+    Fatal,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NiumaEvent {
+    pub id: String,
+    pub dedupe_key: String,
+    pub source: String,
+    pub tool: ToolKind,
+    pub session_id: String,
+    pub project_path: String,
+    pub project_name: String,
+    pub event_type: EventType,
+    pub severity: String,
+    pub summary: String,
+    // 对外展示正文，供等待授权、等待输入和完成态优先使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    // 错误详情，供失败态优先使用，避免把长错误塞进短摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    // 工具适配器可填写该键，让状态层只清除对应的阻塞项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_resolve_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_reason: Option<CompletionReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<FailureReason>,
+    pub payload_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+// 旧状态机的内部快照，只服务状态转移测试和诊断日志。
+// 对外展示状态统一使用 MainStatePayload，由 MainStateService 计算。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct InternalStateSnapshot {
+    pub status: SessionStatus,
+    pub primary_session_id: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub primary_event: Option<NiumaEvent>,
+}

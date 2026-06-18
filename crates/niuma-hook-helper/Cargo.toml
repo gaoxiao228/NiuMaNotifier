@@ -1,0 +1,19 @@
+[package]
+name = "niuma-hook-helper"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "niuma-hook-helper"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+niuma-api = { path = "../niuma-api" }
+niuma-core = { path = "../niuma-core" }
+serde_json.workspace = true
