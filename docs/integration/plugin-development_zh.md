@@ -22,6 +22,21 @@ niuma-plugin-example/
     icon.png
 ```
 
+仓库内提供了一个最小样例：
+
+```text
+examples/plugins/niuma-plugin-demo/
+```
+
+安装到本机插件目录：
+
+```bash
+mkdir -p "$HOME/Library/Application Support/NiumaNotifier/plugins"
+cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/NiumaNotifier/plugins/"
+```
+
+重启 NiumaNotifier 后，监听列表应出现 `Demo Tool`。启用后，该插件会通过 `/api/v1/plugin-events` 上报一组稳定的测试事件。
+
 用户插件目录：
 
 ```text

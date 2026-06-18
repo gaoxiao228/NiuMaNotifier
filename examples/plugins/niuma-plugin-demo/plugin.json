@@ -1,0 +1,12 @@
+{
+  "id": "niuma-plugin-demo",
+  "tool_id": "demo_tool",
+  "display_name": "Demo Tool",
+  "version": "0.1.0",
+  "command": "node",
+  "args": ["./bin/niuma-plugin-demo.mjs"],
+  "env": {},
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_watcher"],
+  "icon_url": null
+}

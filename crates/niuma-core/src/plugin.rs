@@ -230,6 +230,35 @@ mod tests {
     }
 
     #[test]
+    fn registry_discovers_external_plugin_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp.path().join("niuma-plugin-demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "id": "niuma-plugin-demo",
+                "tool_id": "demo_tool",
+                "display_name": "Demo Tool",
+                "version": "0.1.0",
+                "command": "node",
+                "args": ["./bin/niuma-plugin-demo.mjs"],
+                "platforms": ["macos", "windows", "linux"],
+                "capabilities": ["event_watcher"]
+            }"#,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::new().discover_external_plugins(temp.path());
+        let plugin = registry.plugin_by_id("niuma-plugin-demo").unwrap();
+
+        assert_eq!(plugin.tool_id, ToolKind::Custom("demo_tool".to_string()));
+        assert_eq!(plugin.source, PluginSource::External);
+        assert_eq!(plugin.base_dir.as_deref(), Some(plugin_dir.as_path()));
+        assert_eq!(registry.tools()[0].display_name, "Demo Tool");
+    }
+
+    #[test]
     fn unsupported_platform_manifest_is_filtered() {
         let manifest = PluginManifest {
             id: "future".to_string(),
