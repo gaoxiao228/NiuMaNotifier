@@ -105,7 +105,9 @@ fn is_managed_runtime_manifest(manifest: &PluginManifest) -> bool {
     manifest.capabilities.iter().any(|capability| {
         matches!(
             capability,
-            PluginCapability::EventWatcher | PluginCapability::EventConsumer
+            PluginCapability::EventWatcher
+                | PluginCapability::EventConsumer
+                | PluginCapability::StateConsumer
         )
     })
 }
@@ -502,11 +504,13 @@ mod tests {
     fn managed_runtime_manifests_include_event_consumers() {
         let mut registry = PluginRegistry::new();
         registry.register(notification_consumer_manifest("builtin-bark"));
+        registry.register(state_consumer_manifest("status-indicator-demo"));
 
         let manifests = managed_runtime_manifests(&registry);
 
-        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests.len(), 2);
         assert_eq!(manifests[0].id, "builtin-bark");
+        assert_eq!(manifests[1].id, "status-indicator-demo");
     }
 
     #[test]
@@ -514,10 +518,17 @@ mod tests {
         let store = SqliteStateStore::new(test_sqlite_path("event_consumer_enabled"));
         let mut enabled = BTreeMap::new();
         enabled.insert("builtin-bark".to_string(), true);
+        enabled.insert("status-indicator-demo".to_string(), true);
         store.save_plugin_enabled_map(&enabled).unwrap();
-        let manifest = notification_consumer_manifest("builtin-bark");
 
-        assert!(plugin_runtime_enabled(&store, &manifest));
+        assert!(plugin_runtime_enabled(
+            &store,
+            &notification_consumer_manifest("builtin-bark")
+        ));
+        assert!(plugin_runtime_enabled(
+            &store,
+            &state_consumer_manifest("status-indicator-demo")
+        ));
     }
 
     #[test]
@@ -603,6 +614,25 @@ mod tests {
             icon_url: None,
             config_schema: Vec::new(),
             source: PluginSource::Builtin,
+            base_dir: None,
+        }
+    }
+
+    fn state_consumer_manifest(id: &str) -> PluginManifest {
+        PluginManifest {
+            id: id.to_string(),
+            kind: PluginKind::StatusIndicator,
+            tool_id: None,
+            display_name: "Status Indicator".to_string(),
+            version: "0.1.0".to_string(),
+            command: Some("definitely-missing-niuma-command".to_string()),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            platforms: Vec::new(),
+            capabilities: vec![PluginCapability::StateConsumer],
+            icon_url: None,
+            config_schema: Vec::new(),
+            source: PluginSource::External,
             base_dir: None,
         }
     }

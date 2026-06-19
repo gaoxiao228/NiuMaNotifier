@@ -1,0 +1,22 @@
+{
+  "id": "status-indicator-demo",
+  "kind": "status_indicator",
+  "display_name": "Status Indicator Demo",
+  "version": "0.1.0",
+  "command": "node",
+  "args": ["./bin/status-indicator-demo.mjs"],
+  "env": {},
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["state_consumer"],
+  "config_schema": [
+    {
+      "key": "style",
+      "type": "select",
+      "label": "Display style",
+      "required": false,
+      "default": "indicator",
+      "options": ["indicator", "pet", "panel"]
+    }
+  ],
+  "icon_url": null
+}

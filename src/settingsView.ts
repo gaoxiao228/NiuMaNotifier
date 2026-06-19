@@ -74,7 +74,7 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
   options.element.innerHTML = options.plugins
     .map((plugin) => {
       const busy = options.busyPluginId === plugin.id || isPluginTransitioning(plugin)
-      const pluginType = plugin.kind === 'notification' ? 'notification' : 'tool'
+      const pluginType = translatePluginKind(options.language, plugin.kind ?? 'tool')
       const pluginSubtitle = plugin.tool_id
         ? `${plugin.id} · ${plugin.tool_id}`
         : `${plugin.id} · ${pluginType}`
@@ -230,6 +230,16 @@ export function translatePluginSource(language: LanguageCode, source: string) {
     return t.pluginBuiltin
   }
   return t.pluginExternal
+}
+
+export function translatePluginKind(language: LanguageCode, kind: string) {
+  if (kind === 'notification') {
+    return language === 'zh-CN' ? '通知插件' : 'notification'
+  }
+  if (kind === 'status_indicator') {
+    return language === 'zh-CN' ? '状态指示插件' : 'status indicator'
+  }
+  return language === 'zh-CN' ? '工具插件' : 'tool'
 }
 
 function isPluginTransitioning(plugin: PluginManagementItem) {

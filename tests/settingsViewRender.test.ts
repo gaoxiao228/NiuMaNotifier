@@ -54,6 +54,7 @@ renderPluginManagement({
       display_name: 'Codex',
       version: '0.1.0',
       source: 'builtin',
+      capabilities: ['event_watcher'],
       enabled: true,
       runtime_status: 'running',
       last_error: null,
@@ -68,6 +69,7 @@ renderPluginManagement({
       display_name: 'Bark',
       version: '0.1.0',
       source: 'builtin',
+      capabilities: ['event_consumer', 'notification_test'],
       enabled: false,
       runtime_status: 'stopped',
       last_error: null,
@@ -89,6 +91,7 @@ renderPluginManagement({
       display_name: 'ntfy',
       version: '0.1.0',
       source: 'builtin',
+      capabilities: ['event_consumer', 'notification_test'],
       enabled: true,
       runtime_status: 'running',
       last_error: null,
@@ -109,6 +112,7 @@ renderPluginManagement({
       display_name: 'Demo Tool',
       version: '0.1.0',
       source: 'external',
+      capabilities: ['event_watcher'],
       enabled: false,
       runtime_status: 'failed',
       last_error: '启动失败',
@@ -122,6 +126,7 @@ renderPluginManagement({
       display_name: 'Starting Tool',
       version: '0.1.0',
       source: 'external',
+      capabilities: ['event_watcher'],
       enabled: true,
       runtime_status: 'starting',
       last_error: null,
@@ -135,12 +140,36 @@ renderPluginManagement({
       display_name: 'Stopping Tool',
       version: '0.1.0',
       source: 'external',
+      capabilities: ['event_watcher'],
       enabled: false,
       runtime_status: 'stopping',
       last_error: null,
       icon_url: null,
       config_schema: [],
       install_path: '/tmp/stopping'
+    },
+    {
+      id: 'status-indicator-demo',
+      kind: 'status_indicator',
+      tool_id: null,
+      display_name: '状态指示 Demo',
+      version: '0.1.0',
+      source: 'external',
+      capabilities: ['state_consumer'],
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: null,
+      config_schema: [
+        {
+          key: 'style',
+          type: 'select',
+          label: '显示样式',
+          required: false,
+          options: ['indicator', 'pet']
+        }
+      ],
+      install_path: '/tmp/status-indicator'
     }
   ],
   busyConfigPluginId: null,
@@ -151,6 +180,9 @@ renderPluginManagement({
     },
     'builtin-ntfy': {
       topic: 'niuma-topic'
+    },
+    'status-indicator-demo': {
+      style: 'pet'
     }
   }
 })
@@ -197,6 +229,15 @@ if (
 
 if (!listElement.innerHTML.includes('启动失败')) {
   throw new Error('插件列表应渲染最近错误')
+}
+
+if (
+  !listElement.innerHTML.includes('data-plugin-toggle="status-indicator-demo" checked') ||
+  !listElement.innerHTML.includes('status-indicator-demo · 状态指示插件') ||
+  !listElement.innerHTML.includes('data-plugin-config-save="status-indicator-demo"') ||
+  !listElement.innerHTML.includes('<option value="pet" selected>pet</option>')
+) {
+  throw new Error('状态指示插件应在插件管理中按独立插件类型渲染并支持配置')
 }
 
 if (

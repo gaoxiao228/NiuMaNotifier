@@ -30,6 +30,7 @@ pub enum PluginCapability {
     EventWatcher,
     EventConsumer,
     NotificationTest,
+    StateConsumer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -37,6 +38,7 @@ pub enum PluginCapability {
 pub enum PluginKind {
     Tool,
     Notification,
+    StatusIndicator,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -723,6 +725,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_status_indicator_state_consumer_without_tool_id() {
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "status-indicator-demo",
+                "kind": "status_indicator",
+                "display_name": "Status Indicator Demo",
+                "version": "0.1.0",
+                "command": "node",
+                "args": ["./bin/status-indicator-demo.mjs"],
+                "capabilities": ["state_consumer"]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.kind, PluginKind::StatusIndicator);
+        assert_eq!(manifest.tool_id, None);
+        assert_eq!(manifest.capabilities, vec![PluginCapability::StateConsumer]);
+    }
+
+    #[test]
     fn rejects_tool_plugin_without_tool_id() {
         let error = parse_plugin_manifest(
             r#"{
@@ -966,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_tools_excludes_notification_event_consumers() {
+    fn registry_tools_excludes_non_tool_consumers() {
         let mut registry = PluginRegistry::new();
         registry.register(
             parse_plugin_manifest(
@@ -977,6 +999,19 @@ mod tests {
                 "version": "0.1.0",
                 "command": "niuma-plugin-bark",
                 "capabilities": ["event_consumer"]
+            }"#,
+            )
+            .unwrap(),
+        );
+        registry.register(
+            parse_plugin_manifest(
+                r#"{
+                "id": "status-indicator-demo",
+                "kind": "status_indicator",
+                "display_name": "Status Indicator Demo",
+                "version": "0.1.0",
+                "command": "node",
+                "capabilities": ["state_consumer"]
             }"#,
             )
             .unwrap(),
@@ -986,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn management_items_read_notification_enabled_from_plugin_map() {
+    fn management_items_read_non_tool_enabled_from_plugin_map() {
         let mut registry = PluginRegistry::new();
         registry.register(
             parse_plugin_manifest(
@@ -1001,7 +1036,23 @@ mod tests {
             )
             .unwrap(),
         );
-        let enabled = BTreeMap::from([("builtin-bark".to_string(), true)]);
+        registry.register(
+            parse_plugin_manifest(
+                r#"{
+                "id": "status-indicator-demo",
+                "kind": "status_indicator",
+                "display_name": "Status Indicator Demo",
+                "version": "0.1.0",
+                "command": "node",
+                "capabilities": ["state_consumer"]
+            }"#,
+            )
+            .unwrap(),
+        );
+        let enabled = BTreeMap::from([
+            ("builtin-bark".to_string(), true),
+            ("status-indicator-demo".to_string(), true),
+        ]);
 
         let items =
             registry.management_items(&ListenerConfig::default(), &enabled, &HashMap::new());
@@ -1009,6 +1060,9 @@ mod tests {
         assert_eq!(items[0].kind, PluginKind::Notification);
         assert_eq!(items[0].tool_id, None);
         assert!(items[0].enabled);
+        assert_eq!(items[1].kind, PluginKind::StatusIndicator);
+        assert_eq!(items[1].tool_id, None);
+        assert!(items[1].enabled);
     }
 
     #[test]

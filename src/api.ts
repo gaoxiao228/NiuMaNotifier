@@ -96,7 +96,7 @@ export type PluginConfigField = {
 
 export type PluginManagementItem = {
   id: string
-  kind?: 'tool' | 'notification'
+  kind?: 'tool' | 'notification' | 'status_indicator'
   tool_id: string | null
   display_name: string
   version: string

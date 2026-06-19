@@ -2,19 +2,20 @@
 
 本文档描述 NiumaNotifier 插件 v1 的接入方式。当前插件是由 `plugin.json` 描述、由 NiumaNotifier 启停的本机受信可执行程序；插件通过 Local API 与主程序通信。
 
-当前支持两类插件：
+当前支持三类插件：
 
 | 类型 | `kind` | 主要能力 | 说明 |
 | --- | --- | --- | --- |
 | 工具监听插件 | `tool` | `event_watcher` | 监听 Codex、Claude Code、Cursor 等工具的原始状态，并转换为统一的 `NiumaEvent` 上报。 |
 | 通知插件 | `notification` | `event_consumer`、`notification_test` | 消费主程序事件流，自行决定是否发送 Bark、ntfy 等外部通知，并把通知结果回写主程序。 |
+| 状态指示插件 | `status_indicator` | `state_consumer` | 消费主状态流，用于外部指示灯、状态面板、桌宠等展示。 |
 
 ## 插件边界
 
 - 插件是本机受信可执行程序，由用户安装并由 NiumaNotifier 启停。
 - NiumaNotifier 不在 v1 中提供强沙箱、签名校验或插件市场。
 - 插件不得直接写 SQLite 状态库；所有状态事件和通知结果必须通过 Local API 上报。
-- 外部状态指示器不需要理解插件协议，只消费 `/api/v1/state/stream` SSE 主状态流。
+- 状态指示插件不需要理解事件上报或通知回写协议，只消费 `/api/v1/state/stream` SSE 主状态流。
 - Local API 默认只面向本机可信调用方，不内置鉴权；如果显式绑定到非 loopback 地址，应由外层网络策略保护。
 
 ## 插件包结构
@@ -30,10 +31,11 @@ niuma-plugin-example/
     icon.png
 ```
 
-仓库内提供了一个最小工具插件样例：
+仓库内提供了一个最小工具插件样例和一个状态指示插件样例：
 
 ```text
 examples/plugins/niuma-plugin-demo/
+examples/plugins/status-indicator-demo/
 ```
 
 安装到本机插件目录：
@@ -44,6 +46,8 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 ```
 
 重启 NiumaNotifier 后，监听列表应出现 `Demo Tool`。启用后，该插件会通过 `/api/v1/plugin-events` 上报一组稳定的测试事件。
+
+状态指示插件样例安装方式相同，启用后会通过 `/api/v1/state/stream` 消费主状态并打印指示结果。
 
 用户插件目录：
 
@@ -103,12 +107,38 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 }
 ```
 
+状态指示插件示例：
+
+```json
+{
+  "id": "status-indicator-demo",
+  "kind": "status_indicator",
+  "display_name": "Status Indicator Demo",
+  "version": "0.1.0",
+  "command": "node",
+  "args": ["./bin/status-indicator-demo.mjs"],
+  "env": {},
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["state_consumer"],
+  "config_schema": [
+    {
+      "key": "style",
+      "type": "select",
+      "label": "Display style",
+      "required": false,
+      "default": "indicator",
+      "options": ["indicator", "pet", "panel"]
+    }
+  ]
+}
+```
+
 字段说明：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `id` | 是 | 插件唯一 ID。外部插件 ID 不能与内置插件重复。 |
-| `kind` | 否 | 插件类型。缺省为 `tool`。当前支持 `tool` 和 `notification`。 |
+| `kind` | 否 | 插件类型。缺省为 `tool`。当前支持 `tool`、`notification`、`status_indicator`。 |
 | `tool_id` | 工具插件必填 | 工具 ID，例如 `codex`、`claude_code`、`cursor`、`demo_tool`。 |
 | `display_name` | 是 | UI 展示名称。 |
 | `version` | 是 | 插件版本。 |
@@ -116,7 +146,7 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 | `args` | 否 | 启动参数。相对路径参数不会自动改写，但插件进程工作目录会设为 `plugin.json` 所在目录。 |
 | `env` | 否 | 额外环境变量，会注入到插件进程。 |
 | `platforms` | 否 | 支持平台，当前使用 `macos`、`windows`、`linux`。空数组表示不限平台。 |
-| `capabilities` | 否 | 当前支持 `event_watcher`、`event_consumer`、`notification_test`。 |
+| `capabilities` | 否 | 当前支持 `event_watcher`、`event_consumer`、`notification_test`、`state_consumer`。 |
 | `icon_url` | 否 | 图标地址或相对资源路径。 |
 | `config_schema` | 否 | 插件配置字段定义，供 UI 和配置接口使用。 |
 
@@ -126,7 +156,7 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 - 非 `tool` 插件不能声明 `event_watcher`。
 - `event_watcher` 插件由工具监听开关控制启停。
 - 无 `tool_id` 的插件由通用插件启用状态控制启停。
-- 声明 `event_watcher` 或 `event_consumer` 的插件会被运行管理器作为常驻子进程管理。
+- 声明 `event_watcher`、`event_consumer` 或 `state_consumer` 的插件会被运行管理器作为常驻子进程管理。
 
 ## 配置 Schema
 
@@ -357,6 +387,42 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 - 插件应自行判断哪些事件需要发送通知。
 - 插件应在 `NIUMA_PLUGIN_DATA_DIR` 中保存本地去重状态，避免重连后重复发送。
 - SSE keep-alive 注释行应忽略。
+
+## 状态指示插件主状态消费
+
+`state_consumer` 状态指示插件应订阅主状态流：
+
+```http
+GET /api/v1/state/stream
+Accept: text/event-stream
+```
+
+主状态事件格式：
+
+```text
+event: state
+id: 12
+data: {"version":12,"status":"waiting_approval","updated_at":"2026-06-18T12:00:00Z","session":{"id":"session-1","tool":"codex","project_name":"repo","project_path":"/repo"},"detail":{"event_id":"event-1","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"payload_ref":null,"completion_reason":null,"failure_reason":null}}
+```
+
+`status` 支持：
+
+```text
+idle
+running
+waiting_approval
+waiting_input
+completed
+error
+```
+
+消费约束：
+
+- `/api/v1/state/stream` 连接建立后会先发送一次当前主状态快照，后续仅在主状态内容变化时发送。
+- 状态指示插件不应上报事件、不应写通知历史，也不应直接写 SQLite 状态库。
+- 状态展示应以 `status` 为准；不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。
+- 插件可以使用 `NIUMA_PLUGIN_DATA_DIR` 保存窗口位置、展示样式等本地运行状态。
+- SSE keep-alive 注释行应忽略，断线后插件应自行重连。
 
 ## 通知结果回写
 
@@ -626,7 +692,9 @@ GET /api/v1/main-state
 - `command` 在插件安装目录下可执行，或裸命令能被系统 `PATH` 找到。
 - 工具插件声明 `kind = tool`、`tool_id` 和 `event_watcher`。
 - 通知插件声明 `kind = notification`、`event_consumer`，需要测试通知时同时声明 `notification_test`。
+- 状态指示插件声明 `kind = status_indicator` 和 `state_consumer`。
 - 工具插件上报事件时，`event.tool` 与 manifest `tool_id` 完全一致。
+- 状态指示插件只消费 `/api/v1/state/stream`，不自行推导主状态。
 - `dedupe_key` 稳定，重复扫描不会制造重复状态。
 - 插件退出时能响应 `SIGTERM` 或等效终止信号。
 - 插件使用 `NIUMA_PARENT_PID` 做父进程退出自清理。
