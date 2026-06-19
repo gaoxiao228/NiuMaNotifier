@@ -50,6 +50,15 @@ if (!historyElement.innerHTML.includes('测试通知')) {
 }
 
 if (
+  !historyElement.innerHTML.includes('class="notification-record-card"') ||
+  !historyElement.innerHTML.includes('class="notification-record-header"') ||
+  !historyElement.innerHTML.includes('class="notification-record-meta"') ||
+  !historyElement.innerHTML.includes('class="notification-record-detail"')
+) {
+  throw new Error('通知历史条目应按头部、元信息和详情分层渲染，避免内容重叠')
+}
+
+if (
   !historyElement.innerHTML.includes('builtin-bark') ||
   !historyElement.innerHTML.includes('Device Key 未配置')
 ) {

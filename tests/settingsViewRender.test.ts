@@ -2,6 +2,10 @@ import { renderPluginManagement, renderSettingsShell } from '../src/settingsView
 
 const shell = renderSettingsShell({ language: 'zh-CN' })
 
+if (!shell.includes('class="settings-layout"')) {
+  throw new Error('设置页应使用设计稿中的侧边导航加内容区布局')
+}
+
 if (!shell.includes('插件管理')) {
   throw new Error('设置页左侧应包含插件管理入口')
 }
@@ -18,6 +22,22 @@ if (!shell.includes('id="settings-notification-history"')) {
   throw new Error('设置页应渲染通知历史列表容器')
 }
 
+if (!shell.includes('id="settings-panel-plugins" class="settings-panel plugin-management-panel"')) {
+  throw new Error('插件管理默认页应显示插件管理面板')
+}
+
+if (
+  !shell.includes('class="plugin-management-scroll"') ||
+  !shell.includes('id="plugin-import-result"') ||
+  !shell.includes('id="plugin-management-list"')
+) {
+  throw new Error('插件管理页应固定标题，并将结果和插件列表放在下方滚动区域')
+}
+
+if (!shell.includes('id="settings-panel-notification-history" class="settings-panel settings-notification-history" hidden')) {
+  throw new Error('插件管理默认页不应在下方同时展示通知历史区域')
+}
+
 if (!shell.includes('data-settings-panel="plugins" aria-current="page"')) {
   throw new Error('设置页默认应选中插件管理')
 }
@@ -29,6 +49,13 @@ const historyShell = renderSettingsShell({
 
 if (!historyShell.includes('data-settings-panel="notification-history" aria-current="page"')) {
   throw new Error('通知历史面板选中时应标记当前导航项')
+}
+
+if (
+  !historyShell.includes('id="settings-panel-plugins" class="settings-panel plugin-management-panel" hidden') ||
+  historyShell.includes('id="settings-panel-notification-history" class="settings-panel settings-notification-history" hidden')
+) {
+  throw new Error('通知历史应只在通知历史侧边栏面板中显示')
 }
 
 if (!shell.includes('id="plugin-import"')) {

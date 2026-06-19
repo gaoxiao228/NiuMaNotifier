@@ -27,38 +27,42 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
   const pluginsActive = activePanel === 'plugins'
   const notificationHistoryActive = activePanel === 'notification-history'
   return `
-    <aside class="settings-sidebar">
-      <button class="settings-nav-item ${pluginsActive ? 'active' : ''}" type="button" data-settings-panel="plugins" ${
-        pluginsActive ? 'aria-current="page"' : ''
-      }>${escapeHtml(t.pluginManagement)}</button>
-      <button class="settings-nav-item ${notificationHistoryActive ? 'active' : ''}" type="button" data-settings-panel="notification-history" ${
-        notificationHistoryActive ? 'aria-current="page"' : ''
-      }>${escapeHtml(t.notificationHistory)}</button>
-    </aside>
-    <section class="settings-content">
-      <div id="settings-panel-plugins" class="settings-panel" ${pluginsActive ? '' : 'hidden'}>
-        <div class="settings-heading">
-          <div>
-            <h2 id="settings-panel-title">${escapeHtml(t.pluginManagement)}</h2>
-            <p>${escapeHtml(t.pluginManagementDescription)}</p>
+    <div class="settings-layout">
+      <aside class="settings-sidebar">
+        <button class="settings-nav-item ${pluginsActive ? 'active' : ''}" type="button" data-settings-panel="plugins" ${
+          pluginsActive ? 'aria-current="page"' : ''
+        }>${escapeHtml(t.pluginManagement)}</button>
+        <button class="settings-nav-item ${notificationHistoryActive ? 'active' : ''}" type="button" data-settings-panel="notification-history" ${
+          notificationHistoryActive ? 'aria-current="page"' : ''
+        }>${escapeHtml(t.notificationHistory)}</button>
+      </aside>
+      <section class="settings-content">
+        <div id="settings-panel-plugins" class="settings-panel plugin-management-panel" ${pluginsActive ? '' : 'hidden'}>
+          <div class="settings-heading">
+            <div>
+              <h2 id="settings-panel-title">${escapeHtml(t.pluginManagement)}</h2>
+              <p>${escapeHtml(t.pluginManagementDescription)}</p>
+            </div>
+            <button id="plugin-import" type="button">${escapeHtml(t.importPlugin)}</button>
           </div>
-          <button id="plugin-import" type="button">${escapeHtml(t.importPlugin)}</button>
-        </div>
-        <div id="plugin-import-result" class="settings-result"></div>
-        <div id="plugin-management-list" class="plugin-management-list"></div>
-      </div>
-      <div id="settings-panel-notification-history" class="settings-panel settings-notification-history" ${
-        notificationHistoryActive ? '' : 'hidden'
-      }>
-        <div class="settings-heading">
-          <div>
-            <h2>${escapeHtml(t.notificationHistory)}</h2>
+          <div class="plugin-management-scroll">
+            <div id="plugin-import-result" class="settings-result"></div>
+            <div id="plugin-management-list" class="plugin-management-list"></div>
           </div>
-          <button id="settings-notification-history-refresh" type="button">${escapeHtml(t.refresh)}</button>
         </div>
-        <ol id="settings-notification-history" class="notification-history-list"></ol>
-      </div>
-    </section>
+        <div id="settings-panel-notification-history" class="settings-panel settings-notification-history" ${
+          notificationHistoryActive ? '' : 'hidden'
+        }>
+          <div class="settings-heading">
+            <div>
+              <h2>${escapeHtml(t.notificationHistory)}</h2>
+            </div>
+            <button id="settings-notification-history-refresh" type="button">${escapeHtml(t.refresh)}</button>
+          </div>
+          <ol id="settings-notification-history" class="notification-history-list"></ol>
+        </div>
+      </section>
+    </div>
   `
 }
 
@@ -82,7 +86,9 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
         <article class="plugin-card" data-plugin-id="${escapeHtml(plugin.id)}">
           <div class="plugin-card-main">
             <div>
-              <h3>${escapeHtml(plugin.display_name)}</h3>
+              <h3>${escapeHtml(plugin.display_name)} <span class="plugin-runtime-inline ${escapeHtml(
+                plugin.runtime_status
+              )}">${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</span></h3>
               <p>${escapeHtml(pluginSubtitle)}</p>
             </div>
             <label class="plugin-enable-toggle">
@@ -90,26 +96,28 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
               <input type="checkbox" data-plugin-toggle="${escapeHtml(plugin.id)}" ${plugin.enabled ? 'checked' : ''} ${busy ? 'disabled' : ''}>
             </label>
           </div>
-          ${renderPluginConfigForm(
-            plugin,
-            options.pluginConfigs[plugin.id] ?? {},
-            options.busyConfigPluginId === plugin.id,
-            options.configResultText,
-            t
-          )}
+          <div class="plugin-card-body">
+            ${renderPluginConfigForm(
+              plugin,
+              options.pluginConfigs[plugin.id] ?? {},
+              options.busyConfigPluginId === plugin.id,
+              options.configResultText,
+              t
+            )}
+            <dl class="plugin-meta">
+              <dt>${escapeHtml(t.pluginSource)}</dt>
+              <dd>${escapeHtml(translatePluginSource(options.language, plugin.source))}</dd>
+              <dt>${escapeHtml(t.pluginVersion)}</dt>
+              <dd>${escapeHtml(plugin.version)}</dd>
+              <dt>${escapeHtml(t.pluginRuntimeStatus)}</dt>
+              <dd>${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</dd>
+              <dt>${escapeHtml(t.pluginInstallPath)}</dt>
+              <dd>${escapeHtml(plugin.install_path || t.none)}</dd>
+              <dt>${escapeHtml(t.pluginLastError)}</dt>
+              <dd>${escapeHtml(plugin.last_error || t.none)}</dd>
+            </dl>
+          </div>
           ${plugin.source === 'external' ? renderPluginActions(plugin, busy, t.removePlugin) : ''}
-          <dl class="plugin-meta">
-            <dt>${escapeHtml(t.pluginSource)}</dt>
-            <dd>${escapeHtml(translatePluginSource(options.language, plugin.source))}</dd>
-            <dt>${escapeHtml(t.pluginVersion)}</dt>
-            <dd>${escapeHtml(plugin.version)}</dd>
-            <dt>${escapeHtml(t.pluginRuntimeStatus)}</dt>
-            <dd>${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</dd>
-            <dt>${escapeHtml(t.pluginInstallPath)}</dt>
-            <dd>${escapeHtml(plugin.install_path || t.none)}</dd>
-            <dt>${escapeHtml(t.pluginLastError)}</dt>
-            <dd>${escapeHtml(plugin.last_error || t.none)}</dd>
-          </dl>
         </article>
       `
     })

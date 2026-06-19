@@ -2,6 +2,10 @@ import { renderDashboardShell } from '../src/dashboardLayout'
 
 const html = renderDashboardShell()
 
+if (html.includes('class="app-window"') || html.includes('class="window-titlebar"')) {
+  throw new Error('主界面运行在真实 Tauri 窗口内，不应再渲染内嵌假窗口')
+}
+
 if (html.includes('id="status-tab"') || html.includes('id="notification-tab"')) {
   throw new Error('主界面不应继续渲染状态/通知页面切换')
 }
@@ -24,6 +28,10 @@ if (!html.includes('id="main-status-panel"')) {
 
 if (!html.includes('id="settings-open"')) {
   throw new Error('主界面应渲染设置入口按钮')
+}
+
+if (!html.includes('class="settings-gear-icon"') || !html.includes('viewBox="0 0 24 24"')) {
+  throw new Error('设置入口应渲染圆形齿轮 SVG 图标')
 }
 
 if (!html.includes('id="settings-view"')) {
@@ -67,4 +75,8 @@ if (
 
 if (html.includes('status-legend')) {
   throw new Error('主界面只显示当前状态，不应渲染其他状态图例')
+}
+
+if (html.includes('class="status-quick-row"') || html.includes('id="status-quick-running"')) {
+  throw new Error('主界面状态只能显示当前一个状态，不应渲染其他状态快捷条')
 }

@@ -96,6 +96,7 @@ let localSseConnected = false
 app.innerHTML = renderDashboardShell()
 
 const subtitleEl = document.querySelector<HTMLElement>('#subtitle')
+const dashboardHeaderEl = document.querySelector<HTMLElement>('#dashboard-header')
 const dashboardViewEl = document.querySelector<HTMLElement>('#dashboard-view')
 const settingsViewEl = document.querySelector<HTMLElement>('#settings-view')
 const settingsShellEl = document.querySelector<HTMLElement>('#settings-shell')
@@ -200,6 +201,9 @@ function renderDashboard() {
 }
 
 function renderActiveView() {
+  if (dashboardHeaderEl) {
+    dashboardHeaderEl.hidden = activeView !== 'dashboard'
+  }
   if (dashboardViewEl) {
     dashboardViewEl.hidden = activeView !== 'dashboard'
   }
@@ -221,7 +225,8 @@ function showSettingsView() {
     pluginImportResultText = error instanceof Error ? error.message : String(error)
     renderPluginSettings()
   })
-  if (activeSettingsPanel === 'notification-history') {
+  // 通知历史只属于通知历史侧边栏面板，避免在插件管理页触发无关刷新。
+  if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
     void refreshNotificationRecords()
   }
 }
@@ -415,7 +420,8 @@ function applyLanguage() {
   const t = translations[currentLanguage]
   document.documentElement.lang = currentLanguage
   subtitleEl!.textContent = t.appSubtitle
-  settingsOpenButton!.textContent = t.settingsButton
+  settingsOpenButton!.setAttribute('aria-label', t.settingsButton)
+  settingsOpenButton!.title = t.settingsButton
   settingsBackButton!.textContent = t.backToDashboard
   if (languageLabelEl) {
     languageLabelEl.textContent = t.language

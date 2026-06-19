@@ -107,13 +107,12 @@ function renderNotificationPluginItem(
   return `
     <article class="notification-plugin-item" data-notification-plugin-id="${escapeHtml(plugin.id)}">
       <div class="notification-plugin-copy">
-        <strong>${escapeHtml(plugin.display_name)}</strong>
+        <strong>${escapeHtml(plugin.display_name)} <span class="notification-plugin-runtime ${escapeHtml(
+          plugin.runtime_status
+        )}">${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</span></strong>
         <span>${escapeHtml(plugin.id)}</span>
       </div>
       <div class="notification-plugin-state">
-        <span class="notification-plugin-runtime ${escapeHtml(plugin.runtime_status)}">${escapeHtml(
-          translateRuntimeStatus(options.language, plugin.runtime_status)
-        )}</span>
         <label class="notification-enable">
           <span>${escapeHtml(enabledText)}</span>
           <input type="checkbox" data-notification-plugin-toggle="${escapeHtml(plugin.id)}" ${
@@ -162,28 +161,24 @@ function renderNotificationHistory(options: NotificationHistoryRenderOptions) {
   }
   element.innerHTML = options.records
     .map((record) => {
-      const error = record.error_message ? `<p>${escapeHtml(record.error_message)}</p>` : ''
-      const titleRows = record.title
-        ? `
-            <dt>${escapeHtml(t.notificationTitle)}</dt>
-            <dd>${escapeHtml(record.title)}</dd>
-          `
-        : ''
-      const body = record.body
-        ? `<div class="notification-record-body">${escapeHtml(record.body)}</div>`
-        : ''
+      const title = record.title || translateEventType(options.language, record.event_type)
+      const body = record.body || record.error_message || ''
+      const detailClass = record.error_message
+        ? 'notification-record-detail error'
+        : 'notification-record-detail'
       return `
-        <li>
-          <div class="notification-record-row">
-            <strong>${escapeHtml(translateEventType(options.language, record.event_type))}</strong>
+        <li class="notification-record-card">
+          <div class="notification-record-header">
+            <strong>${escapeHtml(title)}</strong>
             <span class="notification-record-status ${escapeHtml(record.status)}">${escapeHtml(
               translateNotificationStatus(options.language, record.status)
             )}</span>
+            <span class="notification-record-channel">${escapeHtml(record.channel)}</span>
+            <span class="notification-record-title">${escapeHtml(
+              translateEventType(options.language, record.event_type)
+            )}</span>
           </div>
-          <dl>
-            <dt>${escapeHtml(t.notificationChannel)}</dt>
-            <dd>${escapeHtml(record.channel)}</dd>
-            ${titleRows}
+          <dl class="notification-record-meta">
             <dt>${escapeHtml(t.notificationReason)}</dt>
             <dd>${escapeHtml(translateNotificationReason(options.language, record.reason))}</dd>
             <dt>${escapeHtml(t.notificationCreatedAt)}</dt>
@@ -191,8 +186,11 @@ function renderNotificationHistory(options: NotificationHistoryRenderOptions) {
             <dt>${escapeHtml(t.notificationSentAt)}</dt>
             <dd>${escapeHtml(record.sent_at ? formatLocalTime(record.sent_at, options.language) : t.none)}</dd>
           </dl>
-          ${body ? `<h4>${escapeHtml(t.notificationContent)}</h4>${body}` : ''}
-          ${error ? `<h4>${escapeHtml(t.notificationError)}</h4>${error}` : ''}
+          ${
+            body
+              ? `<div class="${detailClass}">${escapeHtml(body)}</div>`
+              : `<div class="notification-record-detail empty">${escapeHtml(t.none)}</div>`
+          }
         </li>
       `
     })
