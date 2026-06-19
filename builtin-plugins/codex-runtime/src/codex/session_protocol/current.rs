@@ -197,11 +197,19 @@ impl CodexJsonlParser {
 
         let timestamp = parse_timestamp(row.timestamp.as_deref()).unwrap_or_else(Utc::now);
         let activity_key = event_key_fragment(&row, kind);
-        let dedupe_key = format!("codex_file:{session_id}:{activity_key}:{kind}");
-        // 事件 ID 从去重键派生，避免同一毫秒内多行事件生成相同 ID。
-        let event_id = format!("event_codex_file_{}", stable_hash(&dedupe_key));
         let summary_text =
             summary.unwrap_or_else(|| summary_for_event_type(&event_type).to_string());
+        let dedupe_key = if event_type == EventType::AssistantMessageCompleted {
+            // Codex hook 与文件监听会同时看到同一轮完成事件；完成事件用同一去重键避免双路上报。
+            format!(
+                "codex:{session_id}:{activity_key}:assistant_message_completed:{}",
+                stable_hash(&summary_text)
+            )
+        } else {
+            format!("codex_file:{session_id}:{activity_key}:{kind}")
+        };
+        // 事件 ID 从去重键派生，避免同一毫秒内多行事件生成相同 ID。
+        let event_id = format!("event_codex_file_{}", stable_hash(&dedupe_key));
         let content = match &event_type {
             EventType::AssistantMessageCompleted => Some(
                 content_override

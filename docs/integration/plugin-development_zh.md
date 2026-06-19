@@ -1,13 +1,21 @@
 # 插件开发说明
 
-本文档描述 NiumaNotifier 外部工具插件 v1 的接入方式。插件用于监听 Codex、Claude Code、Cursor 等工具的原始运行状态，并把它们转换成统一的 `NiumaEvent` 上报给 NiumaNotifier。
+本文档描述 NiumaNotifier 插件 v1 的接入方式。当前插件是由 `plugin.json` 描述、由 NiumaNotifier 启停的本机受信可执行程序；插件通过 Local API 与主程序通信。
+
+当前支持两类插件：
+
+| 类型 | `kind` | 主要能力 | 说明 |
+| --- | --- | --- | --- |
+| 工具监听插件 | `tool` | `event_watcher` | 监听 Codex、Claude Code、Cursor 等工具的原始状态，并转换为统一的 `NiumaEvent` 上报。 |
+| 通知插件 | `notification` | `event_consumer`、`notification_test` | 消费主程序事件流，自行决定是否发送 Bark、ntfy 等外部通知，并把通知结果回写主程序。 |
 
 ## 插件边界
 
 - 插件是本机受信可执行程序，由用户安装并由 NiumaNotifier 启停。
 - NiumaNotifier 不在 v1 中提供强沙箱、签名校验或插件市场。
-- 插件不得直接写 SQLite 状态库；所有状态事件必须通过 Local API 上报。
-- 外部状态指示器不需要理解插件协议，只消费 `/api/v1/stream` SSE 主状态流。
+- 插件不得直接写 SQLite 状态库；所有状态事件和通知结果必须通过 Local API 上报。
+- 外部状态指示器不需要理解插件协议，只消费 `/api/v1/state/stream` SSE 主状态流。
+- Local API 默认只面向本机可信调用方，不内置鉴权；如果显式绑定到非 loopback 地址，应由外层网络策略保护。
 
 ## 插件包结构
 
@@ -22,7 +30,7 @@ niuma-plugin-example/
     icon.png
 ```
 
-仓库内提供了一个最小样例：
+仓库内提供了一个最小工具插件样例：
 
 ```text
 examples/plugins/niuma-plugin-demo/
@@ -43,11 +51,16 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 ~/Library/Application Support/NiumaNotifier/plugins/<plugin-id>/plugin.json
 ```
 
-第一版 manifest：
+外部插件不能覆盖内置插件 ID，例如 `builtin-codex`、`builtin-bark`、`builtin-ntfy`。
+
+## Manifest
+
+工具监听插件示例：
 
 ```json
 {
   "id": "niuma-plugin-codex",
+  "kind": "tool",
   "tool_id": "codex",
   "display_name": "Codex",
   "version": "0.1.0",
@@ -60,43 +73,144 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 }
 ```
 
+通知插件示例：
+
+```json
+{
+  "id": "niuma-plugin-webhook",
+  "kind": "notification",
+  "display_name": "Webhook",
+  "version": "0.1.0",
+  "command": "./bin/niuma-plugin-webhook",
+  "args": [],
+  "env": {},
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_consumer", "notification_test"],
+  "config_schema": [
+    {
+      "key": "url",
+      "type": "url",
+      "label": "Webhook URL",
+      "required": true
+    },
+    {
+      "key": "token",
+      "type": "secret",
+      "label": "Token",
+      "required": false
+    }
+  ]
+}
+```
+
 字段说明：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `id` | 是 | 插件唯一 ID。 |
-| `tool_id` | 是 | 工具 ID，例如 `codex`、`claude_code`、`cursor`。 |
+| `id` | 是 | 插件唯一 ID。外部插件 ID 不能与内置插件重复。 |
+| `kind` | 否 | 插件类型。缺省为 `tool`。当前支持 `tool` 和 `notification`。 |
+| `tool_id` | 工具插件必填 | 工具 ID，例如 `codex`、`claude_code`、`cursor`、`demo_tool`。 |
 | `display_name` | 是 | UI 展示名称。 |
 | `version` | 是 | 插件版本。 |
-| `command` | 外部插件必填 | 插件启动命令；相对路径按 `plugin.json` 所在目录解析。 |
-| `args` | 否 | 启动参数。 |
-| `env` | 否 | 额外环境变量。 |
+| `command` | 外部插件必填 | 插件启动命令。带路径的相对命令按 `plugin.json` 所在目录解析；裸命令按系统 `PATH` 查找。 |
+| `args` | 否 | 启动参数。相对路径参数不会自动改写，但插件进程工作目录会设为 `plugin.json` 所在目录。 |
+| `env` | 否 | 额外环境变量，会注入到插件进程。 |
 | `platforms` | 否 | 支持平台，当前使用 `macos`、`windows`、`linux`。空数组表示不限平台。 |
-| `capabilities` | 否 | 当前支持 `event_watcher`。 |
-| `icon_url` | 否 | 工具图标地址或相对资源路径。 |
+| `capabilities` | 否 | 当前支持 `event_watcher`、`event_consumer`、`notification_test`。 |
+| `icon_url` | 否 | 图标地址或相对资源路径。 |
+| `config_schema` | 否 | 插件配置字段定义，供 UI 和配置接口使用。 |
+
+约束：
+
+- `tool` 插件必须提供 `tool_id`。
+- 非 `tool` 插件不能声明 `event_watcher`。
+- `event_watcher` 插件由工具监听开关控制启停。
+- 无 `tool_id` 的插件由通用插件启用状态控制启停。
+- 声明 `event_watcher` 或 `event_consumer` 的插件会被运行管理器作为常驻子进程管理。
+
+## 配置 Schema
+
+`config_schema` 支持以下字段类型：
+
+| 类型 | JSON 值类型 | 说明 |
+| --- | --- | --- |
+| `string` | string | 普通文本。 |
+| `secret` | string | 密钥、token、device key 等敏感文本。 |
+| `url` | string | URL 文本。 |
+| `number` | number | 数字。 |
+| `boolean` | boolean | 开关。 |
+| `select` | string | 枚举值；可通过 `options` 限制允许值。 |
+
+配置字段结构：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `key` | 是 | 配置键。不能为空，同一插件内不能重复。 |
+| `type` | 是 | 配置类型。 |
+| `label` | 是 | UI 展示名称。不能为空。 |
+| `required` | 否 | 是否必填。 |
+| `default` | 否 | 默认值。 |
+| `options` | 否 | `select` 可选值列表。 |
+
+配置保存时会按 `config_schema` 做基础类型校验和必填校验。未知配置键当前不会被拒绝，但插件不应依赖未声明字段。
 
 ## 启动环境变量
 
-NiumaNotifier 启动外部插件时会注入：
+NiumaNotifier 启动插件时会注入：
 
 | 变量 | 说明 |
 | --- | --- |
 | `NIUMA_LOCAL_API_URL` | Local API 地址，例如 `http://127.0.0.1:27874`。 |
 | `NIUMA_PLUGIN_ID` | 当前插件 ID。 |
-| `NIUMA_TOOL_ID` | 当前插件对应的工具 ID。 |
+| `NIUMA_TOOL_ID` | 当前插件对应的工具 ID；仅 `tool` 插件有该变量。 |
+| `NIUMA_PLUGIN_CONFIG_PATH` | 插件配置文件路径。当前内置 Bark/ntfy 通知插件会由主程序写入该文件；外部插件应优先通过配置 API 获取配置。 |
+| `NIUMA_PLUGIN_DATA_DIR` | 插件数据目录，插件可用于保存本地去重等运行时状态。 |
 | `NIUMA_PARENT_PID` | 主 App 进程 PID。插件可定时检测该进程是否仍存在；如果不存在，应主动退出，避免主 App 闪退后遗留插件进程。 |
 | `NIUMA_STATE_PATH` | 当前实例使用的 SQLite 状态文件路径，仅用于诊断，不应直接写入。 |
 
 建议外部插件把 `NIUMA_PARENT_PID` 作为自清理信号使用。该变量缺失或格式错误时，插件应保持兼容并继续运行；只有确认父进程不存在时才主动退出。
 
-## 事件上报
+## Local API 约定
 
-插件通过 Local API 上报事件：
+除 SSE 流外，插件相关 JSON 接口都使用统一响应结构：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+约定：
+
+- `code = 0` 表示成功。
+- `code != 0` 表示失败。
+- 业务校验失败通常返回 `HTTP 200 + 非 0 code`。
+- JSON 解析失败等协议层错误返回 `HTTP 400 + 非 0 code`。
+- 系统错误返回 `HTTP 500 + 非 0 code`。
+- SSE 流是协议例外，不使用 JSON envelope。
+
+常见错误码：
+
+| `code` | 含义 |
+| --- | --- |
+| `0` | 成功。 |
+| `100004` | 请求体无法解析或参数格式错误。 |
+| `100101` | 业务校验失败，例如未知插件、插件类型不匹配、配置校验失败。 |
+| `900001` | 系统错误。 |
+| `900005` | 路由不存在。 |
+
+## 工具事件上报
+
+`event_watcher` 工具插件通过 Local API 上报事件：
 
 ```http
 POST /api/v1/plugin-events
 Content-Type: application/json
 ```
+
+请求体：
 
 ```json
 {
@@ -114,6 +228,10 @@ Content-Type: application/json
       "severity": "urgent",
       "summary": "Bash: cargo test",
       "content": "Bash: cargo test",
+      "error_message": null,
+      "attention_resolve_key": null,
+      "completion_reason": null,
+      "failure_reason": null,
       "payload_ref": null,
       "created_at": "2026-06-18T12:00:00Z"
     }
@@ -121,22 +239,395 @@ Content-Type: application/json
 }
 ```
 
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "plugin_id": "niuma-plugin-codex",
+    "event_count": 1,
+    "applied_count": 1,
+    "session_count": 1
+  }
+}
+```
+
 约束：
 
 - `plugin_id` 必须匹配已发现插件。
+- 插件必须有关联 `tool_id`，否则不能调用该接口上报工具事件。
 - `event.tool` 必须等于插件 manifest 中的 `tool_id`。
 - `dedupe_key` 必须稳定，重复扫描同一原始事件时应保持一致。
 - 成功上报后，NiumaNotifier 会通过 `StateMutationService` 写入状态并触发 SSE 更新。
 
+## NiumaEvent 字段
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `id` | 是 | 事件唯一 ID。建议包含工具、session 和原始事件标识。 |
+| `dedupe_key` | 是 | 去重键。重复扫描同一原始事件时必须保持稳定。 |
+| `source` | 是 | 来源，建议使用 `plugin:<plugin-id>`。 |
+| `tool` | 是 | 工具 ID，必须匹配插件 `tool_id`。 |
+| `session_id` | 是 | 工具侧会话 ID。 |
+| `project_path` | 是 | 项目路径。未知时可传空字符串。 |
+| `project_name` | 是 | 项目名。未知时可传工具侧可读名称。 |
+| `event_type` | 是 | 事件类型，见下表。 |
+| `severity` | 是 | 展示严重级别，常用 `info`、`urgent`、`error`。 |
+| `summary` | 是 | 短摘要。 |
+| `content` | 否 | 可展示正文或命令内容。 |
+| `error_message` | 否 | 错误详情，失败态优先展示。 |
+| `attention_resolve_key` | 否 | 用于精确清理等待授权/输入等关注项。 |
+| `completion_reason` | 否 | 完成原因。 |
+| `failure_reason` | 否 | 失败原因。 |
+| `payload_ref` | 否 | 大 payload 引用。当前主程序只保存引用，不读取内容。 |
+| `created_at` | 是 | 事件发生时间，RFC 3339 / ISO 8601 格式。 |
+
+`event_type` 支持：
+
+| 值 | 状态语义 |
+| --- | --- |
+| `session_started` | 会话开始，状态为 `running`。 |
+| `session_idled` | 会话空闲，状态为 `idle`。 |
+| `approval_requested` | 等待授权，状态为 `waiting_approval`。 |
+| `input_requested` | 等待输入，状态为 `waiting_input`。 |
+| `task_failed` | 任务失败，状态为 `error`。 |
+| `assistant_message_completed` | 助手回复完成，状态为 `completed`。 |
+| `manual_dismissed` | 手动忽略，状态为 `completed` 并清理关注项。 |
+| `session_staled` | 会话过期，内部清理态。 |
+| `session_activity` | 普通活动，状态为 `running`。 |
+
+`completion_reason` 支持：
+
+```text
+normal
+interrupted
+rolled_back
+aborted_unknown
+```
+
+`failure_reason` 支持：
+
+```text
+timeout
+context_window_exceeded
+usage_limit_reached
+server_overloaded
+policy_blocked
+response_stream_failed
+connection_failed
+quota_exceeded
+internal_server_error
+retry_limit
+sandbox_error
+fatal
+unknown
+```
+
+## 通知插件事件消费
+
+`event_consumer` 通知插件应订阅实时事件流：
+
+```http
+GET /api/v1/events/stream
+Accept: text/event-stream
+```
+
+普通事件格式：
+
+```text
+event: event
+id: event-1
+data: {"id":"event-1","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-18T12:00:00Z"}
+```
+
+测试通知事件格式：
+
+```text
+event: notification_test
+id: manual-test:builtin-ntfy:1
+data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title":"测试通知","body":"这是一条测试通知","created_at":"2026-06-18T12:00:00Z"}
+```
+
+消费约束：
+
+- `/api/v1/events/stream` 只广播成功写入的新事件，不补发历史事件。
+- 重复上报但被去重的事件不会进入该流。
+- 插件应自行判断哪些事件需要发送通知。
+- 插件应在 `NIUMA_PLUGIN_DATA_DIR` 中保存本地去重状态，避免重连后重复发送。
+- SSE keep-alive 注释行应忽略。
+
+## 通知结果回写
+
+通知插件发送真实事件通知后，应回写发送结果：
+
+```http
+POST /api/v1/plugins/notification-results
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "plugin_id": "niuma-plugin-webhook",
+  "event_id": "event-1",
+  "status": "sent",
+  "title": "需要授权",
+  "body": "项目：repo\n工具：Codex\n事件：需要授权\n内容：Bash: cargo test",
+  "reason": "approval_requested",
+  "error_message": null,
+  "sent_at": "2026-06-18T12:00:03Z"
+}
+```
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "saved": true,
+    "record_id": "plugin_notification:niuma-plugin-webhook:event-1"
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `plugin_id` | 是 | 通知插件 ID。插件必须是 `kind = notification`。 |
+| `event_id` | 是 | 被通知的 `NiumaEvent.id`。 |
+| `status` | 是 | 当前只支持 `sent` 和 `failed`。 |
+| `title` | 否 | 实际发送标题。 |
+| `body` | 否 | 实际发送正文。 |
+| `reason` | 否 | 发送原因，例如 `approval_requested`。 |
+| `error_message` | 否 | 发送失败原因。 |
+| `sent_at` | 否 | 发送成功时间。`status = sent` 且未传时，主程序使用当前时间。 |
+
+约束：
+
+- `event_id` 必须对应已存在事件。
+- 非通知插件调用会返回业务校验失败。
+- `status = failed` 时不会保存 `sent_at`。
+
+## 测试通知结果回写
+
+通知插件收到 `notification_test` SSE 事件并处理后，应回写测试结果：
+
+```http
+POST /api/v1/plugins/notification-test-results
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "plugin_id": "niuma-plugin-webhook",
+  "test_id": "manual-test:niuma-plugin-webhook:1",
+  "status": "sent",
+  "title": "测试通知",
+  "body": "这是一条测试通知",
+  "error_message": null,
+  "sent_at": "2026-06-18T12:00:03Z"
+}
+```
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "saved": true,
+    "record_id": "plugin_notification_test:niuma-plugin-webhook:manual-test:niuma-plugin-webhook:1"
+  }
+}
+```
+
+## 插件管理 API
+
+插件管理 API 主要供主界面使用，也可用于本地调试。
+
+### 查询插件列表
+
+```http
+GET /api/v1/plugins
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "id": "builtin-codex",
+        "kind": "tool",
+        "tool_id": "codex",
+        "display_name": "Codex",
+        "version": "0.1.0",
+        "source": "builtin",
+        "enabled": true,
+        "runtime_status": "running",
+        "last_error": null,
+        "icon_url": null,
+        "capabilities": ["event_watcher"],
+        "config_schema": [],
+        "install_path": null
+      }
+    ]
+  }
+}
+```
+
+`runtime_status` 支持：
+
+```text
+starting
+stopped
+stopping
+running
+failed
+```
+
+### 导入外部插件
+
+```http
+POST /api/v1/plugins/import
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "source_dir": "/path/to/niuma-plugin-example"
+}
+```
+
+主程序会复制整个目录到用户插件目录，目标目录名为 manifest 中的 `id`。
+
+### 移除外部插件
+
+```http
+POST /api/v1/plugins/remove
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "plugin_id": "niuma-plugin-example"
+}
+```
+
+内置插件不能移除。
+
+### 启用或停用插件
+
+```http
+POST /api/v1/plugins/enabled
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "plugin_id": "niuma-plugin-example",
+  "enabled": true
+}
+```
+
+说明：
+
+- `tool` 插件会写入工具监听配置。
+- 无 `tool_id` 的插件会写入通用插件启用状态。
+- 启用状态变化会唤醒插件运行管理器。
+
+### 读取插件配置
+
+```http
+GET /api/v1/plugins/config?plugin_id=niuma-plugin-example
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "plugin_id": "niuma-plugin-example",
+    "config": {
+      "url": "https://example.com/webhook"
+    },
+    "config_schema": [
+      {
+        "key": "url",
+        "type": "url",
+        "label": "Webhook URL",
+        "required": true,
+        "default": null,
+        "options": []
+      }
+    ]
+  }
+}
+```
+
+### 保存插件配置
+
+```http
+POST /api/v1/plugins/config
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "plugin_id": "niuma-plugin-example",
+  "config": {
+    "url": "https://example.com/webhook",
+    "token": "secret-token"
+  }
+}
+```
+
+配置保存成功后会唤醒插件运行管理器。插件应在收到配置变化后自行重连或由主程序重启进程完成配置刷新。
+
 ## SSE 展示边界
 
-插件只负责生成 `NiumaEvent`。状态优先级、完成态保留时间、阻塞项清理和 SSE 推送由主程序统一处理。
+插件只负责生成或消费 `NiumaEvent`。状态优先级、完成态保留时间、阻塞项清理和主状态 SSE 推送由主程序统一处理。
 
 外部状态指示器应只依赖：
 
 ```text
-GET /api/v1/stream
+GET /api/v1/state/stream
 GET /api/v1/main-state
 ```
 
 不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。
+
+## 开发检查清单
+
+- `plugin.json` 能被 JSON 解析，且 `id` 不与内置插件重复。
+- `platforms` 包含当前平台，或留空表示不限平台。
+- `command` 在插件安装目录下可执行，或裸命令能被系统 `PATH` 找到。
+- 工具插件声明 `kind = tool`、`tool_id` 和 `event_watcher`。
+- 通知插件声明 `kind = notification`、`event_consumer`，需要测试通知时同时声明 `notification_test`。
+- 工具插件上报事件时，`event.tool` 与 manifest `tool_id` 完全一致。
+- `dedupe_key` 稳定，重复扫描不会制造重复状态。
+- 插件退出时能响应 `SIGTERM` 或等效终止信号。
+- 插件使用 `NIUMA_PARENT_PID` 做父进程退出自清理。
+- 通知插件把发送去重状态保存到 `NIUMA_PLUGIN_DATA_DIR`。

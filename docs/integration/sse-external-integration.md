@@ -33,7 +33,8 @@ You can override the bind address with `NIUMA_LOCAL_API_ADDR`. LAN or external a
 
 | Purpose | Method | Path | Response type | Stability |
 | --- | --- | --- | --- | --- |
-| Real-time main-state SSE | `GET` | `/api/v1/stream` | `text/event-stream` | Stable |
+| Real-time main-state SSE | `GET` | `/api/v1/state/stream` | `text/event-stream` | Stable |
+| Real-time event SSE | `GET` | `/api/v1/events/stream` | `text/event-stream` | Experimental |
 | Query current main state | `GET` | `/api/v1/main-state` | JSON envelope | Stable |
 | Reset local state | `POST` | `/api/v1/state/reset` | JSON envelope | Stable |
 
@@ -62,7 +63,7 @@ Common error codes:
 Request:
 
 ```http
-GET /api/v1/stream
+GET /api/v1/state/stream
 Accept: text/event-stream
 ```
 
@@ -82,6 +83,28 @@ Notes:
 - `id` is the same value as `data.version`; it represents the display version.
 - `id` is not a resumable consumption offset. After reconnecting, accept the first event as a fresh snapshot, or call `/api/v1/main-state` for synchronization.
 - The server may send SSE keep-alive comment lines. Clients should ignore non-`state` events.
+
+## Event SSE Stream
+
+Request:
+
+```http
+GET /api/v1/events/stream
+Accept: text/event-stream
+```
+
+The event stream is intended for event consumer plugins. The server broadcasts only new `NiumaEvent`
+items that were successfully stored and applied to the state machine. It does not replay historical
+events and does not broadcast duplicate submissions that were deduplicated. Notification plugins decide
+for themselves whether an event should trigger a push notification.
+
+Event format:
+
+```text
+event: event
+id: event-1
+data: {"id":"event-1","tool":"codex","session_id":"s1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-19T12:00:00Z"}
+```
 
 ## Main-State Fields
 
@@ -185,7 +208,7 @@ Response:
 Notes:
 
 - This endpoint is useful for initial synchronization, reconnect fallback, and debugging.
-- Real-time integrations should primarily use `/api/v1/stream`.
+- Real-time integrations should primarily use `/api/v1/state/stream`.
 - The `version` in regular queries may be `0`; the SSE `version` is the display version.
 
 ## Reset State Endpoint
@@ -257,7 +280,7 @@ Important notes:
 
 ```ts
 const apiUrl = 'http://127.0.0.1:27874'
-const stream = new EventSource(`${apiUrl}/api/v1/stream`)
+const stream = new EventSource(`${apiUrl}/api/v1/state/stream`)
 
 stream.addEventListener('state', (event) => {
   // SSE data is a bare MainStatePayload, not a JSON envelope.
@@ -278,7 +301,7 @@ Node.js environments can use an EventSource-compatible library. After reconnecti
 Listen to SSE:
 
 ```bash
-curl -N http://127.0.0.1:27874/api/v1/stream
+curl -N http://127.0.0.1:27874/api/v1/state/stream
 ```
 
 Query current state:
@@ -299,7 +322,7 @@ curl -s -X POST http://127.0.0.1:27874/api/v1/state/reset \
 
 | Symptom | Recommendation |
 | --- | --- |
-| Cannot connect to `/api/v1/stream` | Confirm that the NiumaNotifier Local API is running and check `NIUMA_LOCAL_API_ADDR`. |
+| Cannot connect to `/api/v1/state/stream` | Confirm that the NiumaNotifier Local API is running and check `NIUMA_LOCAL_API_ADDR`. |
 | State is always `idle` | Confirm that AI listening is enabled and check the target instance's `NIUMA_STATE_PATH`. |
 | `completed` disappears quickly | This is expected. Completed state is retained for 1 minute by default. |
 | State becomes running or waiting again after reset | The underlying tool is still writing new events; return to that tool and handle it there. |

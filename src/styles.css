@@ -42,7 +42,9 @@ button:disabled {
 }
 
 select,
-.notification-channel input[type='text'] {
+.notification-channel input[type='text'],
+.plugin-config-field input,
+.plugin-config-field select {
   background: #ffffff;
   border: 1px solid #d8dde7;
   border-radius: 7px;
@@ -182,6 +184,10 @@ select {
   padding: 24px;
 }
 
+.settings-panel[hidden] {
+  display: none;
+}
+
 .settings-heading {
   align-items: start;
   border-bottom: 1px solid #e3e8f1;
@@ -262,6 +268,72 @@ select {
 .plugin-card-actions button:hover:not(:disabled) {
   background: #fff5f5;
   border-color: #e57a7a;
+}
+
+.plugin-config-form {
+  border-top: 1px solid #e3e8f1;
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.plugin-config-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.plugin-config-heading h4 {
+  color: #17213a;
+  font-size: 15px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.plugin-config-heading button {
+  font-size: 13px;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.plugin-config-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.plugin-config-field {
+  align-items: center;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 128px minmax(0, 1fr);
+}
+
+.plugin-config-field span,
+.plugin-config-result {
+  color: #344563;
+  font-size: 13px;
+}
+
+.plugin-config-field input,
+.plugin-config-field select {
+  font-size: 14px;
+  width: 100%;
+}
+
+.plugin-config-field.boolean {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.plugin-config-field.boolean input {
+  height: 18px;
+  width: 18px;
+}
+
+.plugin-config-result {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .plugin-enable-toggle {
@@ -629,7 +701,87 @@ select {
 
 .notification-form {
   display: grid;
-  gap: 0;
+  gap: 12px;
+}
+
+.notification-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.notification-actions button {
+  font-size: 13px;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.notification-plugin-list {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-plugin-item {
+  align-items: center;
+  border: 1px solid #dfe4ee;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px 14px;
+}
+
+.notification-plugin-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notification-plugin-copy strong {
+  color: #17213a;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.notification-plugin-copy span {
+  color: #667085;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.notification-plugin-state {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.notification-plugin-runtime {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.notification-plugin-runtime.running {
+  background: #eaf8f1;
+  color: #0f7a4b;
+}
+
+.notification-plugin-runtime.failed {
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.notification-plugin-runtime.starting,
+.notification-plugin-runtime.stopping {
+  background: #fff7e6;
+  color: #9a5b00;
+}
+
+.notification-plugin-runtime.stopped {
+  background: #eef4ff;
+  color: #344563;
 }
 
 .notification-channel {
@@ -751,6 +903,94 @@ select {
 .notification-result {
   font-size: 13px;
   margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-history-list {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+}
+
+.notification-history-list > li {
+  border: 1px solid #dfe4ee;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.notification-history-list > li.empty {
+  color: #667085;
+}
+
+.notification-record-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.notification-record-row strong {
+  color: #17213a;
+  font-size: 15px;
+}
+
+.notification-record-status {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 3px 8px;
+}
+
+.notification-record-status.sent {
+  background: #eaf8f1;
+  color: #0f7a4b;
+}
+
+.notification-record-status.failed {
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.notification-record-status.pending,
+.notification-record-status.skipped {
+  background: #eef4ff;
+  color: #0b5cff;
+}
+
+.notification-history-list dl {
+  display: grid;
+  gap: 8px 14px;
+  grid-template-columns: 88px minmax(0, 1fr);
+  margin: 0;
+}
+
+.notification-history-list dt {
+  color: #667085;
+  font-size: 13px;
+}
+
+.notification-history-list dd {
+  color: #263755;
+  font-size: 13px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-history-list h4 {
+  color: #344563;
+  font-size: 13px;
+  margin: 0;
+}
+
+.notification-history-list p,
+.notification-record-body {
+  color: #263755;
+  font-size: 13px;
+  margin: 0;
   overflow-wrap: anywhere;
 }
 

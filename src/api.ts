@@ -66,18 +66,6 @@ export type RecentEvents = {
   warning?: string
 }
 
-export type NotificationChannel = 'bark' | 'ntfy'
-
-export type NotificationChannelConfig = {
-  channel: NotificationChannel
-  enabled: boolean
-  payload: Record<string, unknown>
-}
-
-export type NotificationConfigPayload = {
-  channels: NotificationChannelConfig[]
-}
-
 export type ListenerConfigPayload = {
   codex_listening_enabled: boolean
   tool_listening_enabled?: Record<string, boolean>
@@ -95,16 +83,30 @@ export type ListenerToolConfig = {
 
 export type PluginRuntimeStatus = 'starting' | 'stopped' | 'stopping' | 'running' | 'failed'
 
+export type PluginConfigFieldType = 'string' | 'secret' | 'url' | 'number' | 'boolean' | 'select'
+
+export type PluginConfigField = {
+  key: string
+  type: PluginConfigFieldType
+  label: string
+  required?: boolean
+  default?: unknown
+  options?: string[]
+}
+
 export type PluginManagementItem = {
   id: string
-  tool_id: string
+  kind?: 'tool' | 'notification'
+  tool_id: string | null
   display_name: string
   version: string
   source: string
+  capabilities: string[]
   enabled: boolean
   runtime_status: PluginRuntimeStatus
   last_error: string | null
   icon_url: string | null
+  config_schema: PluginConfigField[]
   install_path: string | null
 }
 
@@ -125,9 +127,28 @@ export type PluginRemoveResult = {
   plugins: PluginManagementItem[]
 }
 
+export type PluginEnabledResult = {
+  saved: boolean
+  plugin_id: string
+  enabled: boolean
+  plugins: PluginManagementItem[]
+}
+
+export type PluginConfigPayload = {
+  plugin_id: string
+  config: Record<string, unknown>
+  config_schema: PluginConfigField[]
+}
+
+export type PluginConfigSaveResult = PluginConfigPayload & {
+  saved: boolean
+}
+
 export type TestNotificationResult = {
   sent: boolean
-  channel: string
+  plugin_id: string
+  test_id: string
+  record_id: string
 }
 
 export type NotificationRecordStatus = 'pending' | 'sent' | 'failed' | 'skipped'
@@ -136,7 +157,8 @@ export type NotificationRecord = {
   id: string
   event_id: string
   event_type: string
-  channel: NotificationChannel
+  channel: string
+  plugin_id?: string | null
   status: NotificationRecordStatus
   title: string | null
   body: string | null
@@ -223,36 +245,6 @@ export async function dismissActiveBlocker() {
   }
 }
 
-export async function getNotificationConfig() {
-  try {
-    return await requestLocalApi<NotificationConfigPayload>('/api/v1/notification-config')
-  } catch {
-    const response = await invoke<ApiResponse<NotificationConfigPayload>>('get_notification_config')
-    if (response.code !== 0) {
-      throw new Error(response.message)
-    }
-    return response.data
-  }
-}
-
-export async function saveNotificationConfig(channels: NotificationChannelConfig[]) {
-  try {
-    return await requestLocalApi<{ saved: boolean }>('/api/v1/notification-config/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channels })
-    })
-  } catch {
-    const response = await invoke<ApiResponse<{ saved: boolean }>>('save_notification_config', {
-      channels
-    })
-    if (response.code !== 0) {
-      throw new Error(response.message)
-    }
-    return response.data
-  }
-}
-
 export async function getListenerConfig() {
   try {
     const response = await invoke<ApiResponse<ListenerConfigPayload>>('get_listener_config')
@@ -335,6 +327,60 @@ export async function removePlugin(pluginId: string) {
   }
 }
 
+export async function setPluginEnabled(pluginId: string, enabled: boolean) {
+  try {
+    return await requestLocalApi<PluginEnabledResult>('/api/v1/plugins/enabled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plugin_id: pluginId, enabled })
+    })
+  } catch {
+    const response = await invoke<ApiResponse<PluginEnabledResult>>('set_plugin_enabled', {
+      pluginId,
+      enabled
+    })
+    if (response.code !== 0) {
+      throw new Error(response.message)
+    }
+    return response.data
+  }
+}
+
+export async function getPluginConfig(pluginId: string) {
+  try {
+    return await requestLocalApi<PluginConfigPayload>(
+      `/api/v1/plugins/config?plugin_id=${encodeURIComponent(pluginId)}`
+    )
+  } catch {
+    const response = await invoke<ApiResponse<PluginConfigPayload>>('get_plugin_config', {
+      pluginId
+    })
+    if (response.code !== 0) {
+      throw new Error(response.message)
+    }
+    return response.data
+  }
+}
+
+export async function savePluginConfig(pluginId: string, config: Record<string, unknown>) {
+  try {
+    return await requestLocalApi<PluginConfigSaveResult>('/api/v1/plugins/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plugin_id: pluginId, config })
+    })
+  } catch {
+    const response = await invoke<ApiResponse<PluginConfigSaveResult>>('save_plugin_config', {
+      pluginId,
+      config
+    })
+    if (response.code !== 0) {
+      throw new Error(response.message)
+    }
+    return response.data
+  }
+}
+
 export async function getNotificationRecords() {
   try {
     return await requestLocalApi<NotificationRecordsPayload>('/api/v1/notification-records')
@@ -348,9 +394,9 @@ export async function getNotificationRecords() {
   }
 }
 
-export async function sendTestNotification(channel: NotificationChannel) {
+export async function sendTestNotification(pluginId: string) {
   const response = await invoke<ApiResponse<TestNotificationResult>>('send_test_notification', {
-    channel
+    pluginId
   })
   if (response.code !== 0) {
     throw new Error(response.message)

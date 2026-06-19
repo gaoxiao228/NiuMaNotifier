@@ -9,6 +9,7 @@ export type Translation = {
   settings: string
   statusTab: string
   notificationTab: string
+  notificationPlugins: string
   notificationSettings: string
   barkSettings: string
   ntfySettings: string
@@ -21,6 +22,7 @@ export type Translation = {
   token: string
   save: string
   saved: string
+  saving: string
   testSend: string
   sending: string
   sent: string
@@ -63,6 +65,7 @@ export type Translation = {
   backToDashboard: string
   pluginManagement: string
   pluginManagementDescription: string
+  pluginConfig: string
   importPlugin: string
   importingPlugin: string
   pluginImportCancelled: string
@@ -129,6 +132,7 @@ export const translations: Record<LanguageCode, Translation> = {
     settings: '设置',
     statusTab: '状态',
     notificationTab: '通知',
+    notificationPlugins: '通知插件',
     notificationSettings: '通知设置',
     barkSettings: 'Bark 设置',
     ntfySettings: 'ntfy 设置',
@@ -141,6 +145,7 @@ export const translations: Record<LanguageCode, Translation> = {
     token: 'Token',
     save: '保存设置',
     saved: '已保存',
+    saving: '保存中...',
     testSend: '测试通知',
     sending: '发送中...',
     sent: '已发送',
@@ -182,7 +187,8 @@ export const translations: Record<LanguageCode, Translation> = {
     settingsButton: '设置',
     backToDashboard: '返回主界面',
     pluginManagement: '插件管理',
-    pluginManagementDescription: '管理已发现的工具插件，启用后插件会监听对应工具状态。',
+    pluginManagementDescription: '管理已发现的工具和通知插件，启用后插件会按自身能力运行。',
+    pluginConfig: '插件配置',
     importPlugin: '导入插件',
     importingPlugin: '正在导入...',
     pluginImportCancelled: '已取消导入',
@@ -275,6 +281,7 @@ export const translations: Record<LanguageCode, Translation> = {
     settings: '設定',
     statusTab: '狀態',
     notificationTab: '通知',
+    notificationPlugins: '通知外掛',
     notificationSettings: '通知設定',
     barkSettings: 'Bark 設定',
     ntfySettings: 'ntfy 設定',
@@ -287,6 +294,7 @@ export const translations: Record<LanguageCode, Translation> = {
     token: 'Token',
     save: '儲存設定',
     saved: '已儲存',
+    saving: '儲存中...',
     testSend: '測試通知',
     sending: '傳送中...',
     sent: '已傳送',
@@ -328,7 +336,8 @@ export const translations: Record<LanguageCode, Translation> = {
     settingsButton: '設定',
     backToDashboard: '返回主畫面',
     pluginManagement: '外掛管理',
-    pluginManagementDescription: '管理已發現的工具外掛，啟用後外掛會監聽對應工具狀態。',
+    pluginManagementDescription: '管理已發現的工具和通知外掛，啟用後外掛會依自身能力執行。',
+    pluginConfig: '外掛設定',
     importPlugin: '匯入外掛',
     importingPlugin: '正在匯入...',
     pluginImportCancelled: '已取消匯入',
@@ -421,6 +430,7 @@ export const translations: Record<LanguageCode, Translation> = {
     settings: 'Settings',
     statusTab: 'Status',
     notificationTab: 'Notifications',
+    notificationPlugins: 'Notification plugins',
     notificationSettings: 'Notification settings',
     barkSettings: 'Bark settings',
     ntfySettings: 'ntfy settings',
@@ -433,6 +443,7 @@ export const translations: Record<LanguageCode, Translation> = {
     token: 'Token',
     save: 'Save settings',
     saved: 'Saved',
+    saving: 'Saving...',
     testSend: 'Test notification',
     sending: 'Sending...',
     sent: 'Sent',
@@ -474,7 +485,8 @@ export const translations: Record<LanguageCode, Translation> = {
     settingsButton: 'Settings',
     backToDashboard: 'Back to dashboard',
     pluginManagement: 'Plugin management',
-    pluginManagementDescription: 'Manage discovered tool plugins. Enabled plugins listen for matching tool status.',
+    pluginManagementDescription: 'Manage discovered tool and notification plugins. Enabled plugins run according to their capabilities.',
+    pluginConfig: 'Plugin config',
     importPlugin: 'Import plugin',
     importingPlugin: 'Importing...',
     pluginImportCancelled: 'Import cancelled',
@@ -567,6 +579,7 @@ export const translations: Record<LanguageCode, Translation> = {
     settings: '設定',
     statusTab: '状態',
     notificationTab: '通知',
+    notificationPlugins: '通知プラグイン',
     notificationSettings: '通知設定',
     barkSettings: 'Bark 設定',
     ntfySettings: 'ntfy 設定',
@@ -579,6 +592,7 @@ export const translations: Record<LanguageCode, Translation> = {
     token: 'Token',
     save: '設定を保存',
     saved: '保存済み',
+    saving: '保存中...',
     testSend: '通知をテスト',
     sending: '送信中...',
     sent: '送信済み',
@@ -620,7 +634,8 @@ export const translations: Record<LanguageCode, Translation> = {
     settingsButton: '設定',
     backToDashboard: 'メイン画面へ戻る',
     pluginManagement: 'プラグイン管理',
-    pluginManagementDescription: '検出されたツールプラグインを管理します。有効なプラグインは対応するツール状態を監視します。',
+    pluginManagementDescription: '検出されたツールと通知プラグインを管理します。有効なプラグインはそれぞれの機能に応じて動作します。',
+    pluginConfig: 'プラグイン設定',
     importPlugin: 'プラグインを取り込む',
     importingPlugin: '取り込み中...',
     pluginImportCancelled: '取り込みをキャンセルしました',
@@ -713,6 +728,7 @@ export const translations: Record<LanguageCode, Translation> = {
     settings: '설정',
     statusTab: '상태',
     notificationTab: '알림',
+    notificationPlugins: '알림 플러그인',
     notificationSettings: '알림 설정',
     barkSettings: 'Bark 설정',
     ntfySettings: 'ntfy 설정',
@@ -725,6 +741,7 @@ export const translations: Record<LanguageCode, Translation> = {
     token: 'Token',
     save: '설정 저장',
     saved: '저장됨',
+    saving: '저장 중...',
     testSend: '알림 테스트',
     sending: '전송 중...',
     sent: '전송됨',
@@ -766,7 +783,8 @@ export const translations: Record<LanguageCode, Translation> = {
     settingsButton: '설정',
     backToDashboard: '메인 화면으로 돌아가기',
     pluginManagement: '플러그인 관리',
-    pluginManagementDescription: '발견된 도구 플러그인을 관리합니다. 활성화된 플러그인은 해당 도구 상태를 수신합니다.',
+    pluginManagementDescription: '발견된 도구 및 알림 플러그인을 관리합니다. 활성화된 플러그인은 각 기능에 따라 실행됩니다.',
+    pluginConfig: '플러그인 설정',
     importPlugin: '플러그인 가져오기',
     importingPlugin: '가져오는 중...',
     pluginImportCancelled: '가져오기를 취소했습니다',
@@ -859,6 +877,7 @@ export const translations: Record<LanguageCode, Translation> = {
     settings: 'Einstellungen',
     statusTab: 'Status',
     notificationTab: 'Benachrichtigungen',
+    notificationPlugins: 'Benachrichtigungs-Plugins',
     notificationSettings: 'Benachrichtigungseinstellungen',
     barkSettings: 'Bark-Einstellungen',
     ntfySettings: 'ntfy-Einstellungen',
@@ -871,6 +890,7 @@ export const translations: Record<LanguageCode, Translation> = {
     token: 'Token',
     save: 'Einstellungen speichern',
     saved: 'Gespeichert',
+    saving: 'Speichern...',
     testSend: 'Benachrichtigung testen',
     sending: 'Wird gesendet...',
     sent: 'Gesendet',
@@ -912,7 +932,8 @@ export const translations: Record<LanguageCode, Translation> = {
     settingsButton: 'Einstellungen',
     backToDashboard: 'Zurück zur Übersicht',
     pluginManagement: 'Plugin-Verwaltung',
-    pluginManagementDescription: 'Erkannte Tool-Plugins verwalten. Aktivierte Plugins überwachen passende Tool-Status.',
+    pluginManagementDescription: 'Erkannte Tool- und Benachrichtigungs-Plugins verwalten. Aktivierte Plugins laufen entsprechend ihren Fähigkeiten.',
+    pluginConfig: 'Plugin-Konfiguration',
     importPlugin: 'Plugin importieren',
     importingPlugin: 'Importiert...',
     pluginImportCancelled: 'Import abgebrochen',

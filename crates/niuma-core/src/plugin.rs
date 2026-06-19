@@ -3,20 +3,40 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::listener_config::ListenerConfig;
 use crate::models::ToolKind;
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
+pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
+pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
+pub const BUILTIN_BARK_PLUGIN_ID: &str = "builtin-bark";
+pub const BUILTIN_NTFY_PLUGIN_ID: &str = "builtin-ntfy";
 
 const CODEX_PLUGIN_COMMAND: &str = "niuma-codex-plugin";
+const BARK_PLUGIN_COMMAND: &str = "niuma-plugin-bark";
+const NTFY_PLUGIN_COMMAND: &str = "niuma-plugin-ntfy";
 const BUILTIN_CODEX_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../builtin-plugins/codex/plugin.json");
+const BUILTIN_BARK_PLUGIN_MANIFEST_JSON: &str =
+    include_str!("../../../builtin-plugins/bark/plugin.json");
+const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
+    include_str!("../../../builtin-plugins/ntfy/plugin.json");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginCapability {
     EventWatcher,
+    EventConsumer,
+    NotificationTest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginKind {
+    Tool,
+    Notification,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -39,7 +59,10 @@ pub enum PluginRuntimeStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub id: String,
-    pub tool_id: ToolKind,
+    #[serde(default = "tool_plugin_kind")]
+    pub kind: PluginKind,
+    #[serde(default)]
+    pub tool_id: Option<ToolKind>,
     pub display_name: String,
     pub version: String,
     #[serde(default)]
@@ -54,10 +77,37 @@ pub struct PluginManifest {
     pub capabilities: Vec<PluginCapability>,
     #[serde(default)]
     pub icon_url: Option<String>,
+    #[serde(default)]
+    pub config_schema: Vec<PluginConfigField>,
     #[serde(default = "external_source")]
     pub source: PluginSource,
     #[serde(skip)]
     pub base_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginConfigFieldType {
+    String,
+    Secret,
+    Url,
+    Number,
+    Boolean,
+    Select,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PluginConfigField {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub field_type: PluginConfigFieldType,
+    pub label: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Value,
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -118,7 +168,8 @@ impl PluginRuntimeState {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PluginManagementItem {
     pub id: String,
-    pub tool_id: ToolKind,
+    pub kind: PluginKind,
+    pub tool_id: Option<ToolKind>,
     pub display_name: String,
     pub version: String,
     pub source: PluginSource,
@@ -126,6 +177,8 @@ pub struct PluginManagementItem {
     pub runtime_status: PluginRuntimeStatus,
     pub last_error: Option<String>,
     pub icon_url: Option<String>,
+    pub capabilities: Vec<PluginCapability>,
+    pub config_schema: Vec<PluginConfigField>,
     pub install_path: Option<String>,
 }
 
@@ -156,6 +209,8 @@ impl PluginRegistry {
     pub fn with_builtin_plugins() -> Self {
         let mut registry = Self::new();
         registry.register(builtin_codex_manifest());
+        registry.register(builtin_bark_manifest());
+        registry.register(builtin_ntfy_manifest());
         registry
     }
 
@@ -205,7 +260,9 @@ impl PluginRegistry {
     }
 
     pub fn plugin_for_tool(&self, tool: &ToolKind) -> Option<&PluginManifest> {
-        self.manifests.iter().find(|item| &item.tool_id == tool)
+        self.manifests
+            .iter()
+            .find(|item| item.tool_id.as_ref() == Some(tool))
     }
 
     pub fn plugin_by_id(&self, plugin_id: &str) -> Option<&PluginManifest> {
@@ -213,12 +270,16 @@ impl PluginRegistry {
     }
 
     pub fn tools(&self) -> Vec<ToolPluginInfo> {
-        self.manifests.iter().map(ToolPluginInfo::from).collect()
+        self.manifests
+            .iter()
+            .filter_map(ToolPluginInfo::try_from_manifest)
+            .collect()
     }
 
     pub fn management_items(
         &self,
         config: &ListenerConfig,
+        plugin_enabled_map: &BTreeMap<String, bool>,
         runtime_states: &HashMap<String, PluginRuntimeState>,
     ) -> Vec<PluginManagementItem> {
         self.manifests
@@ -230,14 +291,17 @@ impl PluginRegistry {
                     .unwrap_or_else(PluginRuntimeState::stopped);
                 PluginManagementItem {
                     id: manifest.id.clone(),
+                    kind: manifest.kind.clone(),
                     tool_id: manifest.tool_id.clone(),
                     display_name: manifest.display_name.clone(),
                     version: manifest.version.clone(),
                     source: manifest.source.clone(),
-                    enabled: config.is_tool_enabled(&manifest.tool_id),
+                    enabled: plugin_enabled(manifest, config, plugin_enabled_map),
                     runtime_status: runtime.status,
                     last_error: runtime.last_error,
                     icon_url: manifest.icon_url.clone(),
+                    capabilities: manifest.capabilities.clone(),
+                    config_schema: manifest.config_schema.clone(),
                     install_path: manifest
                         .base_dir
                         .as_ref()
@@ -266,17 +330,18 @@ impl PluginManifest {
     }
 }
 
-impl From<&PluginManifest> for ToolPluginInfo {
-    fn from(manifest: &PluginManifest) -> Self {
-        Self {
+impl ToolPluginInfo {
+    fn try_from_manifest(manifest: &PluginManifest) -> Option<Self> {
+        let tool_id = manifest.tool_id.clone()?;
+        Some(Self {
             id: manifest.id.clone(),
-            tool_id: manifest.tool_id.clone(),
+            tool_id,
             display_name: manifest.display_name.clone(),
             version: manifest.version.clone(),
             source: manifest.source.clone(),
             icon_url: manifest.icon_url.clone(),
             capabilities: manifest.capabilities.clone(),
-        }
+        })
     }
 }
 
@@ -286,6 +351,32 @@ pub fn builtin_codex_manifest() -> PluginManifest {
     manifest.source = PluginSource::Builtin;
     manifest.command = Some(builtin_codex_plugin_command(manifest.command));
     // 内置插件的 binary 路径由桌面端/环境变量解析，不使用源码目录作为运行目录。
+    manifest.base_dir = None;
+    manifest
+}
+
+pub fn builtin_bark_manifest() -> PluginManifest {
+    let mut manifest = parse_plugin_manifest(BUILTIN_BARK_PLUGIN_MANIFEST_JSON)
+        .expect("内置 Bark 插件 manifest 必须是有效 plugin.json");
+    manifest.source = PluginSource::Builtin;
+    manifest.command = Some(builtin_plugin_command(
+        BARK_PLUGIN_COMMAND_ENV,
+        manifest.command,
+        BARK_PLUGIN_COMMAND,
+    ));
+    manifest.base_dir = None;
+    manifest
+}
+
+pub fn builtin_ntfy_manifest() -> PluginManifest {
+    let mut manifest = parse_plugin_manifest(BUILTIN_NTFY_PLUGIN_MANIFEST_JSON)
+        .expect("内置 ntfy 插件 manifest 必须是有效 plugin.json");
+    manifest.source = PluginSource::Builtin;
+    manifest.command = Some(builtin_plugin_command(
+        NTFY_PLUGIN_COMMAND_ENV,
+        manifest.command,
+        NTFY_PLUGIN_COMMAND,
+    ));
     manifest.base_dir = None;
     manifest
 }
@@ -301,10 +392,62 @@ pub fn current_plugin_registry() -> PluginRegistry {
     PluginRegistry::with_builtin_plugins().discover_external_plugins(&default_user_plugin_dir())
 }
 
+pub fn plugin_config_defaults(
+    manifest: &PluginManifest,
+) -> serde_json::Map<String, serde_json::Value> {
+    manifest
+        .config_schema
+        .iter()
+        .filter(|field| !field.default.is_null())
+        .map(|field| (field.key.clone(), field.default.clone()))
+        .collect()
+}
+
+pub fn merge_plugin_config_with_defaults(
+    manifest: &PluginManifest,
+    config: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut merged = plugin_config_defaults(manifest);
+    for (key, value) in config {
+        merged.insert(key, value);
+    }
+    merged
+}
+
+pub fn resolve_plugin_config(
+    manifest: &PluginManifest,
+    stored_config: Option<serde_json::Map<String, serde_json::Value>>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let config = stored_config.unwrap_or_default();
+    merge_plugin_config_with_defaults(manifest, config)
+}
+
+pub fn validate_plugin_config(
+    manifest: &PluginManifest,
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    for field in &manifest.config_schema {
+        let Some(value) = config.get(&field.key) else {
+            if field.required {
+                return Err(format!("{} 不能为空", field.label));
+            }
+            continue;
+        };
+        if !plugin_config_value_matches(field, value) {
+            return Err(format!("{} 类型无效", field.label));
+        }
+        if field.required && plugin_config_value_is_empty(value) {
+            return Err(format!("{} 不能为空", field.label));
+        }
+    }
+    Ok(())
+}
+
 pub fn import_external_plugin_dir(
     source_dir: &Path,
     destination_root: &Path,
     config: &ListenerConfig,
+    plugin_enabled_map: &BTreeMap<String, bool>,
     runtime_states: &HashMap<String, PluginRuntimeState>,
 ) -> Result<PluginImportResult, String> {
     let manifest_path = source_dir.join("plugin.json");
@@ -331,7 +474,7 @@ pub fn import_external_plugin_dir(
 
     let registry =
         PluginRegistry::with_builtin_plugins().discover_external_plugins(destination_root);
-    let plugins = registry.management_items(config, runtime_states);
+    let plugins = registry.management_items(config, plugin_enabled_map, runtime_states);
     let plugin = plugins
         .iter()
         .find(|plugin| plugin.id == manifest.id)
@@ -349,6 +492,7 @@ pub fn remove_external_plugin(
     plugin_id: &str,
     destination_root: &Path,
     config: &ListenerConfig,
+    plugin_enabled_map: &BTreeMap<String, bool>,
     runtime_states: &HashMap<String, PluginRuntimeState>,
 ) -> Result<PluginRemoveResult, String> {
     if PluginRegistry::with_builtin_plugins()
@@ -385,7 +529,7 @@ pub fn remove_external_plugin(
     Ok(PluginRemoveResult {
         removed: true,
         plugin_id: plugin_id.to_string(),
-        plugins: registry.management_items(config, runtime_states),
+        plugins: registry.management_items(config, plugin_enabled_map, runtime_states),
     })
 }
 
@@ -400,20 +544,106 @@ fn current_platform_id() -> &'static str {
 }
 
 fn parse_plugin_manifest(content: &str) -> Result<PluginManifest, String> {
-    serde_json::from_str(content).map_err(|error| format!("解析插件 manifest 失败：{error}"))
+    let manifest: PluginManifest = serde_json::from_str(content)
+        .map_err(|error| format!("解析插件 manifest 失败：{error}"))?;
+    validate_plugin_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+fn validate_plugin_manifest(manifest: &PluginManifest) -> Result<(), String> {
+    if manifest.kind == PluginKind::Tool && manifest.tool_id.is_none() {
+        return Err(format!("工具插件缺少 tool_id：{}", manifest.id));
+    }
+    if manifest.kind != PluginKind::Tool
+        && manifest
+            .capabilities
+            .contains(&PluginCapability::EventWatcher)
+    {
+        return Err(format!("非工具插件不能声明 event_watcher：{}", manifest.id));
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    for field in &manifest.config_schema {
+        if field.key.trim().is_empty() {
+            return Err(format!("插件配置项 key 不能为空：{}", manifest.id));
+        }
+        if field.label.trim().is_empty() {
+            return Err(format!("插件配置项 label 不能为空：{}", manifest.id));
+        }
+        if !keys.insert(field.key.clone()) {
+            return Err(format!(
+                "插件配置项 key 重复：{}:{}",
+                manifest.id, field.key
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn plugin_config_value_matches(field: &PluginConfigField, value: &Value) -> bool {
+    match field.field_type {
+        PluginConfigFieldType::String
+        | PluginConfigFieldType::Secret
+        | PluginConfigFieldType::Url => value.is_string(),
+        PluginConfigFieldType::Number => value.is_number(),
+        PluginConfigFieldType::Boolean => value.is_boolean(),
+        PluginConfigFieldType::Select => {
+            let Some(value) = value.as_str() else {
+                return false;
+            };
+            field.options.is_empty() || field.options.iter().any(|option| option == value)
+        }
+    }
+}
+
+fn plugin_config_value_is_empty(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.trim().is_empty(),
+        Value::Null => true,
+        _ => false,
+    }
+}
+
+fn plugin_enabled(
+    manifest: &PluginManifest,
+    config: &ListenerConfig,
+    plugin_enabled_map: &BTreeMap<String, bool>,
+) -> bool {
+    if let Some(tool) = &manifest.tool_id {
+        return config.is_tool_enabled(tool);
+    }
+    plugin_enabled_map
+        .get(&manifest.id)
+        .copied()
+        .unwrap_or(false)
 }
 
 fn builtin_codex_plugin_command(default_command: Option<String>) -> String {
     // 桌面端或打包脚本可覆盖命令路径；默认值来自内置 plugin.json，最后回退到普通裸命令。
-    std::env::var(CODEX_PLUGIN_COMMAND_ENV)
+    builtin_plugin_command(
+        CODEX_PLUGIN_COMMAND_ENV,
+        default_command,
+        CODEX_PLUGIN_COMMAND,
+    )
+}
+
+fn builtin_plugin_command(
+    env_key: &str,
+    default_command: Option<String>,
+    fallback_command: &str,
+) -> String {
+    std::env::var(env_key)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| default_command.filter(|value| !value.trim().is_empty()))
-        .unwrap_or_else(|| CODEX_PLUGIN_COMMAND.to_string())
+        .unwrap_or_else(|| fallback_command.to_string())
 }
 
 fn external_source() -> PluginSource {
     PluginSource::External
+}
+
+fn tool_plugin_kind() -> PluginKind {
+    PluginKind::Tool
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
@@ -467,9 +697,63 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(manifest.tool_id, ToolId::Custom("cursor".to_string()));
+        assert_eq!(manifest.kind, PluginKind::Tool);
+        assert_eq!(manifest.tool_id, Some(ToolId::Custom("cursor".to_string())));
         assert_eq!(manifest.source, PluginSource::External);
         assert!(manifest.supports_current_platform());
+    }
+
+    #[test]
+    fn parses_notification_event_consumer_without_tool_id() {
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "builtin-bark",
+                "kind": "notification",
+                "display_name": "Bark",
+                "version": "0.1.0",
+                "command": "niuma-plugin-bark",
+                "capabilities": ["event_consumer"]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.kind, PluginKind::Notification);
+        assert_eq!(manifest.tool_id, None);
+        assert_eq!(manifest.capabilities, vec![PluginCapability::EventConsumer]);
+    }
+
+    #[test]
+    fn rejects_tool_plugin_without_tool_id() {
+        let error = parse_plugin_manifest(
+            r#"{
+                "id": "broken-tool",
+                "kind": "tool",
+                "display_name": "Broken",
+                "version": "0.1.0",
+                "command": "broken",
+                "capabilities": ["event_watcher"]
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("工具插件缺少 tool_id"));
+    }
+
+    #[test]
+    fn rejects_event_watcher_on_notification_plugin() {
+        let error = parse_plugin_manifest(
+            r#"{
+                "id": "broken-notification",
+                "kind": "notification",
+                "display_name": "Broken",
+                "version": "0.1.0",
+                "command": "broken",
+                "capabilities": ["event_watcher"]
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("非工具插件不能声明 event_watcher"));
     }
 
     #[test]
@@ -498,7 +782,75 @@ mod tests {
         let plugin = registry.plugin_for_tool(&ToolKind::Codex).unwrap();
 
         assert_eq!(plugin.id, "builtin-codex");
-        assert_eq!(plugin.tool_id, ToolKind::Codex);
+        assert_eq!(plugin.kind, PluginKind::Tool);
+        assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
+    }
+
+    #[test]
+    fn registry_contains_builtin_bark_notification_plugin() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(BARK_PLUGIN_COMMAND_ENV);
+        let registry = PluginRegistry::with_builtin_plugins();
+        let plugin = registry.plugin_by_id("builtin-bark").unwrap();
+
+        assert_eq!(plugin.kind, PluginKind::Notification);
+        assert_eq!(plugin.tool_id, None);
+        assert_eq!(
+            plugin.capabilities,
+            vec![
+                PluginCapability::EventConsumer,
+                PluginCapability::NotificationTest
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_contains_builtin_ntfy_notification_plugin() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var(NTFY_PLUGIN_COMMAND_ENV);
+        let registry = PluginRegistry::with_builtin_plugins();
+        let plugin = registry.plugin_by_id("builtin-ntfy").unwrap();
+
+        assert_eq!(plugin.kind, PluginKind::Notification);
+        assert_eq!(plugin.tool_id, None);
+        assert_eq!(
+            plugin.capabilities,
+            vec![
+                PluginCapability::EventConsumer,
+                PluginCapability::NotificationTest
+            ]
+        );
+        assert_eq!(plugin.config_schema[0].key, "topic");
+    }
+
+    #[test]
+    fn builtin_bark_manifest_uses_command_override_from_env() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(BARK_PLUGIN_COMMAND_ENV, "/tmp/niuma-plugin-bark-test");
+
+        let manifest = builtin_bark_manifest();
+
+        std::env::remove_var(BARK_PLUGIN_COMMAND_ENV);
+        assert_eq!(
+            manifest.command.as_deref(),
+            Some("/tmp/niuma-plugin-bark-test")
+        );
+        assert!(manifest.args.is_empty());
+    }
+
+    #[test]
+    fn builtin_ntfy_manifest_uses_command_override_from_env() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(NTFY_PLUGIN_COMMAND_ENV, "/tmp/niuma-plugin-ntfy-test");
+
+        let manifest = builtin_ntfy_manifest();
+
+        std::env::remove_var(NTFY_PLUGIN_COMMAND_ENV);
+        assert_eq!(
+            manifest.command.as_deref(),
+            Some("/tmp/niuma-plugin-ntfy-test")
+        );
+        assert!(manifest.args.is_empty());
     }
 
     #[test]
@@ -539,6 +891,7 @@ mod tests {
         let manifest = builtin_codex_manifest();
 
         assert_eq!(manifest.id, file_manifest.id);
+        assert_eq!(manifest.kind, PluginKind::Tool);
         assert_eq!(manifest.tool_id, file_manifest.tool_id);
         assert_eq!(manifest.display_name, file_manifest.display_name);
         assert_eq!(manifest.version, file_manifest.version);
@@ -577,7 +930,7 @@ mod tests {
         let plugin = registry.plugin_by_id("builtin-codex").unwrap();
 
         assert_eq!(plugin.source, PluginSource::Builtin);
-        assert_eq!(plugin.tool_id, ToolKind::Codex);
+        assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
     }
 
     #[test]
@@ -603,10 +956,59 @@ mod tests {
         let registry = PluginRegistry::new().discover_external_plugins(temp.path());
         let plugin = registry.plugin_by_id("niuma-plugin-demo").unwrap();
 
-        assert_eq!(plugin.tool_id, ToolKind::Custom("demo_tool".to_string()));
+        assert_eq!(
+            plugin.tool_id,
+            Some(ToolKind::Custom("demo_tool".to_string()))
+        );
         assert_eq!(plugin.source, PluginSource::External);
         assert_eq!(plugin.base_dir.as_deref(), Some(plugin_dir.as_path()));
         assert_eq!(registry.tools()[0].display_name, "Demo Tool");
+    }
+
+    #[test]
+    fn registry_tools_excludes_notification_event_consumers() {
+        let mut registry = PluginRegistry::new();
+        registry.register(
+            parse_plugin_manifest(
+                r#"{
+                "id": "builtin-bark",
+                "kind": "notification",
+                "display_name": "Bark",
+                "version": "0.1.0",
+                "command": "niuma-plugin-bark",
+                "capabilities": ["event_consumer"]
+            }"#,
+            )
+            .unwrap(),
+        );
+
+        assert!(registry.tools().is_empty());
+    }
+
+    #[test]
+    fn management_items_read_notification_enabled_from_plugin_map() {
+        let mut registry = PluginRegistry::new();
+        registry.register(
+            parse_plugin_manifest(
+                r#"{
+                "id": "builtin-bark",
+                "kind": "notification",
+                "display_name": "Bark",
+                "version": "0.1.0",
+                "command": "niuma-plugin-bark",
+                "capabilities": ["event_consumer"]
+            }"#,
+            )
+            .unwrap(),
+        );
+        let enabled = BTreeMap::from([("builtin-bark".to_string(), true)]);
+
+        let items =
+            registry.management_items(&ListenerConfig::default(), &enabled, &HashMap::new());
+
+        assert_eq!(items[0].kind, PluginKind::Notification);
+        assert_eq!(items[0].tool_id, None);
+        assert!(items[0].enabled);
     }
 
     #[test]
@@ -621,6 +1023,7 @@ mod tests {
             source.path(),
             destination.path(),
             &ListenerConfig::default(),
+            &BTreeMap::new(),
             &HashMap::new(),
         )
         .unwrap();
@@ -642,6 +1045,7 @@ mod tests {
             source.path(),
             destination.path(),
             &ListenerConfig::default(),
+            &BTreeMap::new(),
             &HashMap::new(),
         )
         .unwrap();
@@ -650,6 +1054,7 @@ mod tests {
             "niuma-plugin-demo",
             destination.path(),
             &ListenerConfig::default(),
+            &BTreeMap::new(),
             &HashMap::new(),
         )
         .unwrap();
@@ -672,6 +1077,7 @@ mod tests {
             source.path(),
             destination.path(),
             &ListenerConfig::default(),
+            &BTreeMap::new(),
             &HashMap::new(),
         )
         .unwrap_err();
@@ -689,6 +1095,7 @@ mod tests {
             source.path(),
             destination.path(),
             &ListenerConfig::default(),
+            &BTreeMap::new(),
             &HashMap::new(),
         )
         .unwrap_err();
@@ -704,6 +1111,7 @@ mod tests {
             "builtin-codex",
             destination.path(),
             &ListenerConfig::default(),
+            &BTreeMap::new(),
             &HashMap::new(),
         )
         .unwrap_err();
@@ -715,7 +1123,8 @@ mod tests {
     fn unsupported_platform_manifest_is_filtered() {
         let manifest = PluginManifest {
             id: "future".to_string(),
-            tool_id: ToolKind::Custom("future".to_string()),
+            kind: PluginKind::Tool,
+            tool_id: Some(ToolKind::Custom("future".to_string())),
             display_name: "Future".to_string(),
             version: "0.1.0".to_string(),
             command: Some("./future".to_string()),
@@ -724,6 +1133,7 @@ mod tests {
             platforms: vec!["unsupported-os".to_string()],
             capabilities: vec![PluginCapability::EventWatcher],
             icon_url: None,
+            config_schema: Vec::new(),
             source: PluginSource::External,
             base_dir: None,
         };

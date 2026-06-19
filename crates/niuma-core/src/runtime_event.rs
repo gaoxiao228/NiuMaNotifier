@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::models::NiumaEvent;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 128;
@@ -23,12 +25,26 @@ pub enum RuntimeEvent {
         version: u64,
         reason: StateChangeReason,
     },
+    PluginNotificationTestRequested {
+        version: u64,
+        request: PluginNotificationTestRequest,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PluginNotificationTestRequest {
+    pub test_id: String,
+    pub plugin_id: String,
+    pub title: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StateChangeReason {
     StaleSweep,
     ListenerConfigChanged,
+    PluginConfigChanged,
 }
 
 #[derive(Clone)]
@@ -70,6 +86,10 @@ impl RuntimeEventBus {
 
     pub fn publish_state_changed(&self, reason: StateChangeReason) {
         self.publish(|version| RuntimeEvent::StateChanged { version, reason });
+    }
+
+    pub fn publish_plugin_notification_test(&self, request: PluginNotificationTestRequest) {
+        self.publish(|version| RuntimeEvent::PluginNotificationTestRequested { version, request });
     }
 
     fn publish(&self, build: impl FnOnce(u64) -> RuntimeEvent) {

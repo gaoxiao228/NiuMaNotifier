@@ -1,5 +1,6 @@
 {
   "id": "builtin-codex",
+  "kind": "tool",
   "tool_id": "codex",
   "display_name": "Codex",
   "version": "0.1.0",

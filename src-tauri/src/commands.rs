@@ -3,19 +3,27 @@ use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::dashboard::DashboardService;
 use niuma_core::main_state::MainStateService;
 use niuma_core::models::ToolId;
-use niuma_core::notification_config::{NotificationConfigErrorKind, NotificationConfigService};
 use niuma_core::platform::locale::{
     active_language, active_language_preference, set_active_language_preference, LanguagePreference,
 };
 use niuma_core::plugin::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
-    remove_external_plugin, PluginManagementItem, PluginRegistry, PluginSource, ToolPluginInfo,
+    remove_external_plugin, resolve_plugin_config, validate_plugin_config, PluginCapability,
+    PluginKind, PluginManagementItem, PluginManifest, PluginRegistry, PluginRuntimeStatus,
+    PluginSource, ToolPluginInfo,
 };
-use niuma_core::runtime_event::{RuntimeEventBus, StateChangeReason};
+use niuma_core::runtime_event::{
+    PluginNotificationTestRequest, RuntimeEventBus, StateChangeReason,
+};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::SqliteStateStore;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const NOTIFICATION_TEST_TIMEOUT: Duration = Duration::from_secs(15);
+const NOTIFICATION_TEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub(crate) struct AppRuntimeState {
@@ -146,51 +154,47 @@ pub(crate) fn remove_plugin(
 }
 
 #[tauri::command]
-pub(crate) fn get_notification_config() -> ApiResponse<serde_json::Value> {
-    match NotificationConfigService::new(default_store()).channels() {
-        Ok(channels) => ApiResponse::ok(json!({ "channels": channels })),
-        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
-    }
+pub(crate) fn set_plugin_enabled(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    plugin_id: String,
+    enabled: bool,
+) -> ApiResponse<serde_json::Value> {
+    set_plugin_enabled_by_id(
+        &runtime_state.mutation_service,
+        &runtime_state.runtime_events,
+        &plugin_id,
+        enabled,
+    )
 }
 
 #[tauri::command]
-pub(crate) fn save_notification_config(
-    channels: Vec<serde_json::Value>,
+pub(crate) fn get_plugin_config(plugin_id: String) -> ApiResponse<serde_json::Value> {
+    get_plugin_config_by_id(&plugin_id)
+}
+
+#[tauri::command]
+pub(crate) fn save_plugin_config(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    plugin_id: String,
+    config: serde_json::Value,
 ) -> ApiResponse<serde_json::Value> {
-    // Tauri 调用形态保持为 invoke('save_notification_config', { channels })，
-    // 内部再转换成 Local API 共用的 {"channels": [...]} 结构做统一校验。
-    let value = json!({ "channels": channels });
-    match NotificationConfigService::new(default_store()).save_from_value(&value) {
-        Ok(_) => ApiResponse::ok(json!({ "saved": true })),
-        Err(error) => match error.kind() {
-            NotificationConfigErrorKind::BusinessValidation => {
-                ApiResponse::fail(ApiErrorCode::BusinessValidation, error.message())
-            }
-            NotificationConfigErrorKind::System => {
-                ApiResponse::fail(ApiErrorCode::System, error.message())
-            }
-        },
-    }
+    save_plugin_config_by_id(&runtime_state.runtime_events, &plugin_id, config)
 }
 
 #[tauri::command]
 pub(crate) fn get_notification_records() -> ApiResponse<serde_json::Value> {
-    match default_store().notification_records(20) {
+    match default_store().notification_history_records(20) {
         Ok(records) => ApiResponse::ok(json!({ "list": records })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
 }
 
 #[tauri::command]
-pub(crate) fn send_test_notification(channel: String) -> ApiResponse<serde_json::Value> {
-    match crate::notification_runtime::send_test_notification(
-        default_store(),
-        channel,
-        crate::notification_runtime::UreqNotificationSender::default(),
-    ) {
-        Ok(result) => ApiResponse::ok(json!(result)),
-        Err(error) => ApiResponse::fail(error.api_error_code(), error.message()),
-    }
+pub(crate) fn send_test_notification(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    plugin_id: String,
+) -> ApiResponse<serde_json::Value> {
+    request_plugin_test_notification(&runtime_state.runtime_events, &plugin_id)
 }
 
 #[tauri::command]
@@ -266,7 +270,132 @@ fn plugin_management_items() -> Result<Vec<PluginManagementItem>, String> {
     let store = default_store();
     let config = store.listener_config()?;
     let runtime_states = store.plugin_runtime_states()?;
-    Ok(current_plugin_registry().management_items(&config, &runtime_states))
+    let plugin_enabled_map = store.plugin_enabled_map()?;
+    Ok(current_plugin_registry().management_items(&config, &plugin_enabled_map, &runtime_states))
+}
+
+fn request_plugin_test_notification(
+    runtime_events: &RuntimeEventBus,
+    plugin_id: &str,
+) -> ApiResponse<serde_json::Value> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return ApiResponse::fail(ApiErrorCode::BusinessValidation, "plugin_id 不能为空");
+    }
+    let store = default_store();
+    let registry = current_plugin_registry();
+    let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("未知插件：{plugin_id}"),
+        );
+    };
+    if plugin.kind != PluginKind::Notification {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("插件 {plugin_id} 不是通知插件"),
+        );
+    }
+    if !plugin
+        .capabilities
+        .contains(&PluginCapability::NotificationTest)
+    {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("通知插件 {plugin_id} 不支持测试通知"),
+        );
+    }
+    if let Err(error) = validate_notification_test_plugin(&store, &plugin) {
+        return error;
+    }
+
+    let now = Utc::now();
+    let test_id = format!(
+        "manual-test:{}:{}",
+        plugin_id,
+        now.timestamp_nanos_opt()
+            .unwrap_or_else(|| now.timestamp_micros())
+    );
+    let request = PluginNotificationTestRequest {
+        test_id: test_id.clone(),
+        plugin_id: plugin_id.to_string(),
+        title: "NiuMa 测试通知".to_string(),
+        body: "如果你收到这条消息，说明通知插件配置正常。".to_string(),
+        created_at: now,
+    };
+    runtime_events.publish_plugin_notification_test(request);
+
+    match wait_for_plugin_notification_test_result(&store, plugin_id, &test_id) {
+        Ok(result) => match result.status {
+            niuma_core::notification_store::NotificationRecordStatus::Sent => {
+                ApiResponse::ok(json!({
+                    "sent": true,
+                    "plugin_id": plugin_id,
+                    "test_id": test_id,
+                    "record_id": result.id
+                }))
+            }
+            niuma_core::notification_store::NotificationRecordStatus::Failed => ApiResponse::fail(
+                ApiErrorCode::ServiceUnavailable,
+                result
+                    .error_message
+                    .unwrap_or_else(|| "测试通知发送失败".to_string()),
+            ),
+            _ => ApiResponse::fail(ApiErrorCode::ServiceUnavailable, "测试通知结果状态无效"),
+        },
+        Err(error) => ApiResponse::fail(ApiErrorCode::ServiceUnavailable, error),
+    }
+}
+
+fn validate_notification_test_plugin(
+    store: &SqliteStateStore,
+    plugin: &PluginManifest,
+) -> Result<(), ApiResponse<serde_json::Value>> {
+    let enabled = store
+        .plugin_enabled_map()
+        .map_err(|error| ApiResponse::fail(ApiErrorCode::System, error))?
+        .get(&plugin.id)
+        .copied()
+        .unwrap_or(false);
+    if !enabled {
+        return Err(ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("通知插件 {} 未启用", plugin.id),
+        ));
+    }
+    let config = resolved_plugin_config(store, plugin)
+        .map_err(|error| ApiResponse::fail(ApiErrorCode::System, error))?;
+    validate_plugin_config(plugin, &config)
+        .map_err(|error| ApiResponse::fail(ApiErrorCode::BusinessValidation, error))?;
+    let runtime_states = store
+        .plugin_runtime_states()
+        .map_err(|error| ApiResponse::fail(ApiErrorCode::System, error))?;
+    let status = runtime_states.get(&plugin.id).map(|state| &state.status);
+    if !matches!(
+        status,
+        Some(PluginRuntimeStatus::Running) | Some(PluginRuntimeStatus::Starting)
+    ) {
+        return Err(ApiResponse::fail(
+            ApiErrorCode::ServiceUnavailable,
+            format!("通知插件 {} 未运行", plugin.id),
+        ));
+    }
+    Ok(())
+}
+
+fn wait_for_plugin_notification_test_result(
+    store: &SqliteStateStore,
+    plugin_id: &str,
+    test_id: &str,
+) -> Result<niuma_core::notification_store::PluginNotificationResult, String> {
+    let deadline = Instant::now() + NOTIFICATION_TEST_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Some(result) = store.plugin_notification_result(plugin_id, test_id)? {
+            return Ok(result);
+        }
+        thread::sleep(NOTIFICATION_TEST_POLL_INTERVAL);
+    }
+    Err("测试通知等待插件回写结果超时".to_string())
 }
 
 fn import_plugin_dir_from_path(path: std::path::PathBuf) -> ApiResponse<serde_json::Value> {
@@ -279,7 +408,17 @@ fn import_plugin_dir_from_path(path: std::path::PathBuf) -> ApiResponse<serde_js
         Ok(states) => states,
         Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
     };
-    match import_external_plugin_dir(&path, &default_user_plugin_dir(), &config, &runtime_states) {
+    let plugin_enabled_map = match store.plugin_enabled_map() {
+        Ok(map) => map,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    match import_external_plugin_dir(
+        &path,
+        &default_user_plugin_dir(),
+        &config,
+        &plugin_enabled_map,
+        &runtime_states,
+    ) {
         Ok(result) => ApiResponse::ok(json!(result)),
         Err(error) => ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
     }
@@ -313,21 +452,35 @@ fn remove_plugin_by_id(
             format!("不能移除内置插件：{plugin_id}"),
         );
     }
-    let config = match service.set_tool_listening_enabled(plugin.tool_id.clone(), false) {
-        Ok(result) => result.config,
-        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    let config = match plugin.tool_id.clone() {
+        Some(tool) => match service.set_tool_listening_enabled(tool, false) {
+            Ok(result) => result.config,
+            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+        },
+        None => match store.listener_config() {
+            Ok(config) => config,
+            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+        },
     };
     if let Err(error) = store.remove_plugin_runtime_state(plugin_id) {
+        return ApiResponse::fail(ApiErrorCode::System, error);
+    }
+    if let Err(error) = store.remove_plugin_config(plugin_id) {
         return ApiResponse::fail(ApiErrorCode::System, error);
     }
     let runtime_states = match store.plugin_runtime_states() {
         Ok(states) => states,
         Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
     };
+    let plugin_enabled_map = match store.plugin_enabled_map() {
+        Ok(map) => map,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
     match remove_external_plugin(
         plugin_id,
         &default_user_plugin_dir(),
         &config,
+        &plugin_enabled_map,
         &runtime_states,
     ) {
         Ok(result) => {
@@ -335,6 +488,109 @@ fn remove_plugin_by_id(
             ApiResponse::ok(json!(result))
         }
         Err(error) => ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+    }
+}
+
+fn get_plugin_config_by_id(plugin_id: &str) -> ApiResponse<serde_json::Value> {
+    let store = default_store();
+    let registry = current_plugin_registry();
+    let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("未知插件：{plugin_id}"),
+        );
+    };
+    match resolved_plugin_config(&store, &plugin) {
+        Ok(config) => ApiResponse::ok(json!({
+            "plugin_id": plugin_id,
+            "config": config,
+            "config_schema": plugin.config_schema
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+    }
+}
+
+fn save_plugin_config_by_id(
+    runtime_events: &RuntimeEventBus,
+    plugin_id: &str,
+    config: serde_json::Value,
+) -> ApiResponse<serde_json::Value> {
+    let store = default_store();
+    let registry = current_plugin_registry();
+    let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("未知插件：{plugin_id}"),
+        );
+    };
+    let Some(config) = config.as_object().cloned() else {
+        return ApiResponse::fail(ApiErrorCode::BusinessValidation, "config 必须是对象");
+    };
+    if let Err(error) = validate_plugin_config(&plugin, &config) {
+        return ApiResponse::fail(ApiErrorCode::BusinessValidation, error);
+    }
+    if let Err(error) = store.save_plugin_config(&plugin.id, &config) {
+        return ApiResponse::fail(ApiErrorCode::System, error);
+    }
+    runtime_events.publish_state_changed(StateChangeReason::PluginConfigChanged);
+    match resolved_plugin_config(&store, &plugin) {
+        Ok(saved_config) => ApiResponse::ok(json!({
+            "saved": true,
+            "plugin_id": plugin_id,
+            "config": saved_config,
+            "config_schema": plugin.config_schema
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+    }
+}
+
+fn resolved_plugin_config(
+    store: &SqliteStateStore,
+    plugin: &PluginManifest,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let stored_config = store.plugin_config(&plugin.id)?;
+    Ok(resolve_plugin_config(plugin, stored_config))
+}
+
+fn set_plugin_enabled_by_id(
+    service: &StateMutationService,
+    runtime_events: &RuntimeEventBus,
+    plugin_id: &str,
+    enabled: bool,
+) -> ApiResponse<serde_json::Value> {
+    let store = default_store();
+    let registry = current_plugin_registry();
+    let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("未知插件：{plugin_id}"),
+        );
+    };
+
+    if let Some(tool) = plugin.tool_id {
+        if let Err(error) = service.set_tool_listening_enabled(tool, enabled) {
+            return ApiResponse::fail(ApiErrorCode::System, error);
+        }
+    } else {
+        let mut enabled_map = match store.plugin_enabled_map() {
+            Ok(map) => map,
+            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+        };
+        enabled_map.insert(plugin.id.clone(), enabled);
+        if let Err(error) = store.save_plugin_enabled_map(&enabled_map) {
+            return ApiResponse::fail(ApiErrorCode::System, error);
+        }
+        runtime_events.publish_state_changed(StateChangeReason::PluginConfigChanged);
+    }
+
+    match plugin_management_items() {
+        Ok(plugins) => ApiResponse::ok(json!({
+            "saved": true,
+            "plugin_id": plugin_id,
+            "enabled": enabled,
+            "plugins": plugins
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
 }
 

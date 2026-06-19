@@ -27,12 +27,33 @@ renderNotificationHistoryOnly({
       error_message: null,
       created_at: '2026-06-16T00:00:00Z',
       sent_at: '2026-06-16T00:00:01Z'
+    } satisfies NotificationRecord,
+    {
+      id: 'record-2',
+      event_id: 'event-2',
+      event_type: 'approval_requested',
+      channel: 'builtin-bark',
+      plugin_id: 'builtin-bark',
+      status: 'failed',
+      title: 'Bark 插件通知',
+      body: null,
+      reason: 'approval_requested',
+      error_message: 'Device Key 未配置',
+      created_at: '2026-06-16T01:00:00Z',
+      sent_at: null
     } satisfies NotificationRecord
   ]
 })
 
 if (!historyElement.innerHTML.includes('测试通知')) {
   throw new Error('通知历史刷新没有渲染最新记录')
+}
+
+if (
+  !historyElement.innerHTML.includes('builtin-bark') ||
+  !historyElement.innerHTML.includes('Device Key 未配置')
+) {
+  throw new Error('通知历史应渲染插件渠道和失败原因')
 }
 
 if (formElement.innerHTML !== '<input data-field="device_key" value="draft-key">') {

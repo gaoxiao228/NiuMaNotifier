@@ -65,7 +65,7 @@ target/release/bundle/dmg/
 
 ## 本机 API 和 SSE
 
-NiuMaNotifier 提供本机 SSE 状态流，方便外部状态面板、自动化脚本和通知代理接入。默认 Local API 地址为 `http://127.0.0.1:27874`，主状态流路径为 `/api/v1/stream`。
+NiuMaNotifier 提供本机 SSE 状态流，方便外部状态面板、自动化脚本和通知代理接入。默认 Local API 地址为 `http://127.0.0.1:27874`，主状态流路径为 `/api/v1/state/stream`。
 
 接口详情、状态字段、reset 行为和示例请参考：
 

@@ -1,36 +1,63 @@
-import type { PluginManagementItem } from './api'
+import type { PluginConfigField, PluginManagementItem } from './api'
 import { translations, type LanguageCode } from './i18n'
 import { escapeHtml } from './viewUtils'
 
 export type SettingsShellRenderOptions = {
   language: LanguageCode
+  activePanel?: SettingsPanel
 }
+
+export type SettingsPanel = 'plugins' | 'notification-history'
 
 export type PluginManagementRenderOptions = {
   element: HTMLElement | null
   language: LanguageCode
   plugins: PluginManagementItem[]
   busyPluginId: string | null
+  busyConfigPluginId: string | null
   importBusy: boolean
   resultText: string
+  configResultText: string
+  pluginConfigs: Record<string, Record<string, unknown>>
 }
 
 export function renderSettingsShell(options: SettingsShellRenderOptions) {
   const t = translations[options.language]
+  const activePanel = options.activePanel ?? 'plugins'
+  const pluginsActive = activePanel === 'plugins'
+  const notificationHistoryActive = activePanel === 'notification-history'
   return `
     <aside class="settings-sidebar">
-      <button class="settings-nav-item active" type="button" data-settings-panel="plugins">${escapeHtml(t.pluginManagement)}</button>
+      <button class="settings-nav-item ${pluginsActive ? 'active' : ''}" type="button" data-settings-panel="plugins" ${
+        pluginsActive ? 'aria-current="page"' : ''
+      }>${escapeHtml(t.pluginManagement)}</button>
+      <button class="settings-nav-item ${notificationHistoryActive ? 'active' : ''}" type="button" data-settings-panel="notification-history" ${
+        notificationHistoryActive ? 'aria-current="page"' : ''
+      }>${escapeHtml(t.notificationHistory)}</button>
     </aside>
     <section class="settings-content">
-      <div class="settings-heading">
-        <div>
-          <h2 id="settings-panel-title">${escapeHtml(t.pluginManagement)}</h2>
-          <p>${escapeHtml(t.pluginManagementDescription)}</p>
+      <div id="settings-panel-plugins" class="settings-panel" ${pluginsActive ? '' : 'hidden'}>
+        <div class="settings-heading">
+          <div>
+            <h2 id="settings-panel-title">${escapeHtml(t.pluginManagement)}</h2>
+            <p>${escapeHtml(t.pluginManagementDescription)}</p>
+          </div>
+          <button id="plugin-import" type="button">${escapeHtml(t.importPlugin)}</button>
         </div>
-        <button id="plugin-import" type="button">${escapeHtml(t.importPlugin)}</button>
+        <div id="plugin-import-result" class="settings-result"></div>
+        <div id="plugin-management-list" class="plugin-management-list"></div>
       </div>
-      <div id="plugin-import-result" class="settings-result"></div>
-      <div id="plugin-management-list" class="plugin-management-list"></div>
+      <div id="settings-panel-notification-history" class="settings-panel settings-notification-history" ${
+        notificationHistoryActive ? '' : 'hidden'
+      }>
+        <div class="settings-heading">
+          <div>
+            <h2>${escapeHtml(t.notificationHistory)}</h2>
+          </div>
+          <button id="settings-notification-history-refresh" type="button">${escapeHtml(t.refresh)}</button>
+        </div>
+        <ol id="settings-notification-history" class="notification-history-list"></ol>
+      </div>
     </section>
   `
 }
@@ -47,18 +74,29 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
   options.element.innerHTML = options.plugins
     .map((plugin) => {
       const busy = options.busyPluginId === plugin.id || isPluginTransitioning(plugin)
+      const pluginType = plugin.kind === 'notification' ? 'notification' : 'tool'
+      const pluginSubtitle = plugin.tool_id
+        ? `${plugin.id} · ${plugin.tool_id}`
+        : `${plugin.id} · ${pluginType}`
       return `
         <article class="plugin-card" data-plugin-id="${escapeHtml(plugin.id)}">
           <div class="plugin-card-main">
             <div>
               <h3>${escapeHtml(plugin.display_name)}</h3>
-              <p>${escapeHtml(plugin.id)} · ${escapeHtml(plugin.tool_id)}</p>
+              <p>${escapeHtml(pluginSubtitle)}</p>
             </div>
             <label class="plugin-enable-toggle">
               <span>${escapeHtml(plugin.enabled ? t.enabled : t.disabled)}</span>
               <input type="checkbox" data-plugin-toggle="${escapeHtml(plugin.id)}" ${plugin.enabled ? 'checked' : ''} ${busy ? 'disabled' : ''}>
             </label>
           </div>
+          ${renderPluginConfigForm(
+            plugin,
+            options.pluginConfigs[plugin.id] ?? {},
+            options.busyConfigPluginId === plugin.id,
+            options.configResultText,
+            t
+          )}
           ${plugin.source === 'external' ? renderPluginActions(plugin, busy, t.removePlugin) : ''}
           <dl class="plugin-meta">
             <dt>${escapeHtml(t.pluginSource)}</dt>
@@ -83,6 +121,77 @@ function renderPluginActions(plugin: PluginManagementItem, busy: boolean, remove
     <div class="plugin-card-actions">
       <button type="button" data-plugin-remove="${escapeHtml(plugin.id)}" ${busy ? 'disabled' : ''}>${escapeHtml(removeText)}</button>
     </div>
+  `
+}
+
+function renderPluginConfigForm(
+  plugin: PluginManagementItem,
+  config: Record<string, unknown>,
+  busy: boolean,
+  resultText: string,
+  t: (typeof translations)[LanguageCode]
+) {
+  if (!plugin.config_schema || plugin.config_schema.length === 0) {
+    return ''
+  }
+  return `
+    <form class="plugin-config-form" data-plugin-config-form="${escapeHtml(plugin.id)}">
+      <div class="plugin-config-heading">
+        <h4>${escapeHtml(t.pluginConfig)}</h4>
+        <button type="button" data-plugin-config-save="${escapeHtml(plugin.id)}" ${busy ? 'disabled' : ''}>${escapeHtml(
+          busy ? t.saving : t.save
+        )}</button>
+      </div>
+      <div class="plugin-config-fields">
+        ${plugin.config_schema
+          .map((field) => renderPluginConfigField(plugin.id, field, config[field.key]))
+          .join('')}
+      </div>
+      ${
+        resultText
+          ? `<p class="plugin-config-result">${escapeHtml(t.lastResult)}: ${escapeHtml(resultText)}</p>`
+          : ''
+      }
+    </form>
+  `
+}
+
+function renderPluginConfigField(pluginId: string, field: PluginConfigField, value: unknown) {
+  const inputId = `plugin-config-${pluginId}-${field.key}`
+  const type = field.type === 'secret' ? 'password' : field.type === 'url' ? 'url' : 'text'
+  const required = field.required ? 'required' : ''
+  if (field.type === 'boolean') {
+    return `
+      <label class="plugin-config-field boolean" for="${escapeHtml(inputId)}">
+        <span>${escapeHtml(field.label)}</span>
+        <input id="${escapeHtml(inputId)}" type="checkbox" data-plugin-config-field="${escapeHtml(
+          field.key
+        )}" ${value === true ? 'checked' : ''}>
+      </label>
+    `
+  }
+  if (field.type === 'select') {
+    return `
+      <label class="plugin-config-field" for="${escapeHtml(inputId)}">
+        <span>${escapeHtml(field.label)}</span>
+        <select id="${escapeHtml(inputId)}" data-plugin-config-field="${escapeHtml(field.key)}" ${required}>
+          ${(field.options ?? [])
+            .map(
+              (option) =>
+                `<option value="${escapeHtml(option)}" ${String(value ?? '') === option ? 'selected' : ''}>${escapeHtml(option)}</option>`
+            )
+            .join('')}
+        </select>
+      </label>
+    `
+  }
+  return `
+    <label class="plugin-config-field" for="${escapeHtml(inputId)}">
+      <span>${escapeHtml(field.label)}</span>
+      <input id="${escapeHtml(inputId)}" type="${type}" data-plugin-config-field="${escapeHtml(
+        field.key
+      )}" value="${escapeHtml(String(value ?? ''))}" ${required}>
+    </label>
   `
 }
 

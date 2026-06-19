@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use niuma_core::plugin::{
-    current_plugin_registry, PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState,
+    current_plugin_registry, resolve_plugin_config, PluginCapability, PluginManifest,
+    PluginRegistry, PluginRuntimeState, BUILTIN_BARK_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
 use niuma_core::store::SqliteStateStore;
@@ -55,7 +57,7 @@ fn reconcile_managed_plugins(
     managed: &mut HashMap<String, ManagedPlugin>,
 ) {
     let registry = current_plugin_registry();
-    let manifests = managed_event_watcher_manifests(&registry);
+    let manifests = managed_runtime_manifests(&registry);
     let current_ids = manifests
         .iter()
         .map(|manifest| manifest.id.clone())
@@ -86,21 +88,26 @@ fn reconcile_managed_plugins(
             entry.manifest = manifest;
             entry.next_start = Instant::now();
         }
-        tick_external_plugin(store, entry);
+        tick_managed_plugin(store, entry);
     }
 }
 
-fn managed_event_watcher_manifests(registry: &PluginRegistry) -> Vec<PluginManifest> {
+fn managed_runtime_manifests(registry: &PluginRegistry) -> Vec<PluginManifest> {
     registry
         .manifests()
         .iter()
-        .filter(|manifest| {
-            manifest
-                .capabilities
-                .contains(&PluginCapability::EventWatcher)
-        })
+        .filter(|manifest| is_managed_runtime_manifest(manifest))
         .cloned()
         .collect()
+}
+
+fn is_managed_runtime_manifest(manifest: &PluginManifest) -> bool {
+    manifest.capabilities.iter().any(|capability| {
+        matches!(
+            capability,
+            PluginCapability::EventWatcher | PluginCapability::EventConsumer
+        )
+    })
 }
 
 fn wait_for_plugin_reconcile_signal(
@@ -112,6 +119,10 @@ fn wait_for_plugin_reconcile_signal(
             match tokio::time::timeout(FALLBACK_RECONCILE_INTERVAL, receiver.recv()).await {
                 Ok(Ok(RuntimeEvent::StateChanged {
                     reason: StateChangeReason::ListenerConfigChanged,
+                    ..
+                }))
+                | Ok(Ok(RuntimeEvent::StateChanged {
+                    reason: StateChangeReason::PluginConfigChanged,
                     ..
                 }))
                 | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_)))
@@ -126,18 +137,28 @@ fn wait_for_plugin_reconcile_signal(
     });
 }
 
-fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
-    let enabled = store
-        .listener_config()
-        .map(|config| config.is_tool_enabled(&entry.manifest.tool_id))
-        .unwrap_or(false);
-
-    if !enabled {
+fn tick_managed_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
+    if !plugin_runtime_enabled(store, &entry.manifest) {
         stop_child(store, &entry.manifest, &mut entry.child);
         entry.next_start = Instant::now();
         save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::stopped());
         return;
     }
+
+    let launch_files_ready = match prepare_plugin_launch_files(store, &entry.manifest) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "NiumaNotifier plugin {} launch file update failed: {error}",
+                entry.manifest.id
+            );
+            if entry.child.is_none() {
+                entry.next_start = Instant::now() + Duration::from_secs(10);
+                save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::failed(error));
+            }
+            false
+        }
+    };
 
     if let Some(process) = entry.child.as_mut() {
         match process.try_wait() {
@@ -170,7 +191,7 @@ fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
         }
     }
 
-    if entry.child.is_none() && Instant::now() >= entry.next_start {
+    if launch_files_ready && entry.child.is_none() && Instant::now() >= entry.next_start {
         save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::starting());
         match spawn_plugin_process(&entry.manifest) {
             Ok(process) => {
@@ -188,6 +209,63 @@ fn tick_external_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
             }
         }
     }
+}
+
+fn prepare_plugin_launch_files(
+    store: &SqliteStateStore,
+    manifest: &PluginManifest,
+) -> Result<(), String> {
+    if manifest.id == BUILTIN_BARK_PLUGIN_ID || manifest.id == BUILTIN_NTFY_PLUGIN_ID {
+        write_notification_plugin_config(store, manifest, &plugin_config_path(&manifest.id))?;
+    }
+    Ok(())
+}
+
+fn write_notification_plugin_config(
+    store: &SqliteStateStore,
+    manifest: &PluginManifest,
+    path: &PathBuf,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建通知插件配置目录失败：{error}"))?;
+    }
+    let mut payload = notification_plugin_config_payload(store, manifest)?;
+    payload.insert(
+        "enabled".to_string(),
+        serde_json::json!(plugin_runtime_enabled(store, manifest)),
+    );
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("序列化通知插件配置失败：{error}"))?,
+    )
+    .map_err(|error| format!("写入通知插件配置失败：{error}"))
+}
+
+fn notification_plugin_config_payload(
+    store: &SqliteStateStore,
+    manifest: &PluginManifest,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let stored_config = store.plugin_config(&manifest.id)?;
+    let config = resolve_plugin_config(manifest, stored_config.clone());
+    if stored_config.is_none() {
+        // 首次启动写入 manifest 默认配置，后续只以 plugin_configs 为权威来源。
+        store.save_plugin_config(&manifest.id, &config)?;
+    }
+    Ok(config)
+}
+
+fn plugin_runtime_enabled(store: &SqliteStateStore, manifest: &PluginManifest) -> bool {
+    if let Some(tool) = &manifest.tool_id {
+        return store
+            .listener_config()
+            .map(|config| config.is_tool_enabled(tool))
+            .unwrap_or(false);
+    }
+    store
+        .plugin_enabled_map()
+        .map(|map| map.get(&manifest.id).copied().unwrap_or(false))
+        .unwrap_or(false)
 }
 
 fn spawn_plugin_process(manifest: &PluginManifest) -> Result<Child, String> {
@@ -210,7 +288,16 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
             format!("http://{}", niuma_api::local_api_addr()),
         )
         .env("NIUMA_PLUGIN_ID", &manifest.id)
-        .env("NIUMA_TOOL_ID", manifest.tool_id.as_str())
+        .env(
+            "NIUMA_PLUGIN_CONFIG_PATH",
+            plugin_config_path(&manifest.id)
+                .to_string_lossy()
+                .to_string(),
+        )
+        .env(
+            "NIUMA_PLUGIN_DATA_DIR",
+            plugin_data_dir(&manifest.id).to_string_lossy().to_string(),
+        )
         .env(PARENT_PID_ENV, std::process::id().to_string())
         .env(
             "NIUMA_STATE_PATH",
@@ -220,6 +307,9 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
         )
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(tool_id) = &manifest.tool_id {
+        process.env("NIUMA_TOOL_ID", tool_id.as_str());
+    }
     for (key, value) in &manifest.env {
         process.env(key, value);
     }
@@ -227,6 +317,19 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
         process.current_dir(base_dir);
     }
     Ok(process)
+}
+
+fn plugin_config_path(plugin_id: &str) -> PathBuf {
+    niuma_core::platform::paths::app_data_dir()
+        .join("plugin-configs")
+        .join(plugin_id)
+        .join("config.json")
+}
+
+fn plugin_data_dir(plugin_id: &str) -> PathBuf {
+    niuma_core::platform::paths::app_data_dir()
+        .join("plugin-data")
+        .join(plugin_id)
 }
 
 fn stop_child(store: &SqliteStateStore, manifest: &PluginManifest, child: &mut Option<Child>) {
@@ -295,14 +398,16 @@ fn command_has_path_separator(command: &str) -> bool {
 mod tests {
     use super::*;
     use niuma_core::models::ToolKind;
-    use niuma_core::plugin::{PluginCapability, PluginSource};
+    use niuma_core::plugin::{PluginCapability, PluginKind, PluginSource};
+    use serde_json::json;
     use std::collections::BTreeMap;
 
     #[test]
     fn resolves_relative_command_against_manifest_dir() {
         let manifest = PluginManifest {
             id: "demo".to_string(),
-            tool_id: ToolKind::Custom("demo".to_string()),
+            kind: PluginKind::Tool,
+            tool_id: Some(ToolKind::Custom("demo".to_string())),
             display_name: "Demo".to_string(),
             version: "0.1.0".to_string(),
             command: Some("./bin/demo".to_string()),
@@ -311,6 +416,7 @@ mod tests {
             platforms: Vec::new(),
             capabilities: vec![PluginCapability::EventWatcher],
             icon_url: None,
+            config_schema: Vec::new(),
             source: PluginSource::External,
             base_dir: Some(PathBuf::from("/tmp/plugin-demo")),
         };
@@ -325,7 +431,8 @@ mod tests {
     fn leaves_bare_command_for_path_lookup() {
         let manifest = PluginManifest {
             id: "demo".to_string(),
-            tool_id: ToolKind::Custom("demo".to_string()),
+            kind: PluginKind::Tool,
+            tool_id: Some(ToolKind::Custom("demo".to_string())),
             display_name: "Demo".to_string(),
             version: "0.1.0".to_string(),
             command: Some("definitely-missing-niuma-command".to_string()),
@@ -334,6 +441,7 @@ mod tests {
             platforms: Vec::new(),
             capabilities: vec![PluginCapability::EventWatcher],
             icon_url: None,
+            config_schema: Vec::new(),
             source: PluginSource::External,
             base_dir: Some(PathBuf::from("/tmp/plugin-demo")),
         };
@@ -358,20 +466,74 @@ mod tests {
     }
 
     #[test]
-    fn managed_event_watcher_manifests_include_builtin_codex() {
+    fn plugin_config_changed_wakes_plugin_manager_wait() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let bus = RuntimeEventBus::new();
+        let mut receiver = bus.subscribe();
+
+        bus.publish_state_changed(StateChangeReason::PluginConfigChanged);
+        let started_at = Instant::now();
+        wait_for_plugin_reconcile_signal(&runtime, &mut receiver);
+
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn managed_runtime_manifests_include_builtin_codex() {
         let registry = PluginRegistry::with_builtin_plugins();
-        let manifests = managed_event_watcher_manifests(&registry);
+        let manifests = managed_runtime_manifests(&registry);
+
+        assert_eq!(manifests.len(), 3);
+        assert!(manifests
+            .iter()
+            .any(|manifest| manifest.id == "builtin-codex"
+                && manifest.source == PluginSource::Builtin));
+        assert!(manifests
+            .iter()
+            .any(|manifest| manifest.id == "builtin-bark"
+                && manifest.source == PluginSource::Builtin));
+        assert!(manifests
+            .iter()
+            .any(|manifest| manifest.id == "builtin-ntfy"
+                && manifest.source == PluginSource::Builtin));
+    }
+
+    #[test]
+    fn managed_runtime_manifests_include_event_consumers() {
+        let mut registry = PluginRegistry::new();
+        registry.register(notification_consumer_manifest("builtin-bark"));
+
+        let manifests = managed_runtime_manifests(&registry);
 
         assert_eq!(manifests.len(), 1);
-        assert_eq!(manifests[0].id, "builtin-codex");
-        assert_eq!(manifests[0].source, PluginSource::Builtin);
+        assert_eq!(manifests[0].id, "builtin-bark");
+    }
+
+    #[test]
+    fn event_consumer_runtime_enabled_reads_plugin_enabled_map() {
+        let store = SqliteStateStore::new(test_sqlite_path("event_consumer_enabled"));
+        let mut enabled = BTreeMap::new();
+        enabled.insert("builtin-bark".to_string(), true);
+        store.save_plugin_enabled_map(&enabled).unwrap();
+        let manifest = notification_consumer_manifest("builtin-bark");
+
+        assert!(plugin_runtime_enabled(&store, &manifest));
+    }
+
+    #[test]
+    fn event_consumer_runtime_disabled_by_default() {
+        let store = SqliteStateStore::new(test_sqlite_path("event_consumer_disabled"));
+        let manifest = notification_consumer_manifest("builtin-bark");
+
+        assert!(!plugin_runtime_enabled(&store, &manifest));
     }
 
     #[test]
     fn build_plugin_command_injects_parent_pid() {
         let manifest = PluginManifest {
             id: "demo".to_string(),
-            tool_id: ToolKind::Custom("demo".to_string()),
+            kind: PluginKind::Tool,
+            tool_id: Some(ToolKind::Custom("demo".to_string())),
             display_name: "Demo".to_string(),
             version: "0.1.0".to_string(),
             command: Some("definitely-missing-niuma-command".to_string()),
@@ -380,6 +542,7 @@ mod tests {
             platforms: Vec::new(),
             capabilities: vec![PluginCapability::EventWatcher],
             icon_url: None,
+            config_schema: Vec::new(),
             source: PluginSource::External,
             base_dir: Some(PathBuf::from("/tmp/plugin-demo")),
         };
@@ -390,6 +553,29 @@ mod tests {
             command_env_value(&command, "NIUMA_PARENT_PID"),
             Some(std::process::id().to_string())
         );
+        assert!(
+            command_env_value(&command, "NIUMA_PLUGIN_CONFIG_PATH").is_some_and(|value| value
+                .contains("plugin-configs")
+                && value.ends_with("config.json"))
+        );
+        assert!(command_env_value(&command, "NIUMA_PLUGIN_DATA_DIR")
+            .is_some_and(|value| value.contains("plugin-data") && value.contains("demo")));
+    }
+
+    #[test]
+    fn bark_plugin_config_payload_uses_plugin_config_store() {
+        let store = SqliteStateStore::new(test_sqlite_path("bark_plugin_config_store"));
+        let manifest = niuma_core::plugin::builtin_bark_manifest();
+        let mut config = serde_json::Map::new();
+        config.insert("device_key".to_string(), json!("device-1"));
+        store.save_plugin_config(&manifest.id, &config).unwrap();
+
+        let payload = notification_plugin_config_payload(&store, &manifest).unwrap();
+
+        assert_eq!(payload.get("device_key"), Some(&json!("device-1")));
+        assert!(payload.get("server").is_none());
+        assert!(payload.get("group").is_none());
+        assert!(payload.get("icon_url").is_none());
     }
 
     fn command_env_value(command: &Command, key: &str) -> Option<String> {
@@ -400,5 +586,33 @@ mod tests {
                 None
             }
         })
+    }
+
+    fn notification_consumer_manifest(id: &str) -> PluginManifest {
+        PluginManifest {
+            id: id.to_string(),
+            kind: PluginKind::Notification,
+            tool_id: None,
+            display_name: "Bark".to_string(),
+            version: "0.1.0".to_string(),
+            command: Some("definitely-missing-niuma-command".to_string()),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            platforms: Vec::new(),
+            capabilities: vec![PluginCapability::EventConsumer],
+            icon_url: None,
+            config_schema: Vec::new(),
+            source: PluginSource::Builtin,
+            base_dir: None,
+        }
+    }
+
+    fn test_sqlite_path(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "niuma-plugin-runtime-{name}-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
     }
 }

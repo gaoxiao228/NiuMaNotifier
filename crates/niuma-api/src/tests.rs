@@ -7,7 +7,7 @@ use niuma_core::models::{EventType, NiumaEvent, ToolKind};
 use niuma_core::notification_store::{
     NotificationChannel, NotificationRecord, NotificationRecordStatus,
 };
-use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus};
+use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::store::SqliteStateStore;
 use serde_json::Value;
 use std::time::Duration;
@@ -409,53 +409,32 @@ async fn manual_test_empty_sessions_is_business_failure() {
 }
 
 #[tokio::test]
-async fn notification_config_round_trip_uses_standard_envelope() {
+async fn notification_config_routes_are_removed() {
     let router = app(SqliteStateStore::new(test_path(
-        "notification_config_round_trip",
+        "notification_config_routes_removed",
     )));
-    let body = serde_json::json!({
-        "channels": [{
-            "channel": "bark",
-            "enabled": true,
-            "payload": {
-                "server": "https://api.day.app",
-                "device_key": "plain:abc",
-                "group": "NiumaNotifier",
-                "icon_url": "",
-                "secret_ref": null
-            }
-        }]
-    });
 
-    let save = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/notification-config/save")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(save.status(), 200);
-    let save_value = response_json(save).await;
-    assert_eq!(save_value["code"], 0);
+    for (method, uri) in [
+        ("GET", "/api/v1/notification-config"),
+        ("POST", "/api/v1/notification-config/save"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let value = response_json(response).await;
 
-    let get = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/notification-config")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let get_value = response_json(get).await;
-
-    assert_eq!(get_value["code"], 0);
-    assert_eq!(get_value["data"]["channels"][0]["channel"], "bark");
+        assert_eq!(status, 404);
+        assert_eq!(value["code"], 900005);
+    }
 }
 
 #[tokio::test]
@@ -544,6 +523,100 @@ async fn plugins_list_returns_builtin_plugin_status() {
     assert_eq!(value["data"]["list"][0]["id"], "builtin-codex");
     assert_eq!(value["data"]["list"][0]["runtime_status"], "running");
     assert_eq!(value["data"]["list"][0]["enabled"], false);
+    assert!(value["data"]["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|plugin| plugin["id"] == "builtin-bark"
+            && plugin["capabilities"]
+                .as_array()
+                .is_some_and(|capabilities| capabilities
+                    .iter()
+                    .any(|capability| capability == "notification_test"))
+            && plugin["config_schema"]
+                .as_array()
+                .is_some_and(|schema| !schema.is_empty())));
+    assert!(value["data"]["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|plugin| plugin["id"] == "builtin-ntfy"
+            && plugin["capabilities"]
+                .as_array()
+                .is_some_and(|capabilities| capabilities
+                    .iter()
+                    .any(|capability| capability == "notification_test"))
+            && plugin["config_schema"]
+                .as_array()
+                .is_some_and(|schema| !schema.is_empty())));
+}
+
+#[tokio::test]
+async fn plugin_config_save_validates_required_fields_and_publishes_event() {
+    let store = SqliteStateStore::new(test_path("plugin_config_save"));
+    let bus = RuntimeEventBus::new();
+    let mut receiver = bus.subscribe();
+    let router =
+        app_with_bus_and_plugin_dir(store.clone(), bus, test_dir("plugin_config_save_dir"));
+
+    let invalid_body = serde_json::json!({
+        "plugin_id": "builtin-bark",
+        "config": {
+            "device_key": ""
+        }
+    });
+    let invalid = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/config")
+                .header("content-type", "application/json")
+                .body(Body::from(invalid_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let invalid_value = response_json(invalid).await;
+    assert_eq!(invalid_value["code"], 100101);
+
+    let valid_body = serde_json::json!({
+        "plugin_id": "builtin-bark",
+        "config": {
+            "device_key": "device-1"
+        }
+    });
+    let valid = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/config")
+                .header("content-type", "application/json")
+                .body(Body::from(valid_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let valid_value = response_json(valid).await;
+
+    assert_eq!(valid_value["code"], 0);
+    assert_eq!(valid_value["data"]["saved"], true);
+    assert_eq!(valid_value["data"]["config"]["device_key"], "device-1");
+    assert_eq!(
+        store
+            .plugin_config("builtin-bark")
+            .unwrap()
+            .unwrap()
+            .get("device_key"),
+        Some(&serde_json::json!("device-1"))
+    );
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        RuntimeEvent::StateChanged {
+            version: 1,
+            reason: niuma_core::runtime_event::StateChangeReason::PluginConfigChanged
+        }
+    );
 }
 
 #[tokio::test]
@@ -615,6 +688,97 @@ async fn plugin_import_rejects_builtin_plugin_id() {
         .as_str()
         .unwrap()
         .contains("不能覆盖内置插件"));
+}
+
+#[tokio::test]
+async fn plugin_enabled_updates_notification_plugin_map_and_publishes_event() {
+    let store = SqliteStateStore::new(test_path("plugin_enabled_notification"));
+    let bus = RuntimeEventBus::new();
+    let mut receiver = bus.subscribe();
+    let router = app_with_bus_and_plugin_dir(
+        store.clone(),
+        bus,
+        test_dir("plugin_enabled_notification_dir"),
+    );
+
+    let body = serde_json::json!({
+        "plugin_id": "builtin-bark",
+        "enabled": true
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/enabled")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["saved"], true);
+    assert_eq!(value["data"]["plugin_id"], "builtin-bark");
+    assert_eq!(value["data"]["enabled"], true);
+    assert_eq!(
+        store.plugin_enabled_map().unwrap().get("builtin-bark"),
+        Some(&true)
+    );
+    assert!(value["data"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|plugin| plugin["id"] == "builtin-bark" && plugin["enabled"] == true));
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        RuntimeEvent::StateChanged {
+            version: 1,
+            reason: niuma_core::runtime_event::StateChangeReason::PluginConfigChanged
+        }
+    );
+}
+
+#[tokio::test]
+async fn plugin_enabled_updates_tool_listener_config() {
+    let store = SqliteStateStore::new(test_path("plugin_enabled_tool"));
+    let bus = RuntimeEventBus::new();
+    let mut receiver = bus.subscribe();
+    let router =
+        app_with_bus_and_plugin_dir(store.clone(), bus, test_dir("plugin_enabled_tool_dir"));
+
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "enabled": true
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/enabled")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["plugin_id"], "builtin-codex");
+    assert_eq!(value["data"]["enabled"], true);
+    assert!(store
+        .listener_config()
+        .unwrap()
+        .is_tool_enabled(&ToolKind::Codex));
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        RuntimeEvent::StateChanged {
+            version: 1,
+            reason: niuma_core::runtime_event::StateChangeReason::ListenerConfigChanged
+        }
+    );
 }
 
 #[tokio::test]
@@ -763,84 +927,6 @@ async fn listener_config_rejects_string_enabled_as_business_failure() {
 }
 
 #[tokio::test]
-async fn notification_config_rejects_unknown_channel_as_business_failure() {
-    let router = app(SqliteStateStore::new(test_path(
-        "notification_config_invalid_channel",
-    )));
-    let response = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/notification-config/save")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"channels":[{"channel":"sms","enabled":true,"payload":{}}]}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let value = response_json(response).await;
-
-    assert_eq!(status, 200);
-    assert_eq!(value["code"], 100101);
-    assert!(value["data"].is_null());
-}
-
-#[tokio::test]
-async fn notification_config_rejects_string_payload_as_business_failure() {
-    let router = app(SqliteStateStore::new(test_path(
-        "notification_config_string_payload",
-    )));
-    let response = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/notification-config/save")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"channels":[{"channel":"bark","enabled":true,"payload":"bad"}]}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let value = response_json(response).await;
-
-    assert_eq!(status, 200);
-    assert_eq!(value["code"], 100101);
-    assert!(value["data"].is_null());
-}
-
-#[tokio::test]
-async fn notification_config_rejects_string_enabled_as_business_failure() {
-    let router = app(SqliteStateStore::new(test_path(
-        "notification_config_string_enabled",
-    )));
-    let response = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/notification-config/save")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"channels":[{"channel":"bark","enabled":"true","payload":{}}]}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let value = response_json(response).await;
-
-    assert_eq!(status, 200);
-    assert_eq!(value["code"], 100101);
-    assert!(value["data"].is_null());
-}
-
-#[tokio::test]
 async fn notification_records_returns_standard_list_envelope() {
     let store = SqliteStateStore::new(test_path("notification_records_list"));
     store
@@ -911,7 +997,7 @@ async fn sse_stream_allows_cross_origin_event_source() {
     let response = router
         .oneshot(
             Request::builder()
-                .uri("/api/v1/stream")
+                .uri("/api/v1/state/stream")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -939,7 +1025,7 @@ async fn sse_stream_emits_state_after_runtime_event() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/stream")
+                .uri("/api/v1/state/stream")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -990,7 +1076,7 @@ async fn sse_stream_emits_state_updates_to_each_connected_client() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/stream")
+                .uri("/api/v1/state/stream")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1000,7 +1086,7 @@ async fn sse_stream_emits_state_updates_to_each_connected_client() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/stream")
+                .uri("/api/v1/state/stream")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1037,6 +1123,315 @@ async fn sse_stream_emits_state_updates_to_each_connected_client() {
     assert!(second_updated.contains("\"status\":\"waiting_approval\""));
 }
 
+#[tokio::test]
+async fn events_stream_allows_cross_origin_event_source() {
+    let router = app(SqliteStateStore::new(test_path("events_sse_cors")));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "*"
+    );
+}
+
+#[tokio::test]
+async fn events_stream_emits_applied_event_after_post_event() {
+    let store = SqliteStateStore::new(test_path("events_sse_post_event"));
+    let router = app(store);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let event = sample_event();
+    let post = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/events")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(post.status(), 200);
+
+    let chunk = next_sse_chunk(&mut body).await;
+    assert!(chunk.contains("event: event"));
+    assert!(chunk.contains("id: event-1"));
+    assert!(chunk.contains("\"id\":\"event-1\""));
+    assert!(chunk.contains("\"event_type\":\"approval_requested\""));
+    assert!(!chunk.contains("NiumaEventsAppended"));
+}
+
+#[tokio::test]
+async fn events_stream_skips_duplicate_events() {
+    let store = SqliteStateStore::new(test_path("events_sse_duplicate"));
+    let router = app(store);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let event = sample_event();
+    for _ in 0..2 {
+        let post = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/events")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), 200);
+    }
+
+    let chunk = next_sse_chunk(&mut body).await;
+    assert!(chunk.contains("id: event-1"));
+    assert!(
+        no_sse_chunk_within(&mut body, Duration::from_millis(250)).await,
+        "重复事件不应再次广播给事件消费者"
+    );
+}
+
+#[tokio::test]
+async fn events_stream_emits_notification_test_requests() {
+    let store = SqliteStateStore::new(test_path("events_sse_notification_test"));
+    let runtime_events = RuntimeEventBus::new();
+    let router = app_with_bus(store, runtime_events.clone());
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+    let request = PluginNotificationTestRequest {
+        test_id: "manual-test:builtin-ntfy:1".to_string(),
+        plugin_id: "builtin-ntfy".to_string(),
+        title: "NiuMa 测试通知".to_string(),
+        body: "测试正文".to_string(),
+        created_at: Utc::now(),
+    };
+
+    runtime_events.publish_plugin_notification_test(request);
+
+    let chunk = next_sse_chunk(&mut body).await;
+    assert!(chunk.contains("event: notification_test"));
+    assert!(chunk.contains("id: manual-test:builtin-ntfy:1"));
+    assert!(chunk.contains("\"plugin_id\":\"builtin-ntfy\""));
+    assert!(!chunk.contains("NiumaEventsAppended"));
+}
+
+#[tokio::test]
+async fn plugin_notification_results_save_sent_result() {
+    let store = SqliteStateStore::new(test_path("plugin_notification_result_sent"));
+    store.append_event(sample_event()).unwrap();
+    let router = app_with_bus_and_plugin_dir(
+        store.clone(),
+        RuntimeEventBus::new(),
+        test_dir("plugin_notification_result_sent_dir"),
+    );
+    let body = serde_json::json!({
+        "plugin_id": "builtin-bark",
+        "event_id": "event-1",
+        "status": "sent",
+        "title": "需要处理",
+        "body": "项目：demo",
+        "reason": "approval_requested",
+        "sent_at": "2026-06-19T12:00:00Z"
+    });
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/notification-results")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["saved"], true);
+    assert_eq!(
+        value["data"]["record_id"],
+        "plugin_notification:builtin-bark:event-1"
+    );
+    let records = store.notification_history_records(20).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].plugin_id.as_deref(), Some("builtin-bark"));
+    assert_eq!(records[0].channel, "builtin-bark");
+}
+
+#[tokio::test]
+async fn plugin_notification_results_rejects_non_notification_plugin() {
+    let store = SqliteStateStore::new(test_path("plugin_notification_result_non_notification"));
+    store.append_event(sample_event()).unwrap();
+    let router = app(store);
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "event_id": "event-1",
+        "status": "sent"
+    });
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/notification-results")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("不是通知插件"));
+}
+
+#[tokio::test]
+async fn plugin_notification_results_rejects_unknown_event() {
+    let router = app(SqliteStateStore::new(test_path(
+        "plugin_notification_result_unknown_event",
+    )));
+    let body = serde_json::json!({
+        "plugin_id": "builtin-ntfy",
+        "event_id": "missing-event",
+        "status": "failed",
+        "error_message": "network failed"
+    });
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/notification-results")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("事件不存在"));
+}
+
+#[tokio::test]
+async fn plugin_notification_test_results_save_sent_result() {
+    let store = SqliteStateStore::new(test_path("plugin_notification_test_result_sent"));
+    let router = app_with_bus_and_plugin_dir(
+        store.clone(),
+        RuntimeEventBus::new(),
+        test_dir("plugin_notification_test_result_sent_dir"),
+    );
+    let body = serde_json::json!({
+        "plugin_id": "builtin-ntfy",
+        "test_id": "manual-test:builtin-ntfy:1",
+        "status": "sent",
+        "title": "NiuMa 测试通知",
+        "body": "测试正文",
+        "sent_at": "2026-06-19T12:00:00Z"
+    });
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/notification-test-results")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["saved"], true);
+    assert_eq!(
+        value["data"]["record_id"],
+        "plugin_notification_test:builtin-ntfy:manual-test:builtin-ntfy:1"
+    );
+    let records = store.notification_history_records(20).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].plugin_id.as_deref(), Some("builtin-ntfy"));
+    assert_eq!(records[0].reason.as_deref(), Some("manual_test"));
+    assert_eq!(records[0].event_type, EventType::SessionActivity);
+}
+
+#[tokio::test]
+async fn plugin_notification_test_results_rejects_non_notification_plugin() {
+    let router = app(SqliteStateStore::new(test_path(
+        "plugin_notification_test_result_non_notification",
+    )));
+    let body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "test_id": "manual-test:builtin-codex:1",
+        "status": "sent"
+    });
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/notification-test-results")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("不是通知插件"));
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
@@ -1050,6 +1445,10 @@ async fn next_sse_chunk(body: &mut Body) -> String {
         .expect("SSE frame 读取成功");
     let bytes = frame.into_data().expect("SSE frame 应包含数据");
     String::from_utf8(bytes.to_vec()).expect("SSE frame 应是 UTF-8")
+}
+
+async fn no_sse_chunk_within(body: &mut Body, timeout: Duration) -> bool {
+    tokio::time::timeout(timeout, body.frame()).await.is_err()
 }
 
 fn sample_event() -> NiumaEvent {

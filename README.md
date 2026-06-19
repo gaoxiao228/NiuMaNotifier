@@ -67,7 +67,7 @@ target/release/bundle/dmg/
 
 ## Local API and SSE
 
-NiuMaNotifier exposes a local SSE stream for external status panels, automation scripts, and notification agents. By default, the Local API listens on `http://127.0.0.1:27874`, and the main-state stream is available at `/api/v1/stream`.
+NiuMaNotifier exposes a local SSE stream for external status panels, automation scripts, and notification agents. By default, the Local API listens on `http://127.0.0.1:27874`, and the main-state stream is available at `/api/v1/state/stream`.
 
 See the integration guide for endpoint details, state fields, reset behavior, and examples:
 

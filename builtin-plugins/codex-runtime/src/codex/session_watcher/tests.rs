@@ -626,7 +626,7 @@ fn resolves_permission_when_output_is_seen_without_cached_approval() {
 }
 
 #[test]
-fn event_id_is_stable_unique_and_dedupe_key_format_is_unchanged() {
+fn event_id_is_stable_and_completed_dedupe_key_matches_hook() {
     let mut parser = CodexJsonlParser::default();
     parser
         .parse_line(
@@ -657,7 +657,7 @@ fn event_id_is_stable_unique_and_dedupe_key_format_is_unchanged() {
     );
     assert_eq!(
         completed.dedupe_key,
-        "codex_file:session-123:turn-1:task_complete"
+        "codex:session-123:turn-1:assistant_message_completed:2c3bb8b8232e2744"
     );
 }
 

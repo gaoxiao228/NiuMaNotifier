@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,8 +12,9 @@ use crate::models::{
     SessionStatus, ToolKind,
 };
 use crate::notification_store::{
-    insert_record_if_absent, load_channels, load_records, save_channels, update_record_result,
-    NotificationChannelConfig, NotificationRecord, NotificationRecordStatus,
+    insert_record_if_absent, load_history_records, load_plugin_result, load_records,
+    update_record_result, upsert_plugin_result, NotificationHistoryRecord, NotificationRecord,
+    NotificationRecordStatus, PluginNotificationResult,
 };
 use crate::platform::locale::LanguagePreference;
 use crate::plugin::PluginRuntimeState;
@@ -26,6 +28,7 @@ mod transitions;
 use persistence::{load_json_rows, save_state};
 use public_events::{
     append_public_event, clear_public_events, load_public_event_by_id, load_public_events,
+    public_event_dedupe_key_exists,
 };
 use schema::init_schema;
 use transitions::{
@@ -86,6 +89,7 @@ pub struct MainStateInput {
 
 const LISTENER_CONFIG_KEY: &str = "listener_config";
 const LANGUAGE_PREFERENCE_KEY: &str = "language_preference";
+const PLUGIN_ENABLED_MAP_KEY: &str = "plugin_enabled_map";
 const PLUGIN_RUNTIME_STATES_KEY: &str = "plugin_runtime_states";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -122,7 +126,7 @@ impl SqliteStateStore {
         let mut state = self.load_with_connection(&tx)?;
         let mut applied_events = Vec::new();
         for event in events {
-            if already_applied(&state, &event) {
+            if self.event_already_applied(&tx, &state, &event)? {
                 continue;
             }
             if is_late_terminal_activity(&state.sessions, &event) {
@@ -140,6 +144,19 @@ impl SqliteStateStore {
             state,
             applied_events,
         })
+    }
+
+    fn event_already_applied(
+        &self,
+        connection: &Connection,
+        state: &StoredState,
+        event: &NiumaEvent,
+    ) -> Result<bool, String> {
+        if already_applied(state, event) {
+            return Ok(true);
+        }
+        // 不同事件源可能生成不同 id，但共享同一 dedupe_key；写入前查库避免双路事件重复广播。
+        public_event_dedupe_key_exists(connection, &event.dedupe_key)
     }
 
     pub fn mark_stale_running_sessions(
@@ -190,7 +207,7 @@ impl SqliteStateStore {
 
         let mut staled_count = 0;
         for event in events {
-            if already_applied(&state, &event) {
+            if self.event_already_applied(&tx, &state, &event)? {
                 continue;
             }
             upsert_session(&mut state.sessions, &event);
@@ -250,20 +267,6 @@ impl SqliteStateStore {
         load_public_event_by_id(&connection, event_id)
     }
 
-    pub fn notification_channels(&self) -> Result<Vec<NotificationChannelConfig>, String> {
-        let connection = self.open()?;
-        load_channels(&connection)
-    }
-
-    pub fn save_notification_channels(
-        &self,
-        configs: Vec<NotificationChannelConfig>,
-    ) -> Result<(), String> {
-        let connection = self.open()?;
-        // 按 channel id upsert 传入配置；未传入的渠道配置会保留。
-        save_channels(&connection, &configs)
-    }
-
     pub fn insert_notification_record_if_absent(
         &self,
         record: &NotificationRecord,
@@ -292,6 +295,31 @@ impl SqliteStateStore {
     pub fn notification_records(&self, limit: usize) -> Result<Vec<NotificationRecord>, String> {
         let connection = self.open()?;
         load_records(&connection, limit)
+    }
+
+    pub fn save_plugin_notification_result(
+        &self,
+        result: &PluginNotificationResult,
+    ) -> Result<(), String> {
+        let connection = self.open()?;
+        upsert_plugin_result(&connection, result)
+    }
+
+    pub fn plugin_notification_result(
+        &self,
+        plugin_id: &str,
+        event_id: &str,
+    ) -> Result<Option<PluginNotificationResult>, String> {
+        let connection = self.open()?;
+        load_plugin_result(&connection, plugin_id, event_id)
+    }
+
+    pub fn notification_history_records(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<NotificationHistoryRecord>, String> {
+        let connection = self.open()?;
+        load_history_records(&connection, limit)
     }
 
     pub fn listener_config(&self) -> Result<ListenerConfig, String> {
@@ -369,6 +397,96 @@ impl SqliteStateStore {
                 params![LANGUAGE_PREFERENCE_KEY, payload, Utc::now().to_rfc3339()],
             )
             .map_err(|error| format!("保存语言偏好失败：{error}"))?;
+        Ok(())
+    }
+
+    pub fn plugin_enabled_map(&self) -> Result<BTreeMap<String, bool>, String> {
+        let connection = self.open()?;
+        let payload = connection
+            .query_row(
+                "SELECT payload FROM app_settings WHERE key = ?1",
+                [PLUGIN_ENABLED_MAP_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("读取插件启用配置失败：{error}"))?;
+        match payload {
+            Some(payload) => serde_json::from_str(&payload)
+                .map_err(|error| format!("解析插件启用配置失败：{error}")),
+            None => Ok(BTreeMap::new()),
+        }
+    }
+
+    pub fn save_plugin_enabled_map(&self, map: &BTreeMap<String, bool>) -> Result<(), String> {
+        let connection = self.open()?;
+        let payload = serde_json::to_string(map)
+            .map_err(|error| format!("序列化插件启用配置失败：{error}"))?;
+        connection
+            .execute(
+                "INSERT INTO app_settings (key, payload, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at",
+                params![PLUGIN_ENABLED_MAP_KEY, payload, Utc::now().to_rfc3339()],
+            )
+            .map_err(|error| format!("保存插件启用配置失败：{error}"))?;
+        Ok(())
+    }
+
+    pub fn plugin_config(
+        &self,
+        plugin_id: &str,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+        let connection = self.open()?;
+        let payload = connection
+            .query_row(
+                "SELECT payload FROM plugin_configs WHERE plugin_id = ?1",
+                [plugin_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("读取插件配置失败：{error}"))?;
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        let value = serde_json::from_str::<serde_json::Value>(&payload)
+            .map_err(|error| format!("解析插件配置失败：{error}"))?;
+        let Some(object) = value.as_object() else {
+            return Err(format!("插件配置格式无效：{plugin_id}"));
+        };
+        Ok(Some(object.clone()))
+    }
+
+    pub fn save_plugin_config(
+        &self,
+        plugin_id: &str,
+        config: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        let connection = self.open()?;
+        let payload = serde_json::to_string(config)
+            .map_err(|error| format!("序列化插件配置失败：{error}"))?;
+        connection
+            .execute(
+                "INSERT INTO plugin_configs (plugin_id, payload, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(plugin_id) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at",
+                params![plugin_id, payload, Utc::now().to_rfc3339()],
+            )
+            .map_err(|error| format!("保存插件配置失败：{error}"))?;
+        Ok(())
+    }
+
+    pub fn remove_plugin_config(&self, plugin_id: &str) -> Result<(), String> {
+        let connection = self.open()?;
+        connection
+            .execute(
+                "DELETE FROM plugin_configs WHERE plugin_id = ?1",
+                [plugin_id],
+            )
+            .map_err(|error| format!("移除插件配置失败：{error}"))?;
         Ok(())
     }
 

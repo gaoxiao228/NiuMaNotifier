@@ -1,11 +1,11 @@
 use chrono::{TimeZone, Utc};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::listener_config::ListenerConfig;
 use crate::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
-use crate::notification_config::{NotificationConfigErrorKind, NotificationConfigService};
 use crate::notification_store::{
-    NotificationChannel, NotificationChannelConfig, NotificationRecord, NotificationRecordStatus,
+    NotificationChannel, NotificationRecord, NotificationRecordStatus, PluginNotificationResult,
 };
 use crate::store::SqliteStateStore;
 
@@ -131,6 +131,11 @@ fn sqlite_schema_creates_first_release_columns_and_indexes() {
             "payload",
         ],
     );
+    assert_table_has_columns(
+        &connection,
+        "plugin_configs",
+        &["plugin_id", "payload", "updated_at"],
+    );
 
     assert_index_exists(&connection, "idx_sessions_last_activity_at");
     assert_index_exists(&connection, "idx_attention_items_created_at");
@@ -193,6 +198,59 @@ fn append_event_deduplicates_by_dedupe_key() {
 
     assert!(state.events.is_empty());
     assert_eq!(state.sessions.len(), 1);
+}
+
+#[test]
+fn append_event_deduplicates_different_ids_by_public_dedupe_key() {
+    let store = SqliteStateStore::new(test_sqlite_path(
+        "append_event_deduplicates_different_ids_by_public_dedupe_key",
+    ));
+    let first = sample_session_event(
+        "same-public-dedupe",
+        "session-public-dedupe",
+        EventType::AssistantMessageCompleted,
+        1_000,
+    );
+    let mut second = sample_session_event(
+        "same-public-dedupe",
+        "session-public-dedupe",
+        EventType::AssistantMessageCompleted,
+        2_000,
+    );
+    second.id = "event_different_id_same_dedupe".to_string();
+
+    store.append_event(first).unwrap();
+    let result = store.append_events_with_result(vec![second]).unwrap();
+
+    assert!(result.applied_events.is_empty());
+    assert_eq!(store.public_recent_events(10).unwrap().len(), 1);
+}
+
+#[test]
+fn append_events_deduplicates_same_batch_by_public_dedupe_key() {
+    let store = SqliteStateStore::new(test_sqlite_path(
+        "append_events_deduplicates_same_batch_by_public_dedupe_key",
+    ));
+    let first = sample_session_event(
+        "same-batch-public-dedupe",
+        "session-batch-dedupe",
+        EventType::AssistantMessageCompleted,
+        1_000,
+    );
+    let mut second = sample_session_event(
+        "same-batch-public-dedupe",
+        "session-batch-dedupe",
+        EventType::AssistantMessageCompleted,
+        2_000,
+    );
+    second.id = "event_different_batch_id_same_dedupe".to_string();
+
+    let result = store
+        .append_events_with_result(vec![first.clone(), second])
+        .unwrap();
+
+    assert_eq!(result.applied_events, vec![first]);
+    assert_eq!(store.public_recent_events(10).unwrap().len(), 1);
 }
 
 #[test]
@@ -762,31 +820,6 @@ fn reset_clears_events_and_sessions() {
 }
 
 #[test]
-fn notification_channels_survive_state_reset() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_config_reset"));
-    let config = NotificationChannelConfig {
-        channel: NotificationChannel::Bark,
-        enabled: true,
-        payload: serde_json::json!({
-            "server": "https://api.day.app",
-            "device_key": "plain:abc",
-            "group": "NiumaNotifier",
-            "icon_url": "",
-            "secret_ref": null
-        }),
-        updated_at: chrono::Utc::now(),
-    };
-
-    store
-        .save_notification_channels(vec![config.clone()])
-        .unwrap();
-    store.reset().unwrap();
-
-    let channels = store.notification_channels().unwrap();
-    assert_eq!(channels, vec![config]);
-}
-
-#[test]
 fn notification_records_dedupe_by_event_and_channel() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_records_dedupe"));
     let record = NotificationRecord {
@@ -863,6 +896,45 @@ fn notification_record_result_can_be_updated_after_reservation() {
     let records = store.notification_records(20).unwrap();
     assert_eq!(records[0].status, NotificationRecordStatus::Sent);
     assert!(records[0].sent_at.is_some());
+}
+
+#[test]
+fn plugin_notification_result_upserts_by_plugin_and_event() {
+    let store = SqliteStateStore::new(test_sqlite_path("plugin_notification_result_upsert"));
+    let mut result =
+        sample_plugin_notification_result("plugin-record-1", "builtin-bark", "event-1");
+
+    store.save_plugin_notification_result(&result).unwrap();
+    result.status = NotificationRecordStatus::Failed;
+    result.error_message = Some("network failed".to_string());
+    result.sent_at = None;
+    store.save_plugin_notification_result(&result).unwrap();
+
+    let records = store.notification_history_records(20).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].plugin_id.as_deref(), Some("builtin-bark"));
+    assert_eq!(records[0].channel, "builtin-bark");
+    assert_eq!(records[0].status, NotificationRecordStatus::Failed);
+    assert_eq!(records[0].error_message.as_deref(), Some("network failed"));
+}
+
+#[test]
+fn notification_history_records_merge_legacy_and_plugin_results() {
+    let store = SqliteStateStore::new(test_sqlite_path("notification_history_merge"));
+    let legacy =
+        sample_notification_record("legacy-record", "event-legacy", NotificationChannel::Ntfy);
+    let plugin = sample_plugin_notification_result("plugin-record", "builtin-ntfy", "event-plugin");
+
+    store.insert_notification_record_if_absent(&legacy).unwrap();
+    store.save_plugin_notification_result(&plugin).unwrap();
+
+    let records = store.notification_history_records(20).unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records
+        .iter()
+        .any(|record| record.channel == "ntfy" && record.plugin_id.is_none()));
+    assert!(records.iter().any(|record| record.channel == "builtin-ntfy"
+        && record.plugin_id.as_deref() == Some("builtin-ntfy")));
 }
 
 #[test]
@@ -1060,53 +1132,6 @@ fn sqlite_store_matches_core_status_flow() {
 }
 
 #[test]
-fn notification_config_service_parses_saves_and_loads_channels() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_config_service_round_trip"));
-    let service = NotificationConfigService::new(store);
-    let value = serde_json::json!({
-        "channels": [
-            {
-                "channel": "bark",
-                "enabled": true,
-                "payload": { "device_key": "device-1" }
-            }
-        ]
-    });
-
-    let saved = service.save_from_value(&value).unwrap();
-    let channels = service.channels().unwrap();
-
-    assert_eq!(saved.len(), 1);
-    assert_eq!(channels.len(), 1);
-    assert_eq!(channels[0].channel, NotificationChannel::Bark);
-    assert!(channels[0].enabled);
-    assert_eq!(channels[0].payload["device_key"], "device-1");
-}
-
-#[test]
-fn notification_config_service_returns_business_validation_message() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_config_service_validation"));
-    let service = NotificationConfigService::new(store);
-    let value = serde_json::json!({
-        "channels": [
-            {
-                "channel": "sms",
-                "enabled": true,
-                "payload": {}
-            }
-        ]
-    });
-
-    let error = service.save_from_value(&value).unwrap_err();
-
-    assert_eq!(
-        error.kind(),
-        NotificationConfigErrorKind::BusinessValidation
-    );
-    assert_eq!(error.message(), "channel 仅支持 bark 或 ntfy");
-}
-
-#[test]
 fn listener_config_defaults_to_codex_disabled_and_persists() {
     let path = test_sqlite_path("listener_config_default_persist");
     let store = SqliteStateStore::new(path.clone());
@@ -1122,6 +1147,45 @@ fn listener_config_defaults_to_codex_disabled_and_persists() {
 
     assert!(!default_config.codex_listening_enabled);
     assert!(reloaded.codex_listening_enabled);
+}
+
+#[test]
+fn plugin_enabled_map_defaults_empty_and_persists() {
+    let path = test_sqlite_path("plugin_enabled_map_default_persist");
+    let store = SqliteStateStore::new(path.clone());
+    let mut enabled = BTreeMap::new();
+    enabled.insert("builtin-bark".to_string(), true);
+
+    let default_map = store.plugin_enabled_map().unwrap();
+    store.save_plugin_enabled_map(&enabled).unwrap();
+    let reloaded = SqliteStateStore::new(path).plugin_enabled_map().unwrap();
+
+    assert!(default_map.is_empty());
+    assert_eq!(reloaded.get("builtin-bark"), Some(&true));
+}
+
+#[test]
+fn plugin_config_defaults_empty_persists_and_removes() {
+    let path = test_sqlite_path("plugin_config_persist");
+    let store = SqliteStateStore::new(path.clone());
+    let mut config = serde_json::Map::new();
+    config.insert("device_key".to_string(), serde_json::json!("device-1"));
+
+    assert!(store.plugin_config("builtin-bark").unwrap().is_none());
+    store.save_plugin_config("builtin-bark", &config).unwrap();
+    let reloaded = SqliteStateStore::new(path.clone())
+        .plugin_config("builtin-bark")
+        .unwrap()
+        .unwrap();
+    SqliteStateStore::new(path)
+        .remove_plugin_config("builtin-bark")
+        .unwrap();
+
+    assert_eq!(
+        reloaded.get("device_key"),
+        Some(&serde_json::json!("device-1"))
+    );
+    assert!(store.plugin_config("builtin-bark").unwrap().is_none());
 }
 
 #[test]
@@ -1493,6 +1557,26 @@ fn sample_notification_record(
         error_message: None,
         created_at: Utc.timestamp_opt(1_000, 0).single().unwrap(),
         sent_at: Some(Utc.timestamp_opt(1_001, 0).single().unwrap()),
+    }
+}
+
+fn sample_plugin_notification_result(
+    id: &str,
+    plugin_id: &str,
+    event_id: &str,
+) -> PluginNotificationResult {
+    PluginNotificationResult {
+        id: id.to_string(),
+        plugin_id: plugin_id.to_string(),
+        event_id: event_id.to_string(),
+        event_type: EventType::TaskFailed,
+        status: NotificationRecordStatus::Sent,
+        title: Some("任务失败".to_string()),
+        body: Some("项目：demo\n插件通知详情".to_string()),
+        reason: Some("task_failed".to_string()),
+        error_message: None,
+        created_at: Utc.timestamp_opt(1_002, 0).single().unwrap(),
+        sent_at: Some(Utc.timestamp_opt(1_003, 0).single().unwrap()),
     }
 }
 

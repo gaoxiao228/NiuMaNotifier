@@ -1,0 +1,20 @@
+[package]
+name = "niuma-bark-plugin-runtime"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2", default-features = true }
+
+[[bin]]
+name = "niuma-plugin-bark"
+path = "src/main.rs"

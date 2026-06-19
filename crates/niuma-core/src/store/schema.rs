@@ -44,13 +44,6 @@ pub(super) fn init_schema(connection: &Connection) -> Result<(), String> {
                 created_at TEXT NOT NULL,
                 payload TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS notification_channels (
-                id TEXT PRIMARY KEY,
-                channel TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                payload TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS notification_records (
                 id TEXT PRIMARY KEY,
                 event_id TEXT NOT NULL,
@@ -65,8 +58,27 @@ pub(super) fn init_schema(connection: &Connection) -> Result<(), String> {
                 sent_at TEXT,
                 UNIQUE(event_id, channel)
             );
+            CREATE TABLE IF NOT EXISTS plugin_notification_results (
+                id TEXT PRIMARY KEY,
+                plugin_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                title TEXT,
+                body TEXT,
+                reason TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                sent_at TEXT,
+                UNIQUE(plugin_id, event_id)
+            );
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS plugin_configs (
+                plugin_id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -79,6 +91,8 @@ pub(super) fn init_schema(connection: &Connection) -> Result<(), String> {
                 ON public_events(created_at);
             CREATE INDEX IF NOT EXISTS idx_notification_records_created_at
                 ON notification_records(created_at);
+            CREATE INDEX IF NOT EXISTS idx_plugin_notification_results_created_at
+                ON plugin_notification_results(created_at);
             ",
         )
         .map_err(|error| format!("初始化 SQLite 状态库失败：{error}"))

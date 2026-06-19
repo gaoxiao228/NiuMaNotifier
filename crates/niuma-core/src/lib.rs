@@ -7,8 +7,6 @@ pub mod listener_config;
 pub mod local_api_client;
 pub mod main_state;
 pub mod models;
-pub mod notification;
-pub mod notification_config;
 pub mod notification_store;
 pub mod platform;
 pub mod plugin;

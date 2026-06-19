@@ -1,7 +1,6 @@
 import type {
-  NotificationChannel,
-  NotificationChannelConfig,
   NotificationRecord,
+  PluginManagementItem,
 } from './api'
 import {
   translateEventType,
@@ -12,16 +11,13 @@ import {
 } from './i18n'
 import { escapeHtml, formatLocalTime } from './viewUtils'
 
-const barkIconUrl = '/assets/bark-icon.png'
-const ntfyIconUrl = '/assets/ntfy-logo.svg'
-
 export type NotificationPageRenderOptions = {
   formElement: HTMLElement | null
   settingsTitleElement: HTMLElement | null
   language: LanguageCode
-  channels: NotificationChannelConfig[]
+  notificationPlugins: PluginManagementItem[]
   resultText: string
-  busyChannel: NotificationChannel | null
+  busyPluginId: string | null
 }
 
 export type NotificationHistoryRenderOptions = {
@@ -32,7 +28,7 @@ export type NotificationHistoryRenderOptions = {
 }
 
 export type NotificationTestFailure = {
-  channel: NotificationChannel
+  pluginId: string
   message: string
 }
 
@@ -41,12 +37,15 @@ export function renderNotificationPage(options: NotificationPageRenderOptions) {
   if (!options.formElement) {
     return
   }
-  const bark = channelConfig(options.channels, 'bark')
-  const ntfy = channelConfig(options.channels, 'ntfy')
   renderNotificationTitles(options)
+  const pluginList =
+    options.notificationPlugins.length > 0
+      ? options.notificationPlugins.map((plugin) => renderNotificationPluginItem(plugin, options)).join('')
+      : `<p class="empty">${escapeHtml(t.noPlugins)}</p>`
   options.formElement.innerHTML = `
-    ${renderChannelForm(options, 'bark', t.barkSettings, bark, ['device_key'])}
-    ${renderChannelForm(options, 'ntfy', t.ntfySettings, ntfy, ['topic'])}
+    <div class="notification-plugin-list">
+      ${pluginList}
+    </div>
     <p class="notification-result">${escapeHtml(t.lastResult)}: ${escapeHtml(
       options.resultText || t.none
     )}</p>
@@ -68,44 +67,22 @@ export function renderNotificationResult(
 
 export function formatNotificationTestResult(
   language: LanguageCode,
-  sentChannels: NotificationChannel[],
-  failedChannels: NotificationTestFailure[]
+  sentPluginIds: string[],
+  failedPlugins: NotificationTestFailure[]
 ) {
   const t = translations[language]
   const parts: string[] = []
-  if (sentChannels.length > 0) {
-    parts.push(`${t.sent}: ${sentChannels.join(' / ')}`)
+  if (sentPluginIds.length > 0) {
+    parts.push(`${t.sent}: ${sentPluginIds.join(' / ')}`)
   }
-  if (failedChannels.length > 0) {
+  if (failedPlugins.length > 0) {
     parts.push(
-      `${t.error}: ${failedChannels
-        .map((item) => `${item.channel}: ${item.message}`)
+      `${t.error}: ${failedPlugins
+        .map((item) => `${item.pluginId}: ${item.message}`)
         .join(' / ')}`
     )
   }
   return parts.join('; ')
-}
-
-export function collectNotificationChannels(
-  formElement: HTMLElement | null
-): NotificationChannelConfig[] {
-  return (['bark', 'ntfy'] as NotificationChannel[]).map((channel) => {
-    const root = formElement?.querySelector<HTMLElement>(
-      `.notification-channel[data-channel="${channel}"]`
-    )
-    const payload: Record<string, unknown> = { secret_ref: null }
-    root?.querySelectorAll<HTMLInputElement>('input[data-field]').forEach((input) => {
-      const field = input.dataset.field
-      if (field && field !== 'enabled') {
-        payload[field] = input.value
-      }
-    })
-    return {
-      channel,
-      enabled: root?.querySelector<HTMLInputElement>('input[data-field="enabled"]')?.checked ?? false,
-      payload
-    }
-  })
 }
 
 export function renderNotificationHistoryOnly(options: NotificationHistoryRenderOptions) {
@@ -115,66 +92,58 @@ export function renderNotificationHistoryOnly(options: NotificationHistoryRender
 function renderNotificationTitles(options: NotificationPageRenderOptions) {
   const t = translations[options.language]
   if (options.settingsTitleElement) {
-    options.settingsTitleElement.textContent = t.notificationSettings
+    options.settingsTitleElement.textContent = t.notificationPlugins
   }
 }
 
-function channelConfig(
-  channels: NotificationChannelConfig[],
-  channel: NotificationChannel
-): NotificationChannelConfig {
-  return (
-    channels.find((item) => item.channel === channel) ?? {
-      channel,
-      enabled: false,
-      payload: {}
-    }
-  )
-}
-
-function renderChannelForm(
-  options: NotificationPageRenderOptions,
-  channel: NotificationChannel,
-  title: string,
-  config: NotificationChannelConfig,
-  fields: string[]
+function renderNotificationPluginItem(
+  plugin: PluginManagementItem,
+  options: NotificationPageRenderOptions
 ) {
   const t = translations[options.language]
-  const payload = config.payload as Record<string, string>
-  const fieldLabels: Record<string, string> = {
-    server: t.server,
-    device_key: t.deviceKey,
-    group: t.group,
-    topic: t.topic,
-    token: t.token
-  }
-  const iconUrl = channel === 'bark' ? barkIconUrl : ntfyIconUrl
+  const busy = options.busyPluginId === plugin.id || isPluginTransitioning(plugin)
+  const enabledText = plugin.enabled ? t.enabled : t.disabled
+  // 主界面只展示通知插件运行摘要，具体 key/value 配置统一放在插件管理。
   return `
-    <section class="notification-channel" data-channel="${channel}">
-      <div class="notification-channel-heading">
-        <span class="notification-channel-title">
-          <img src="${escapeHtml(iconUrl)}" alt="" aria-hidden="true">
-          <h3 class="notification-compact-title">${escapeHtml(title)}</h3>
-        </span>
+    <article class="notification-plugin-item" data-notification-plugin-id="${escapeHtml(plugin.id)}">
+      <div class="notification-plugin-copy">
+        <strong>${escapeHtml(plugin.display_name)}</strong>
+        <span>${escapeHtml(plugin.id)}</span>
+      </div>
+      <div class="notification-plugin-state">
+        <span class="notification-plugin-runtime ${escapeHtml(plugin.runtime_status)}">${escapeHtml(
+          translateRuntimeStatus(options.language, plugin.runtime_status)
+        )}</span>
         <label class="notification-enable">
-          <input type="checkbox" data-field="enabled" ${config.enabled ? 'checked' : ''}>
-          <span>${escapeHtml(t.enabled)}</span>
+          <span>${escapeHtml(enabledText)}</span>
+          <input type="checkbox" data-notification-plugin-toggle="${escapeHtml(plugin.id)}" ${
+            plugin.enabled ? 'checked' : ''
+          } ${busy ? 'disabled' : ''}>
         </label>
       </div>
-      ${fields
-        .map(
-          (field) => `
-            <label class="notification-field-row">
-              <span>${escapeHtml(fieldLabels[field])}</span>
-              <input type="text" data-field="${field}" value="${escapeHtml(
-                String(payload[field] ?? '')
-              )}">
-            </label>
-          `
-        )
-        .join('')}
-    </section>
+    </article>
   `
+}
+
+function translateRuntimeStatus(language: LanguageCode, status: string) {
+  const t = translations[language]
+  if (status === 'starting') {
+    return t.pluginStarting
+  }
+  if (status === 'running') {
+    return t.pluginRunning
+  }
+  if (status === 'stopping') {
+    return t.pluginStopping
+  }
+  if (status === 'failed') {
+    return t.pluginFailed
+  }
+  return t.pluginStopped
+}
+
+function isPluginTransitioning(plugin: PluginManagementItem) {
+  return plugin.runtime_status === 'starting' || plugin.runtime_status === 'stopping'
 }
 
 function renderNotificationHistory(options: NotificationHistoryRenderOptions) {

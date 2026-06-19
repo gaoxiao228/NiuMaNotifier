@@ -2439,6 +2439,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "niuma-bark-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "niuma-cli"
 version = "0.1.0"
 dependencies = [
@@ -2493,8 +2504,8 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
  "tokio",
- "ureq",
 ]
 
 [[package]]
@@ -2505,6 +2516,17 @@ dependencies = [
  "niuma-api",
  "niuma-core",
  "serde_json",
+]
+
+[[package]]
+name = "niuma-ntfy-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

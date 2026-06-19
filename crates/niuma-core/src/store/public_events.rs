@@ -41,6 +41,21 @@ pub(super) fn append_public_event(
     Ok(())
 }
 
+pub(super) fn public_event_dedupe_key_exists(
+    connection: &Connection,
+    dedupe_key: &str,
+) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM public_events WHERE dedupe_key = ?1 LIMIT 1",
+            [dedupe_key],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(|error| format!("检查公开事件去重键失败：{error}"))
+}
+
 pub(super) fn load_public_events(
     connection: &Connection,
     limit: usize,

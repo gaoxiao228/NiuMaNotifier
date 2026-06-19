@@ -54,6 +54,10 @@ if (!html.includes('id="notification-test"')) {
   throw new Error('测试通知按钮应放在通知设置标题旁边')
 }
 
+if (html.includes('id="notification-manage"')) {
+  throw new Error('主界面通知插件不应显示管理按钮')
+}
+
 if (
   html.includes('id="notification-settings-details"') ||
   html.includes('id="notification-health"')

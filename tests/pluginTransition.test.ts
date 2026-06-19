@@ -12,10 +12,12 @@ function plugin(overrides: Partial<PluginManagementItem>): PluginManagementItem 
     display_name: 'Demo Tool',
     version: '0.1.0',
     source: 'external',
+    capabilities: [],
     enabled: false,
     runtime_status: 'stopped',
     last_error: null,
     icon_url: null,
+    config_schema: [],
     install_path: '/tmp/niuma-plugin-demo',
     ...overrides
   }

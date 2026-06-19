@@ -1,5 +1,6 @@
 {
   "id": "niuma-plugin-demo",
+  "kind": "tool",
   "tool_id": "demo_tool",
   "display_name": "Demo Tool",
   "version": "0.1.0",

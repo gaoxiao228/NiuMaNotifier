@@ -1,0 +1,19 @@
+{
+  "id": "builtin-ntfy",
+  "kind": "notification",
+  "display_name": "ntfy",
+  "version": "0.1.0",
+  "command": "niuma-plugin-ntfy",
+  "args": [],
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_consumer", "notification_test"],
+  "config_schema": [
+    {
+      "key": "topic",
+      "type": "string",
+      "label": "Topic",
+      "required": false
+    }
+  ],
+  "source": "builtin"
+}

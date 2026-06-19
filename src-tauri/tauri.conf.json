@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.niuma.notifier",
   "build": {
-    "beforeDevCommand": "npm run build:codex-plugin && npm run dev",
+    "beforeDevCommand": "npm run build:plugins && npm run dev",
     "devUrl": "http://localhost:58415",
-    "beforeBuildCommand": "npm run build:codex-plugin:release && npm run build",
+    "beforeBuildCommand": "npm run build:plugins:release && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -32,6 +32,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "resources/bin": "bin"
+    }
   }
 }

@@ -6,6 +6,31 @@ if (!shell.includes('插件管理')) {
   throw new Error('设置页左侧应包含插件管理入口')
 }
 
+if (!shell.includes('通知历史')) {
+  throw new Error('设置页左侧应包含通知历史入口')
+}
+
+if (!shell.includes('data-settings-panel="notification-history"')) {
+  throw new Error('通知历史入口应声明设置页切换目标')
+}
+
+if (!shell.includes('id="settings-notification-history"')) {
+  throw new Error('设置页应渲染通知历史列表容器')
+}
+
+if (!shell.includes('data-settings-panel="plugins" aria-current="page"')) {
+  throw new Error('设置页默认应选中插件管理')
+}
+
+const historyShell = renderSettingsShell({
+  language: 'zh-CN',
+  activePanel: 'notification-history'
+})
+
+if (!historyShell.includes('data-settings-panel="notification-history" aria-current="page"')) {
+  throw new Error('通知历史面板选中时应标记当前导航项')
+}
+
 if (!shell.includes('id="plugin-import"')) {
   throw new Error('插件管理页应渲染导入插件按钮')
 }
@@ -33,6 +58,49 @@ renderPluginManagement({
       runtime_status: 'running',
       last_error: null,
       icon_url: null,
+      config_schema: [],
+      install_path: null
+    },
+    {
+      id: 'builtin-bark',
+      kind: 'notification',
+      tool_id: null,
+      display_name: 'Bark',
+      version: '0.1.0',
+      source: 'builtin',
+      enabled: false,
+      runtime_status: 'stopped',
+      last_error: null,
+      icon_url: null,
+      config_schema: [
+        {
+          key: 'device_key',
+          type: 'string',
+          label: 'Device Key',
+          required: true
+        }
+      ],
+      install_path: null
+    },
+    {
+      id: 'builtin-ntfy',
+      kind: 'notification',
+      tool_id: null,
+      display_name: 'ntfy',
+      version: '0.1.0',
+      source: 'builtin',
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: null,
+      config_schema: [
+        {
+          key: 'topic',
+          type: 'string',
+          label: 'Topic',
+          required: false
+        }
+      ],
       install_path: null
     },
     {
@@ -45,6 +113,7 @@ renderPluginManagement({
       runtime_status: 'failed',
       last_error: '启动失败',
       icon_url: null,
+      config_schema: [],
       install_path: '/tmp/plugin'
     },
     {
@@ -57,6 +126,7 @@ renderPluginManagement({
       runtime_status: 'starting',
       last_error: null,
       icon_url: null,
+      config_schema: [],
       install_path: '/tmp/starting'
     },
     {
@@ -69,13 +139,33 @@ renderPluginManagement({
       runtime_status: 'stopping',
       last_error: null,
       icon_url: null,
+      config_schema: [],
       install_path: '/tmp/stopping'
     }
-  ]
+  ],
+  busyConfigPluginId: null,
+  configResultText: '',
+  pluginConfigs: {
+    'builtin-bark': {
+      device_key: 'device-1'
+    },
+    'builtin-ntfy': {
+      topic: 'niuma-topic'
+    }
+  }
 })
 
 if (!listElement.innerHTML.includes('data-plugin-toggle="builtin-codex"')) {
   throw new Error('插件列表应渲染内置插件开关')
+}
+
+if (
+  !listElement.innerHTML.includes('data-plugin-toggle="builtin-bark"') ||
+  !listElement.innerHTML.includes('data-plugin-toggle="builtin-ntfy"') ||
+  listElement.innerHTML.includes('data-plugin-toggle="builtin-bark"  disabled') ||
+  listElement.innerHTML.includes('data-plugin-toggle="builtin-ntfy"  disabled')
+) {
+  throw new Error('notification 插件应渲染可用开关')
 }
 
 if (listElement.innerHTML.includes('data-plugin-remove="builtin-codex"')) {
@@ -107,4 +197,21 @@ if (
 
 if (!listElement.innerHTML.includes('启动失败')) {
   throw new Error('插件列表应渲染最近错误')
+}
+
+if (
+  !listElement.innerHTML.includes('data-plugin-config-save="builtin-bark"') ||
+  !listElement.innerHTML.includes('id="plugin-config-builtin-bark-device_key" type="text"') ||
+  listElement.innerHTML.includes('id="plugin-config-builtin-bark-device_key" type="password"') ||
+  !listElement.innerHTML.includes('value="device-1"')
+) {
+  throw new Error('带配置 schema 的插件应渲染插件配置表单')
+}
+
+if (
+  !listElement.innerHTML.includes('data-plugin-config-save="builtin-ntfy"') ||
+  !listElement.innerHTML.includes('id="plugin-config-builtin-ntfy-topic" type="text"') ||
+  !listElement.innerHTML.includes('value="niuma-topic"')
+) {
+  throw new Error('ntfy 插件应在插件管理中渲染 Topic 配置表单')
 }

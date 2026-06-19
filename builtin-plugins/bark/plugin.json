@@ -1,0 +1,19 @@
+{
+  "id": "builtin-bark",
+  "kind": "notification",
+  "display_name": "Bark",
+  "version": "0.1.0",
+  "command": "niuma-plugin-bark",
+  "args": [],
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_consumer", "notification_test"],
+  "config_schema": [
+    {
+      "key": "device_key",
+      "type": "string",
+      "label": "Device Key",
+      "required": true
+    }
+  ],
+  "source": "builtin"
+}

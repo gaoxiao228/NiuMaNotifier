@@ -4,6 +4,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use niuma_core::main_state::{MainStatePayload, MainStateService, MainStateWatcher};
+use niuma_core::runtime_event::RuntimeEvent;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::response::apply_cors_headers;
 use crate::state::AppState;
@@ -50,6 +52,48 @@ pub(crate) async fn sse_stream(State(state): State<AppState>) -> Response {
         while watcher.wait_for_refresh().await {
             if let Some(event) = next_state_event(&state, &mut client, false) {
                 yield Ok::<Event, std::convert::Infallible>(event);
+            }
+        }
+    };
+    let mut response = Sse::new(event_stream)
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    apply_cors_headers(response.headers_mut());
+    response
+}
+
+pub(crate) async fn events_stream(State(state): State<AppState>) -> Response {
+    let mut receiver = state.runtime_events.subscribe();
+    let event_stream = stream! {
+        loop {
+            match receiver.recv().await {
+                Ok(RuntimeEvent::NiumaEventsAppended { events, .. }) => {
+                    for niuma_event in events {
+                        // 事件流只广播实际应用的新事件，推送插件自行判断是否消费。
+                        if let Ok(data) = serde_json::to_string(&niuma_event) {
+                            yield Ok::<Event, std::convert::Infallible>(
+                                Event::default()
+                                    .event("event")
+                                    .id(niuma_event.id)
+                                    .data(data)
+                            );
+                        }
+                    }
+                }
+                Ok(RuntimeEvent::PluginNotificationTestRequested { request, .. }) => {
+                    // 测试通知是控制事件，不写入 public_events，避免污染主事件历史。
+                    if let Ok(data) = serde_json::to_string(&request) {
+                        yield Ok::<Event, std::convert::Infallible>(
+                            Event::default()
+                                .event("notification_test")
+                                .id(request.test_id)
+                                .data(data)
+                        );
+                    }
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             }
         }
     };
