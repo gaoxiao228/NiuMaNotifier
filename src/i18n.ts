@@ -110,10 +110,12 @@ export type Translation = {
   noSessionSelected: string
   none: string
   noEvents: string
-  eventCenterConnected?: string
-  eventCenterConnecting?: string
-  eventCenterDisconnected?: string
-  eventCenterWaiting?: string
+  eventCenter: string
+  eventCenterDescription: string
+  eventCenterWaiting: string
+  eventCenterConnected: string
+  eventCenterConnecting: string
+  eventCenterDisconnected: string
   loading: string
   error: string
   status: Record<string, string>
@@ -238,10 +240,12 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: '未选择 Session',
     none: '暂无',
     noEvents: '暂无事件',
+    eventCenter: '事件中心',
+    eventCenterDescription: '只显示打开面板后收到的实时 NiumaEvent。',
+    eventCenterWaiting: '等待新的实时事件',
     eventCenterConnected: '实时已连接',
     eventCenterConnecting: '实时连接中',
     eventCenterDisconnected: '实时已断开',
-    eventCenterWaiting: '等待新的实时事件',
     loading: '加载中',
     error: '错误',
     status: {
@@ -391,6 +395,12 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: '未選擇 Session',
     none: '暫無',
     noEvents: '暫無事件',
+    eventCenter: '事件中心',
+    eventCenterDescription: '只顯示開啟面板後收到的即時 NiumaEvent。',
+    eventCenterWaiting: '等待新的即時事件',
+    eventCenterConnected: '即時已連線',
+    eventCenterConnecting: '即時連線中',
+    eventCenterDisconnected: '即時已斷線',
     loading: '載入中',
     error: '錯誤',
     status: {
@@ -541,6 +551,12 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: 'No session selected',
     none: 'None',
     noEvents: 'No events',
+    eventCenter: 'Event center',
+    eventCenterDescription: 'Shows only realtime NiumaEvent messages received after this panel opens.',
+    eventCenterWaiting: 'Waiting for realtime events',
+    eventCenterConnected: 'Realtime connected',
+    eventCenterConnecting: 'Realtime connecting',
+    eventCenterDisconnected: 'Realtime disconnected',
     loading: 'Loading',
     error: 'Error',
     status: {
@@ -691,6 +707,12 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: 'Session が選択されていません',
     none: 'なし',
     noEvents: 'イベントなし',
+    eventCenter: 'イベントセンター',
+    eventCenterDescription: 'このパネルを開いた後に受信したリアルタイム NiumaEvent のみを表示します。',
+    eventCenterWaiting: '新しいリアルタイムイベントを待機中',
+    eventCenterConnected: 'リアルタイム接続済み',
+    eventCenterConnecting: 'リアルタイム接続中',
+    eventCenterDisconnected: 'リアルタイム切断',
     loading: '読み込み中',
     error: 'エラー',
     status: {
@@ -841,6 +863,12 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: '선택된 Session 없음',
     none: '없음',
     noEvents: '이벤트 없음',
+    eventCenter: '이벤트 센터',
+    eventCenterDescription: '이 패널을 연 뒤 받은 실시간 NiumaEvent만 표시합니다.',
+    eventCenterWaiting: '새 실시간 이벤트 대기 중',
+    eventCenterConnected: '실시간 연결됨',
+    eventCenterConnecting: '실시간 연결 중',
+    eventCenterDisconnected: '실시간 연결 끊김',
     loading: '로딩 중',
     error: '오류',
     status: {
@@ -991,6 +1019,12 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: 'Keine Session ausgewählt',
     none: 'Keine',
     noEvents: 'Keine Ereignisse',
+    eventCenter: 'Ereigniszentrum',
+    eventCenterDescription: 'Zeigt nur Echtzeit-NiumaEvent-Meldungen, die nach dem Öffnen dieses Bereichs eingehen.',
+    eventCenterWaiting: 'Warten auf Echtzeitereignisse',
+    eventCenterConnected: 'Echtzeit verbunden',
+    eventCenterConnecting: 'Echtzeit verbindet',
+    eventCenterDisconnected: 'Echtzeit getrennt',
     loading: 'Lädt',
     error: 'Fehler',
     status: {

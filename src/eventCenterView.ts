@@ -21,12 +21,12 @@ export function renderEventCenter(options: EventCenterRenderOptions) {
   if (!options.element) {
     return
   }
-  const t = getEventCenterTranslations(options.language)
+  const t = translations[options.language]
   const statusText = options.connected
-    ? t.connected
+    ? t.eventCenterConnected
     : options.connecting
-      ? t.connecting
-      : t.disconnected
+      ? t.eventCenterConnecting
+      : t.eventCenterDisconnected
   const statusClass = options.connected ? 'connected' : options.connecting ? 'connecting' : 'disconnected'
   options.element.innerHTML = `
     <div class="event-center-status-row">
@@ -40,9 +40,9 @@ export function renderEventCenter(options: EventCenterRenderOptions) {
 }
 
 function renderEventCenterItems(options: EventCenterRenderOptions) {
-  const t = getEventCenterTranslations(options.language)
+  const t = translations[options.language]
   if (options.events.length === 0) {
-    return `<li class="empty">${escapeHtml(t.waiting)}</li>`
+    return `<li class="empty">${escapeHtml(t.eventCenterWaiting)}</li>`
   }
   return options.events.map((event) => renderEventCenterItem(event, options)).join('')
 }
@@ -65,14 +65,4 @@ function renderEventCenterItem(event: NiumaEvent, options: EventCenterRenderOpti
       ${detail}
     </li>
   `
-}
-
-function getEventCenterTranslations(language: LanguageCode) {
-  const t = translations[language]
-  return {
-    connected: t.eventCenterConnected ?? '实时已连接',
-    connecting: t.eventCenterConnecting ?? '实时连接中',
-    disconnected: t.eventCenterDisconnected ?? '实时已断开',
-    waiting: t.eventCenterWaiting ?? '等待新的实时事件'
-  }
 }
