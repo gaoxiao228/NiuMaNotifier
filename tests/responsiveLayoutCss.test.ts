@@ -18,6 +18,7 @@ const statusPanelBlock = cssBlock('.status-panel')
 const statusCardBlock = cssBlock('.status-card')
 const pluginIconImageBlock = cssBlock('.plugin-icon.image')
 const pluginIconImgBlock = cssBlock('.plugin-icon img')
+const pluginCardMainBlock = cssBlock('.plugin-card-main')
 
 if (!css.includes('grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);')) {
   throw new Error('桌面主布局应保持弹性两列，避免中等窗口被挤成竖向布局')
@@ -144,6 +145,15 @@ if (
 
 if (css.includes('max-height: 460px;') || css.includes('.plugin-management-list {\n  display: grid;\n  gap: 10px;\n  max-height')) {
   throw new Error('插件列表本身不应再有内部滚动高度限制，避免 scrollview 套 scrollview')
+}
+
+if (
+  !pluginCardMainBlock.includes('display: grid;') ||
+  !pluginCardMainBlock.includes('grid-template-columns: auto minmax(0, 1fr) auto;') ||
+  !pluginCardMainBlock.includes('align-items: start;') ||
+  pluginCardMainBlock.includes('justify-content: space-between;')
+) {
+  throw new Error('插件卡片顶部应按图标、左对齐信息、右侧开关三列布局')
 }
 
 if (

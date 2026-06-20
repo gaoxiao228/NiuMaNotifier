@@ -796,9 +796,9 @@ select {
 
 .plugin-card-main {
   align-items: start;
-  display: flex;
+  display: grid;
   gap: 18px;
-  justify-content: space-between;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .plugin-card h3 {
