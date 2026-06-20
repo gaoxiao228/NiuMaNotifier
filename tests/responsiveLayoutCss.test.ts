@@ -3,16 +3,58 @@ declare function require(name: string): { readFileSync(path: string, encoding: s
 const { readFileSync } = require('fs')
 const css = readFileSync('src/styles.css', 'utf8')
 
+function cssBlock(selector: string) {
+  const start = css.indexOf(`${selector} {`)
+  if (start === -1) {
+    return ''
+  }
+  const end = css.indexOf('\n}', start)
+  return end === -1 ? css.slice(start) : css.slice(start, end + 2)
+}
+
+const shellBlock = cssBlock('.shell')
+const dashboardGridBlock = cssBlock('.dashboard-grid')
+const statusPanelBlock = cssBlock('.status-panel')
+const statusCardBlock = cssBlock('.status-card')
+
 if (!css.includes('grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);')) {
   throw new Error('桌面主布局应保持弹性两列，避免中等窗口被挤成竖向布局')
 }
 
-if (!css.includes('.dashboard-grid') || !css.includes('align-items: start;')) {
-  throw new Error('桌面主布局应顶部对齐，让主状态和右侧栏目按内容自适应高度')
+if (
+  !shellBlock.includes('display: grid;') ||
+  !shellBlock.includes('grid-template-rows: auto minmax(0, 1fr);')
+) {
+  throw new Error('主界面外壳应使用顶部栏加剩余视图两行布局，让内容区可填满父视图')
 }
 
-if (css.includes('min-height: calc(100vh - 146px);')) {
-  throw new Error('主状态面板不应使用视口高度撑满，应按当前状态内容自适应')
+if (!dashboardGridBlock.includes('align-items: stretch;')) {
+  throw new Error('桌面主布局应拉伸网格项，让主状态区域默认填充到父视图底部')
+}
+
+if (
+  !statusPanelBlock.includes('display: grid;') ||
+  !statusPanelBlock.includes('grid-template-rows: auto minmax(0, 1fr);')
+) {
+  throw new Error('主状态面板应让标题占自然高度，并让状态内容填满剩余高度')
+}
+
+if (!statusCardBlock.includes('background: #ffffff;') || !statusCardBlock.includes('height: 100%;')) {
+  throw new Error('主状态卡片应填满主状态面板剩余高度')
+}
+
+if (
+  css.includes('.status-card:has(.status-summary.info)') ||
+  css.includes('.status-card:has(.status-summary.warning)')
+) {
+  throw new Error('主状态卡片不应按状态给整块区域填色，语义色只应保留在圆点和标签上')
+}
+
+if (
+  !css.includes('.status-card {\n  background: #ffffff;') ||
+  !css.includes('border: 1px solid #d5e0ee;')
+) {
+  throw new Error('主状态卡片应使用中性白底和边框，避免空闲状态被大面积绿色强调')
 }
 
 if (css.includes('grid-template-rows: minmax(0, auto) 1fr;')) {

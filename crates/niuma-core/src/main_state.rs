@@ -428,6 +428,12 @@ mod tests {
     fn disabled_ai_listeners_force_main_state_to_idle() {
         let store = NiumaStore::new(test_sqlite_path("listeners_disabled_idle"));
         store
+            .save_listener_config(&ListenerConfig {
+                codex_listening_enabled: false,
+                ..ListenerConfig::default()
+            })
+            .unwrap();
+        store
             .append_event(sample_event(
                 "approval-disabled",
                 EventType::ApprovalRequested,

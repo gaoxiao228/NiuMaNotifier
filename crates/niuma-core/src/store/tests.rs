@@ -1142,15 +1142,15 @@ fn listener_config_persists_to_json_config_file() {
     let default_config = store.listener_config().unwrap();
     store
         .save_listener_config(&ListenerConfig {
-            codex_listening_enabled: true,
+            codex_listening_enabled: false,
             ..ListenerConfig::default()
         })
         .unwrap();
     let reloaded = NiumaStore::new(path).listener_config().unwrap();
 
     assert!(root.join("config.json").exists());
-    assert!(!default_config.codex_listening_enabled);
-    assert!(reloaded.codex_listening_enabled);
+    assert!(default_config.codex_listening_enabled);
+    assert!(!reloaded.codex_listening_enabled);
 }
 
 #[test]

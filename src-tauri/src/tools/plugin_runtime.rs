@@ -6,8 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use niuma_core::plugin::{
-    current_plugin_registry, resolve_plugin_config, PluginCapability, PluginManifest,
-    PluginRegistry, PluginRuntimeState, BUILTIN_BARK_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
+    current_plugin_registry, default_non_tool_plugin_enabled, resolve_plugin_config,
+    PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState, BUILTIN_BARK_PLUGIN_ID,
+    BUILTIN_NTFY_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
 use niuma_core::store::NiumaStore;
@@ -262,7 +263,11 @@ fn plugin_runtime_enabled(store: &NiumaStore, manifest: &PluginManifest) -> bool
     }
     store
         .plugin_enabled_map()
-        .map(|map| map.get(&manifest.id).copied().unwrap_or(false))
+        .map(|map| {
+            map.get(&manifest.id)
+                .copied()
+                .unwrap_or_else(|| default_non_tool_plugin_enabled(manifest))
+        })
         .unwrap_or(false)
 }
 
@@ -531,9 +536,15 @@ mod tests {
     }
 
     #[test]
-    fn event_consumer_runtime_disabled_by_default() {
+    fn event_consumer_runtime_enabled_by_default_until_explicitly_disabled() {
         let store = NiumaStore::new(test_sqlite_path("event_consumer_disabled"));
         let manifest = notification_consumer_manifest("builtin-bark");
+
+        assert!(plugin_runtime_enabled(&store, &manifest));
+
+        let mut enabled = BTreeMap::new();
+        enabled.insert("builtin-bark".to_string(), false);
+        store.save_plugin_enabled_map(&enabled).unwrap();
 
         assert!(!plugin_runtime_enabled(&store, &manifest));
     }

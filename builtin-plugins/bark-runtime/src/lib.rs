@@ -107,6 +107,12 @@ struct BarkConfig {
     icon_url: String,
 }
 
+impl BarkConfig {
+    fn is_incomplete(&self) -> bool {
+        self.server.trim().is_empty() || self.device_key.trim().is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OutboundRequest {
     method: String,
@@ -549,6 +555,9 @@ fn handle_event<S: BarkSender, R: NotificationResultReporter>(
     if !config.enabled {
         return Ok(());
     }
+    if config.bark_config_for_event(&event).is_incomplete() {
+        return Ok(());
+    }
 
     let dedupe_key = plugin_event_dedupe_key(&env.plugin_id, &event.id);
     let mut sent_events = SentEventStore::from_env(env)?;
@@ -609,6 +618,9 @@ fn handle_test_event<S: BarkSender, R: NotificationResultReporter>(
     let config = load_config(config_path)?;
     if !config.enabled {
         reporter.report_test(env, &test, "failed", &message, Some("通知插件未启用"), None)?;
+        return Ok(());
+    }
+    if config.bark_config_for_test().is_incomplete() {
         return Ok(());
     }
 
@@ -1127,6 +1139,28 @@ mod tests {
     }
 
     #[test]
+    fn handle_event_skips_when_bark_device_key_is_missing() {
+        let temp = TestRuntimeFiles::new("missing_device_key");
+        temp.write_config(json!({
+            "enabled": true
+        }));
+        let env = temp.env();
+        let sender = RecordingBarkSender::default();
+        let reporter = RecordingNotificationResultReporter::default();
+
+        handle_event(
+            &env,
+            &sender,
+            &reporter,
+            completed_event("event-missing-device-key"),
+        )
+        .unwrap();
+
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(reporter.reports.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn handle_test_event_sends_bark_without_dedupe() {
         let temp = TestRuntimeFiles::new("test_send");
         temp.write_config(json!({
@@ -1152,6 +1186,29 @@ mod tests {
         assert!(!temp.data_dir.join(SENT_EVENTS_FILE).exists());
         let reports = reporter.reports.lock().unwrap();
         assert_eq!(reports[0].status, "sent");
+    }
+
+    #[test]
+    fn handle_test_event_skips_when_bark_device_key_is_missing() {
+        let temp = TestRuntimeFiles::new("test_missing_device_key");
+        temp.write_config(json!({
+            "enabled": true
+        }));
+        let env = temp.env();
+        let sender = RecordingBarkSender::default();
+        let reporter = RecordingNotificationResultReporter::default();
+        let request = PluginNotificationTestRequest {
+            test_id: "manual-test:builtin-bark:missing".to_string(),
+            plugin_id: "builtin-bark".to_string(),
+            title: "测试标题".to_string(),
+            body: "测试正文".to_string(),
+            created_at: Utc::now(),
+        };
+
+        handle_test_event(&env, &sender, &reporter, request).unwrap();
+
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(reporter.reports.lock().unwrap().is_empty());
     }
 
     #[test]

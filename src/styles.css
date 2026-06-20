@@ -73,6 +73,8 @@ select {
 
 .shell {
   background: #f8fafc;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 100vh;
   overflow: hidden;
 }
@@ -162,10 +164,11 @@ select {
 }
 
 .dashboard-grid {
-  align-items: start;
+  align-items: stretch;
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);
+  min-height: 0;
   padding: 0 24px 24px;
 }
 
@@ -180,7 +183,8 @@ select {
 
 .status-panel {
   display: grid;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
   padding: 20px 22px;
 }
 
@@ -205,22 +209,13 @@ select {
 }
 
 .status-card {
-  background: #fff8f8;
-  border: 1px solid #f3a5a5;
+  background: #ffffff;
+  border: 1px solid #d5e0ee;
   border-radius: 7px;
+  height: 100%;
   min-height: clamp(220px, 30vh, 340px);
   padding: 20px 18px;
   position: relative;
-}
-
-.status-card:has(.status-summary.warning) {
-  background: #fffaf0;
-  border-color: #f3c46b;
-}
-
-.status-card:has(.status-summary.info) {
-  background: #f7fdf9;
-  border-color: #9bd7b1;
 }
 
 .status-summary {
@@ -1035,6 +1030,7 @@ select {
   }
 
   .status-panel {
+    display: block;
     min-height: 0;
   }
 

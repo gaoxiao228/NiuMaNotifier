@@ -9,8 +9,8 @@ use niuma_core::models::{EventType, NiumaEvent, ToolId};
 use niuma_core::notification_store::{NotificationRecordStatus, PluginNotificationResult};
 use niuma_core::plugin::{
     import_external_plugin_dir, remove_external_plugin, resolve_plugin_config,
-    validate_plugin_config, PluginKind, PluginManifest, PluginRegistry, PluginSource,
-    ToolPluginInfo,
+    save_plugin_enabled_state, validate_plugin_config, PluginKind, PluginManifest, PluginRegistry,
+    PluginSource, ToolPluginInfo,
 };
 use niuma_core::runtime_event::StateChangeReason;
 use serde::{Deserialize, Serialize};
@@ -491,7 +491,32 @@ pub(crate) async fn import_plugin(State(state): State<AppState>, body: Bytes) ->
         &plugin_enabled_map,
         &runtime_states,
     ) {
-        Ok(result) => {
+        Ok(mut result) => {
+            let registry = plugin_registry(&state);
+            let Some(manifest) = registry.plugin_by_id(&result.plugin.id).cloned() else {
+                return json_response(
+                    500,
+                    ApiResponse::fail(
+                        ApiErrorCode::System,
+                        format!("插件导入后未被发现：{}", result.plugin.id),
+                    ),
+                );
+            };
+            if let Err(error) =
+                save_plugin_enabled_state(&state.store, &state.mutation_service, &manifest, true)
+            {
+                return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
+            }
+            let plugins = match plugin_management_items(&state) {
+                Ok(plugins) => plugins,
+                Err(error) => {
+                    return json_response(500, ApiResponse::fail(ApiErrorCode::System, error))
+                }
+            };
+            if let Some(plugin) = plugins.iter().find(|item| item.id == result.plugin.id) {
+                result.plugin = plugin.clone();
+            }
+            result.plugins = plugins;
             state
                 .runtime_events
                 .publish_state_changed(StateChangeReason::ListenerConfigChanged);

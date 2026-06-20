@@ -430,7 +430,7 @@ async fn notification_config_routes_are_removed() {
 }
 
 #[tokio::test]
-async fn listener_config_defaults_to_disabled_and_saves_enabled() {
+async fn listener_config_defaults_to_enabled_and_saves_disabled() {
     let router = app(NiumaStore::new(test_path("listener_config_round_trip")));
 
     let get = router
@@ -445,8 +445,8 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
         .unwrap();
     let get_value = response_json(get).await;
     assert_eq!(get_value["code"], 0);
-    assert_eq!(get_value["data"]["codex_listening_enabled"], false);
-    assert_eq!(get_value["data"]["tool_listening_enabled"]["codex"], false);
+    assert_eq!(get_value["data"]["codex_listening_enabled"], true);
+    assert_eq!(get_value["data"]["tool_listening_enabled"]["codex"], true);
     assert_eq!(get_value["data"]["tools"][0]["id"], "codex");
     assert_eq!(get_value["data"]["tools"][0]["plugin_id"], "builtin-codex");
 
@@ -457,7 +457,7 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
                 .method("POST")
                 .uri("/api/v1/listener-config/save")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"codex_listening_enabled":true}"#))
+                .body(Body::from(r#"{"codex_listening_enabled":false}"#))
                 .unwrap(),
         )
         .await
@@ -466,8 +466,8 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
     let save_value = response_json(save).await;
     assert_eq!(save_value["code"], 0);
     assert_eq!(save_value["data"]["saved"], true);
-    assert_eq!(save_value["data"]["codex_listening_enabled"], true);
-    assert_eq!(save_value["data"]["tool_listening_enabled"]["codex"], true);
+    assert_eq!(save_value["data"]["codex_listening_enabled"], false);
+    assert_eq!(save_value["data"]["tool_listening_enabled"]["codex"], false);
 
     let get = router
         .oneshot(
@@ -479,8 +479,8 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
         .await
         .unwrap();
     let get_value = response_json(get).await;
-    assert_eq!(get_value["data"]["codex_listening_enabled"], true);
-    assert_eq!(get_value["data"]["tools"][0]["enabled"], true);
+    assert_eq!(get_value["data"]["codex_listening_enabled"], false);
+    assert_eq!(get_value["data"]["tools"][0]["enabled"], false);
 }
 
 #[tokio::test]
@@ -512,7 +512,7 @@ async fn plugins_list_returns_builtin_plugin_status() {
     assert_eq!(value["code"], 0);
     assert_eq!(value["data"]["list"][0]["id"], "builtin-codex");
     assert_eq!(value["data"]["list"][0]["runtime_status"], "running");
-    assert_eq!(value["data"]["list"][0]["enabled"], false);
+    assert_eq!(value["data"]["list"][0]["enabled"], true);
     assert!(value["data"]["list"]
         .as_array()
         .unwrap()
@@ -616,8 +616,9 @@ async fn plugin_import_copies_folder_and_returns_plugin_list() {
     write_demo_plugin(&source_dir, "niuma-plugin-import-test");
     std::fs::create_dir_all(source_dir.join("bin")).unwrap();
     std::fs::write(source_dir.join("bin/demo.mjs"), "console.log('demo')").unwrap();
+    let store = NiumaStore::new(test_path("plugin_import"));
     let router = app_with_bus_and_plugin_dir(
-        NiumaStore::new(test_path("plugin_import")),
+        store.clone(),
         RuntimeEventBus::new(),
         plugin_dir.clone(),
     );
@@ -641,6 +642,14 @@ async fn plugin_import_copies_folder_and_returns_plugin_list() {
     assert_eq!(value["code"], 0);
     assert_eq!(value["data"]["imported"], true);
     assert_eq!(value["data"]["plugin"]["id"], "niuma-plugin-import-test");
+    assert_eq!(value["data"]["plugin"]["enabled"], true);
+    assert_eq!(
+        store
+            .listener_config()
+            .unwrap()
+            .is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())),
+        true
+    );
     assert!(plugin_dir
         .join("niuma-plugin-import-test/bin/demo.mjs")
         .exists());

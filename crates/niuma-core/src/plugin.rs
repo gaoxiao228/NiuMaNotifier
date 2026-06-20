@@ -7,6 +7,8 @@ use serde_json::Value;
 
 use crate::listener_config::ListenerConfig;
 use crate::models::ToolKind;
+use crate::state_mutation::StateMutationService;
+use crate::store::NiumaStore;
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
@@ -535,6 +537,22 @@ pub fn remove_external_plugin(
     })
 }
 
+pub fn save_plugin_enabled_state(
+    store: &NiumaStore,
+    service: &StateMutationService,
+    manifest: &PluginManifest,
+    enabled: bool,
+) -> Result<(), String> {
+    if let Some(tool) = &manifest.tool_id {
+        return service
+            .set_tool_listening_enabled(tool.clone(), enabled)
+            .map(|_| ());
+    }
+    let mut enabled_map = store.plugin_enabled_map()?;
+    enabled_map.insert(manifest.id.clone(), enabled);
+    store.save_plugin_enabled_map(&enabled_map)
+}
+
 fn current_platform_id() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -616,7 +634,12 @@ fn plugin_enabled(
     plugin_enabled_map
         .get(&manifest.id)
         .copied()
-        .unwrap_or(false)
+        .unwrap_or_else(|| default_non_tool_plugin_enabled(manifest))
+}
+
+pub fn default_non_tool_plugin_enabled(manifest: &PluginManifest) -> bool {
+    // 只给内置非 tool 插件默认开启；外置插件通过导入流程写入显式启用状态。
+    manifest.source == PluginSource::Builtin
 }
 
 fn builtin_codex_plugin_command(default_command: Option<String>) -> String {
@@ -1021,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn management_items_read_non_tool_enabled_from_plugin_map() {
+    fn management_items_enable_non_tool_plugins_by_default_until_explicitly_disabled() {
         let mut registry = PluginRegistry::new();
         registry.register(
             parse_plugin_manifest(
@@ -1031,7 +1054,8 @@ mod tests {
                 "display_name": "Bark",
                 "version": "0.1.0",
                 "command": "niuma-plugin-bark",
-                "capabilities": ["event_consumer"]
+                "capabilities": ["event_consumer"],
+                "source": "builtin"
             }"#,
             )
             .unwrap(),
@@ -1049,10 +1073,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let enabled = BTreeMap::from([
-            ("builtin-bark".to_string(), true),
-            ("status-indicator-demo".to_string(), true),
-        ]);
+        let enabled = BTreeMap::from([("status-indicator-demo".to_string(), false)]);
 
         let items =
             registry.management_items(&ListenerConfig::default(), &enabled, &HashMap::new());
@@ -1062,7 +1083,7 @@ mod tests {
         assert!(items[0].enabled);
         assert_eq!(items[1].kind, PluginKind::StatusIndicator);
         assert_eq!(items[1].tool_id, None);
-        assert!(items[1].enabled);
+        assert!(!items[1].enabled);
     }
 
     #[test]

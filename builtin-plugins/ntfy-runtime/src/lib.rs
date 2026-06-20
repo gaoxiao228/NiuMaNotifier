@@ -102,6 +102,13 @@ struct NtfyConfig {
     token: Option<String>,
 }
 
+impl NtfyConfig {
+    fn is_incomplete(&self) -> bool {
+        let topic = self.topic.trim();
+        self.server.trim().is_empty() || topic.is_empty() || topic.contains('/')
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OutboundRequest {
     method: String,
@@ -546,6 +553,9 @@ fn handle_event<S: NtfySender, R: NotificationResultReporter>(
     if !config.enabled {
         return Ok(());
     }
+    if config.ntfy_config().is_incomplete() {
+        return Ok(());
+    }
 
     let dedupe_key = plugin_event_dedupe_key(&env.plugin_id, &event.id);
     let mut sent_events = SentEventStore::from_env(env)?;
@@ -606,6 +616,9 @@ fn handle_test_event<S: NtfySender, R: NotificationResultReporter>(
     let config = load_config(config_path)?;
     if !config.enabled {
         reporter.report_test(env, &test, "failed", &message, Some("通知插件未启用"), None)?;
+        return Ok(());
+    }
+    if config.ntfy_config().is_incomplete() {
         return Ok(());
     }
 
@@ -1133,6 +1146,29 @@ mod tests {
     }
 
     #[test]
+    fn handle_event_skips_when_ntfy_topic_is_invalid() {
+        let temp = TempRuntimeDir::new("invalid_topic");
+        temp.write_config(json!({
+            "enabled": true,
+            "topic": "bad/topic"
+        }));
+        let env = temp.env();
+        let sender = RecordingNtfySender::default();
+        let reporter = RecordingNotificationResultReporter::default();
+
+        handle_event(
+            &env,
+            &sender,
+            &reporter,
+            event_with_type("event-invalid-topic", EventType::ApprovalRequested),
+        )
+        .unwrap();
+
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(reporter.reports.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn handle_test_event_sends_ntfy_without_dedupe() {
         let temp = TempRuntimeDir::new("test_send");
         temp.write_config(json!({
@@ -1159,6 +1195,30 @@ mod tests {
         assert!(!temp.data_dir.join(SENT_EVENTS_FILE).exists());
         let reports = reporter.reports.lock().unwrap();
         assert_eq!(reports[0].status, "sent");
+    }
+
+    #[test]
+    fn handle_test_event_skips_when_ntfy_topic_is_invalid() {
+        let temp = TempRuntimeDir::new("test_invalid_topic");
+        temp.write_config(json!({
+            "enabled": true,
+            "topic": "bad/topic"
+        }));
+        let env = temp.env();
+        let sender = RecordingNtfySender::default();
+        let reporter = RecordingNotificationResultReporter::default();
+        let request = PluginNotificationTestRequest {
+            test_id: "manual-test:builtin-ntfy:invalid".to_string(),
+            plugin_id: "builtin-ntfy".to_string(),
+            title: "测试标题".to_string(),
+            body: "测试正文".to_string(),
+            created_at: Utc::now(),
+        };
+
+        handle_test_event(&env, &sender, &reporter, request).unwrap();
+
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(reporter.reports.lock().unwrap().is_empty());
     }
 
     #[test]

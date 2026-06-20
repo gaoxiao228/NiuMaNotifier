@@ -10,17 +10,17 @@ fn codex_session_runtime_accepts_only_jsonl_files() {
 }
 
 #[test]
-fn codex_session_runtime_listening_enabled_defaults_false_and_reads_saved_true() {
+fn codex_session_runtime_listening_enabled_defaults_true_and_reads_saved_false() {
     let store = NiumaStore::new(test_sqlite_path("runtime_listener_config"));
 
-    assert!(!codex_listening_enabled(&store));
+    assert!(codex_listening_enabled(&store));
     store
         .save_listener_config(&ListenerConfig {
-            codex_listening_enabled: true,
+            codex_listening_enabled: false,
             ..ListenerConfig::default()
         })
         .unwrap();
-    assert!(codex_listening_enabled(&store));
+    assert!(!codex_listening_enabled(&store));
 }
 
 #[test]

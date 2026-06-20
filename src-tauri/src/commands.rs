@@ -8,9 +8,9 @@ use niuma_core::platform::locale::{
 };
 use niuma_core::plugin::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
-    remove_external_plugin, resolve_plugin_config, validate_plugin_config, PluginCapability,
-    PluginKind, PluginManagementItem, PluginManifest, PluginRegistry, PluginRuntimeStatus,
-    PluginSource, ToolPluginInfo,
+    remove_external_plugin, resolve_plugin_config, save_plugin_enabled_state,
+    validate_plugin_config, PluginCapability, PluginKind, PluginManagementItem, PluginManifest,
+    PluginRegistry, PluginRuntimeStatus, PluginSource, ToolPluginInfo,
 };
 use niuma_core::runtime_event::{
     PluginNotificationTestRequest, RuntimeEventBus, StateChangeReason,
@@ -141,7 +141,8 @@ pub(crate) fn select_and_import_plugin_dir(
             "plugins": plugin_management_items_from_store(&runtime_state.store).unwrap_or_default()
         }));
     };
-    let response = import_plugin_dir_from_path(&runtime_state.store, path);
+    let response =
+        import_plugin_dir_from_path(&runtime_state.store, &runtime_state.mutation_service, path);
     if response.code == 0 {
         runtime_state
             .runtime_events
@@ -412,6 +413,7 @@ fn wait_for_plugin_notification_test_result(
 
 fn import_plugin_dir_from_path(
     store: &NiumaStore,
+    service: &StateMutationService,
     path: std::path::PathBuf,
 ) -> ApiResponse<serde_json::Value> {
     let config = match store.listener_config() {
@@ -433,7 +435,28 @@ fn import_plugin_dir_from_path(
         &plugin_enabled_map,
         &runtime_states,
     ) {
-        Ok(result) => ApiResponse::ok(json!(result)),
+        Ok(mut result) => {
+            let registry = current_plugin_registry();
+            let Some(manifest) = registry.plugin_by_id(&result.plugin.id).cloned() else {
+                return ApiResponse::fail(
+                    ApiErrorCode::System,
+                    format!("插件导入后未被发现：{}", result.plugin.id),
+                );
+            };
+            if let Err(error) = save_plugin_enabled_state(store, service, &manifest, true) {
+                return ApiResponse::fail(ApiErrorCode::System, error);
+            }
+            match plugin_management_items_from_store(store) {
+                Ok(plugins) => {
+                    if let Some(plugin) = plugins.iter().find(|item| item.id == result.plugin.id) {
+                        result.plugin = plugin.clone();
+                    }
+                    result.plugins = plugins;
+                    ApiResponse::ok(json!(result))
+                }
+                Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+            }
+        }
         Err(error) => ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
     }
 }
@@ -639,20 +662,20 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn listener_config_helpers_default_disabled_and_save_enabled() {
+    fn listener_config_helpers_default_enabled_and_save_disabled() {
         let store = NiumaStore::new(test_sqlite_path("listener_config_helpers"));
         let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
 
         let default_config = get_listener_config_from_store(store.clone());
-        let save = save_listener_config_with_service(&service, true, None);
+        let save = save_listener_config_with_service(&service, false, None);
         let reloaded = get_listener_config_from_store(store);
 
         assert_eq!(default_config.code, 0);
-        assert_eq!(default_config.data["codex_listening_enabled"], false);
+        assert_eq!(default_config.data["codex_listening_enabled"], true);
         assert_eq!(save.code, 0);
         assert_eq!(save.data["saved"], true);
-        assert_eq!(save.data["codex_listening_enabled"], true);
-        assert_eq!(reloaded.data["codex_listening_enabled"], true);
+        assert_eq!(save.data["codex_listening_enabled"], false);
+        assert_eq!(reloaded.data["codex_listening_enabled"], false);
     }
 
     #[test]

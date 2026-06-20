@@ -4,14 +4,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{ToolId, ToolKind};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ListenerConfig {
-    #[serde(default)]
+    #[serde(default = "default_codex_listening_enabled")]
     pub codex_listening_enabled: bool,
     #[serde(default)]
     pub claude_code_listening_enabled: bool,
     #[serde(default)]
     pub tool_listening_enabled: BTreeMap<String, bool>,
+}
+
+impl Default for ListenerConfig {
+    fn default() -> Self {
+        Self {
+            codex_listening_enabled: default_codex_listening_enabled(),
+            claude_code_listening_enabled: false,
+            tool_listening_enabled: BTreeMap::new(),
+        }
+    }
 }
 
 impl ListenerConfig {
@@ -61,6 +71,10 @@ impl ListenerConfig {
     }
 }
 
+fn default_codex_listening_enabled() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::ListenerConfig;
@@ -68,8 +82,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn any_ai_listener_is_disabled_by_default() {
-        assert!(!ListenerConfig::default().is_any_ai_listening_enabled());
+    fn builtin_codex_listener_is_enabled_by_default() {
+        assert!(ListenerConfig::default().is_any_ai_listening_enabled());
+        assert!(ListenerConfig::default().is_tool_enabled(&ToolKind::Codex));
     }
 
     #[test]

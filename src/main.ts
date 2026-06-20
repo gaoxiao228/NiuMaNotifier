@@ -54,12 +54,17 @@ import {
   mergePendingPluginTransition,
   type PluginTransitionTarget
 } from './pluginTransition'
+import {
+  createPluginRuntimeRefresh,
+  type PluginRuntimeRefreshController
+} from './pluginRuntimeRefresh'
 import { formatLocalTime } from './viewUtils'
 import './styles.css'
 
 const languageChangedEvent = 'niuma-language-changed'
 const pluginTransitionPollDelayMs = 500
 const pluginTransitionPollMaxAttempts = 20
+const pluginRuntimeRefreshIntervalMs = 3_000
 const stateStreamPath = '/api/v1/state/stream'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -72,6 +77,7 @@ let currentLanguage = detectInitialLanguage()
 let latestMainState: MainStatePayload | null = null
 let fallbackTimer: number | undefined
 let stream: EventSource | undefined
+let pluginRuntimeRefresh: PluginRuntimeRefreshController | undefined
 let clearBlockerConfirmTimer: number | undefined
 let clearBlockerNeedsConfirm = false
 let notificationResultText = ''
@@ -151,6 +157,24 @@ async function refreshPlugins() {
   await refreshPluginConfigs(data.list)
   renderPluginSettings()
   renderNotificationSettings()
+}
+
+async function refreshPluginRuntimeSnapshot() {
+  const data = await getPlugins()
+  applyPluginSnapshot(data.list)
+  renderPluginSettings()
+  renderNotificationSettings()
+}
+
+function startPluginRuntimeRefresh() {
+  if (!pluginRuntimeRefresh) {
+    pluginRuntimeRefresh = createPluginRuntimeRefresh({
+      intervalMs: pluginRuntimeRefreshIntervalMs,
+      refresh: refreshPluginRuntimeSnapshot
+    })
+  }
+  // 插件运行态保存在内存中，主状态 SSE 不一定变化；用轻量轮询同步界面显示。
+  pluginRuntimeRefresh.start()
 }
 
 function applyPluginSnapshot(snapshot: PluginManagementItem[]) {
@@ -916,7 +940,9 @@ Promise.all([refreshDashboard(), refreshListenerConfig(), refreshPlugins()])
   })
 
 startStream()
+startPluginRuntimeRefresh()
 
 window.addEventListener('beforeunload', () => {
   stream?.close()
+  pluginRuntimeRefresh?.stop()
 })
