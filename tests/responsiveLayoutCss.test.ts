@@ -44,6 +44,15 @@ if (!statusCardBlock.includes('background: #ffffff;') || !statusCardBlock.includ
 }
 
 if (
+  !statusPanelBlock.includes('min-width: 0;') ||
+  !statusCardBlock.includes('min-width: 0;') ||
+  !css.includes('.request-detail dd {\n  color: #17213a;') ||
+  !css.includes('margin: 0;\n  min-width: 0;\n  overflow-wrap: anywhere;')
+) {
+  throw new Error('主状态区域应允许长请求内容在左侧网格内收缩换行，避免覆盖右侧状态卡片')
+}
+
+if (
   css.includes('.status-card:has(.status-summary.info)') ||
   css.includes('.status-card:has(.status-summary.warning)')
 ) {
