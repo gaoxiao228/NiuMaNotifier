@@ -1,5 +1,5 @@
 import type { NiumaEvent } from '../src/api'
-import { renderEventCenter } from '../src/eventCenterView'
+import { renderEventCenter, scrollEventCenterItemIntoView } from '../src/eventCenterView'
 
 class FakeElement {
   // 测试只需要验证 renderer 写入的 HTML 字符串。
@@ -99,4 +99,39 @@ renderEventCenter({
 
 if (!element.innerHTML.includes('实时已断开') || !element.innerHTML.includes('连接失败')) {
   throw new Error('事件中心断开时应显示断开状态和错误文案')
+}
+
+let queriedSelector = ''
+let closestSelector = ''
+let scrollOptions: ScrollIntoViewOptions | undefined
+const itemElement = {
+  scrollIntoView: (options?: ScrollIntoViewOptions) => {
+    scrollOptions = options
+  }
+}
+const toggleElement = {
+  closest: (selector: string) => {
+    closestSelector = selector
+    return itemElement
+  }
+}
+const rootElement = {
+  querySelector: (selector: string) => {
+    queriedSelector = selector
+    return toggleElement
+  }
+}
+
+scrollEventCenterItemIntoView(rootElement as unknown as HTMLElement, 'event-b')
+
+if (queriedSelector !== '[data-event-center-toggle="event-b"]') {
+  throw new Error('事件中心应按事件 id 查找刚展开的事件行')
+}
+
+if (closestSelector !== '.event-center-item') {
+  throw new Error('事件中心应滚动整个事件项，确保展开详情也进入可视区域')
+}
+
+if (scrollOptions?.block !== 'nearest' || scrollOptions.inline !== 'nearest') {
+  throw new Error('展开事件后应把事件项按最近距离滚入可视区域')
 }

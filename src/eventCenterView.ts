@@ -39,12 +39,27 @@ export function renderEventCenter(options: EventCenterRenderOptions) {
   `
 }
 
+export function scrollEventCenterItemIntoView(element: HTMLElement | null, eventId: string) {
+  if (!element) {
+    return
+  }
+  const toggle = element.querySelector<HTMLElement>(
+    `[data-event-center-toggle="${escapeAttributeSelector(eventId)}"]`
+  )
+  const item = toggle?.closest<HTMLElement>('.event-center-item') ?? toggle
+  item?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
 function renderEventCenterItems(options: EventCenterRenderOptions) {
   const t = translations[options.language]
   if (options.events.length === 0) {
     return `<li class="empty">${escapeHtml(t.eventCenterWaiting)}</li>`
   }
   return options.events.map((event) => renderEventCenterItem(event, options)).join('')
+}
+
+function escapeAttributeSelector(value: string) {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"')
 }
 
 function renderEventCenterItem(event: NiumaEvent, options: EventCenterRenderOptions) {

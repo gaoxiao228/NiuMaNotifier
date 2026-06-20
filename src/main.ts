@@ -48,7 +48,7 @@ import {
   renderSettingsShell,
   type SettingsPanel
 } from './settingsView'
-import { renderEventCenter } from './eventCenterView'
+import { renderEventCenter, scrollEventCenterItemIntoView } from './eventCenterView'
 import { createEventCenterRuntime, type EventSourceLike } from './eventCenterRuntime'
 import {
   hasPluginReachedTransitionTarget,
@@ -94,6 +94,7 @@ let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
 let localApiUrlText = ''
 let localSseConnected = false
+let pendingEventCenterScrollId = ''
 
 const eventCenterRuntime = createEventCenterRuntime({
   getLocalApiUrl,
@@ -352,8 +353,9 @@ function renderSettingsNotificationHistory() {
 
 function renderSettingsEventCenter() {
   const snapshot = eventCenterRuntime.snapshot()
+  const element = document.querySelector<HTMLElement>('#settings-event-center')
   renderEventCenter({
-    element: document.querySelector<HTMLElement>('#settings-event-center'),
+    element,
     language: currentLanguage,
     events: snapshot.events,
     expandedEventIds: snapshot.expandedEventIds,
@@ -361,6 +363,11 @@ function renderSettingsEventCenter() {
     connecting: snapshot.connecting,
     errorText: snapshot.errorText
   })
+  if (pendingEventCenterScrollId) {
+    const eventId = pendingEventCenterScrollId
+    pendingEventCenterScrollId = ''
+    window.requestAnimationFrame(() => scrollEventCenterItemIntoView(element, eventId))
+  }
 }
 
 function startEventCenterStream() {
@@ -542,6 +549,7 @@ settingsViewEl?.addEventListener('click', async (event) => {
     ?.closest<HTMLElement>('[data-event-center-toggle]')
     ?.dataset.eventCenterToggle
   if (eventCenterToggleId) {
+    pendingEventCenterScrollId = eventCenterToggleId
     eventCenterRuntime.toggle(eventCenterToggleId)
     return
   }
