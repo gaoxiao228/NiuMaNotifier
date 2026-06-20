@@ -8,7 +8,7 @@ use niuma_core::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
 };
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use serde_json::Value;
 use std::time::Duration;
 use tower::ServiceExt;
@@ -17,7 +17,7 @@ use crate::{app, app_with_bus, app_with_bus_and_plugin_dir};
 
 #[tokio::test]
 async fn post_event_then_get_main_state_returns_waiting_approval() {
-    let store = SqliteStateStore::new(test_path("post_event_then_get_main_state"));
+    let store = NiumaStore::new(test_path("post_event_then_get_main_state"));
     enable_codex_listener(&store);
     let router = app(store);
     let event = sample_event();
@@ -60,7 +60,7 @@ async fn post_event_then_get_main_state_returns_waiting_approval() {
 
 #[tokio::test]
 async fn post_plugin_events_accepts_builtin_codex_events() {
-    let store = SqliteStateStore::new(test_path("post_plugin_events"));
+    let store = NiumaStore::new(test_path("post_plugin_events"));
     enable_codex_listener(&store);
     let router = app(store);
     let event = sample_event();
@@ -102,9 +102,7 @@ async fn post_plugin_events_accepts_builtin_codex_events() {
 
 #[tokio::test]
 async fn post_plugin_events_dedupes_repeated_events() {
-    let router = app(SqliteStateStore::new(test_path(
-        "post_plugin_events_dedupe",
-    )));
+    let router = app(NiumaStore::new(test_path("post_plugin_events_dedupe")));
     let event = sample_event();
     let body = serde_json::json!({
         "plugin_id": "builtin-codex",
@@ -133,9 +131,7 @@ async fn post_plugin_events_dedupes_repeated_events() {
 
 #[tokio::test]
 async fn post_plugin_events_rejects_tool_mismatch() {
-    let router = app(SqliteStateStore::new(test_path(
-        "post_plugin_events_mismatch",
-    )));
+    let router = app(NiumaStore::new(test_path("post_plugin_events_mismatch")));
     let mut event = sample_event();
     event.tool = ToolKind::ClaudeCode;
     let body = serde_json::json!({
@@ -165,7 +161,7 @@ async fn post_plugin_events_rejects_tool_mismatch() {
 
 #[tokio::test]
 async fn get_sessions_returns_standard_list_envelope() {
-    let store = SqliteStateStore::new(test_path("get_sessions_list"));
+    let store = NiumaStore::new(test_path("get_sessions_list"));
     store.append_event(sample_event()).unwrap();
     let router = app(store);
 
@@ -188,7 +184,7 @@ async fn get_sessions_returns_standard_list_envelope() {
 
 #[tokio::test]
 async fn old_status_endpoint_is_removed() {
-    let router = app(SqliteStateStore::new(test_path("old_status_removed")));
+    let router = app(NiumaStore::new(test_path("old_status_removed")));
     let response = router
         .oneshot(
             Request::builder()
@@ -208,9 +204,7 @@ async fn old_status_endpoint_is_removed() {
 #[tokio::test]
 async fn old_manual_test_reset_endpoint_is_removed() {
     // 正式 /api/v1/state/reset 是唯一清空状态入口，避免测试路由分叉。
-    let router = app(SqliteStateStore::new(test_path(
-        "old_manual_test_reset_removed",
-    )));
+    let router = app(NiumaStore::new(test_path("old_manual_test_reset_removed")));
     let response = router
         .oneshot(
             Request::builder()
@@ -231,7 +225,7 @@ async fn old_manual_test_reset_endpoint_is_removed() {
 
 #[tokio::test]
 async fn post_event_publishes_appended_runtime_event() {
-    let store = SqliteStateStore::new(test_path("post_event_runtime_event"));
+    let store = NiumaStore::new(test_path("post_event_runtime_event"));
     let bus = RuntimeEventBus::new();
     let mut receiver = bus.subscribe();
     let router = app_with_bus(store, bus);
@@ -261,9 +255,7 @@ async fn post_event_publishes_appended_runtime_event() {
 
 #[tokio::test]
 async fn state_reset_requires_explicit_confirmation() {
-    let router = app(SqliteStateStore::new(test_path(
-        "state_reset_requires_confirm",
-    )));
+    let router = app(NiumaStore::new(test_path("state_reset_requires_confirm")));
 
     let response = router
         .oneshot(
@@ -290,7 +282,7 @@ async fn state_reset_requires_explicit_confirmation() {
 
 #[tokio::test]
 async fn state_reset_clears_state_and_publishes_runtime_event() {
-    let store = SqliteStateStore::new(test_path("state_reset_clears_state"));
+    let store = NiumaStore::new(test_path("state_reset_clears_state"));
     store.append_event(sample_event()).unwrap();
     let bus = RuntimeEventBus::new();
     let mut receiver = bus.subscribe();
@@ -340,7 +332,7 @@ async fn state_reset_clears_state_and_publishes_runtime_event() {
 
 #[tokio::test]
 async fn invalid_json_returns_protocol_error_envelope() {
-    let router = app(SqliteStateStore::new(test_path("invalid_json")));
+    let router = app(NiumaStore::new(test_path("invalid_json")));
     let response = router
         .oneshot(
             Request::builder()
@@ -365,7 +357,7 @@ async fn invalid_json_returns_protocol_error_envelope() {
 
 #[tokio::test]
 async fn route_not_found_returns_standard_envelope() {
-    let router = app(SqliteStateStore::new(test_path("not_found")));
+    let router = app(NiumaStore::new(test_path("not_found")));
     let response = router
         .oneshot(
             Request::builder()
@@ -385,7 +377,7 @@ async fn route_not_found_returns_standard_envelope() {
 
 #[tokio::test]
 async fn manual_test_empty_sessions_is_business_failure() {
-    let router = app(SqliteStateStore::new(test_path("manual_empty_sessions")));
+    let router = app(NiumaStore::new(test_path("manual_empty_sessions")));
     let response = router
         .oneshot(
             Request::builder()
@@ -410,7 +402,7 @@ async fn manual_test_empty_sessions_is_business_failure() {
 
 #[tokio::test]
 async fn notification_config_routes_are_removed() {
-    let router = app(SqliteStateStore::new(test_path(
+    let router = app(NiumaStore::new(test_path(
         "notification_config_routes_removed",
     )));
 
@@ -439,9 +431,7 @@ async fn notification_config_routes_are_removed() {
 
 #[tokio::test]
 async fn listener_config_defaults_to_disabled_and_saves_enabled() {
-    let router = app(SqliteStateStore::new(test_path(
-        "listener_config_round_trip",
-    )));
+    let router = app(NiumaStore::new(test_path("listener_config_round_trip")));
 
     let get = router
         .clone()
@@ -495,7 +485,7 @@ async fn listener_config_defaults_to_disabled_and_saves_enabled() {
 
 #[tokio::test]
 async fn plugins_list_returns_builtin_plugin_status() {
-    let store = SqliteStateStore::new(test_path("plugins_list"));
+    let store = NiumaStore::new(test_path("plugins_list"));
     store
         .save_plugin_runtime_state(
             "builtin-codex",
@@ -553,7 +543,7 @@ async fn plugins_list_returns_builtin_plugin_status() {
 
 #[tokio::test]
 async fn plugin_config_save_validates_required_fields_and_publishes_event() {
-    let store = SqliteStateStore::new(test_path("plugin_config_save"));
+    let store = NiumaStore::new(test_path("plugin_config_save"));
     let bus = RuntimeEventBus::new();
     let mut receiver = bus.subscribe();
     let router =
@@ -627,7 +617,7 @@ async fn plugin_import_copies_folder_and_returns_plugin_list() {
     std::fs::create_dir_all(source_dir.join("bin")).unwrap();
     std::fs::write(source_dir.join("bin/demo.mjs"), "console.log('demo')").unwrap();
     let router = app_with_bus_and_plugin_dir(
-        SqliteStateStore::new(test_path("plugin_import")),
+        NiumaStore::new(test_path("plugin_import")),
         RuntimeEventBus::new(),
         plugin_dir.clone(),
     );
@@ -662,7 +652,7 @@ async fn plugin_import_rejects_builtin_plugin_id() {
     let plugin_dir = test_dir("plugin_import_builtin_destination");
     write_demo_plugin(&source_dir, "builtin-codex");
     let router = app_with_bus_and_plugin_dir(
-        SqliteStateStore::new(test_path("plugin_import_builtin")),
+        NiumaStore::new(test_path("plugin_import_builtin")),
         RuntimeEventBus::new(),
         plugin_dir,
     );
@@ -692,7 +682,7 @@ async fn plugin_import_rejects_builtin_plugin_id() {
 
 #[tokio::test]
 async fn plugin_enabled_updates_notification_plugin_map_and_publishes_event() {
-    let store = SqliteStateStore::new(test_path("plugin_enabled_notification"));
+    let store = NiumaStore::new(test_path("plugin_enabled_notification"));
     let bus = RuntimeEventBus::new();
     let mut receiver = bus.subscribe();
     let router = app_with_bus_and_plugin_dir(
@@ -742,7 +732,7 @@ async fn plugin_enabled_updates_notification_plugin_map_and_publishes_event() {
 
 #[tokio::test]
 async fn plugin_enabled_updates_tool_listener_config() {
-    let store = SqliteStateStore::new(test_path("plugin_enabled_tool"));
+    let store = NiumaStore::new(test_path("plugin_enabled_tool"));
     let bus = RuntimeEventBus::new();
     let mut receiver = bus.subscribe();
     let router =
@@ -787,7 +777,7 @@ async fn plugin_remove_deletes_external_plugin_and_disables_tool() {
     let installed_dir = plugin_dir.join("niuma-plugin-remove-test");
     std::fs::create_dir_all(&installed_dir).unwrap();
     write_demo_plugin(&installed_dir, "niuma-plugin-remove-test");
-    let store = SqliteStateStore::new(test_path("plugin_remove"));
+    let store = NiumaStore::new(test_path("plugin_remove"));
     store
         .save_listener_config(
             &ListenerConfig::default()
@@ -840,7 +830,7 @@ async fn plugin_remove_deletes_external_plugin_and_disables_tool() {
 #[tokio::test]
 async fn plugin_remove_rejects_builtin_plugin_id() {
     let router = app_with_bus_and_plugin_dir(
-        SqliteStateStore::new(test_path("plugin_remove_builtin")),
+        NiumaStore::new(test_path("plugin_remove_builtin")),
         RuntimeEventBus::new(),
         test_dir("plugin_remove_builtin_destination"),
     );
@@ -870,9 +860,7 @@ async fn plugin_remove_rejects_builtin_plugin_id() {
 
 #[tokio::test]
 async fn listener_config_accepts_dynamic_tool_map() {
-    let router = app(SqliteStateStore::new(test_path(
-        "listener_config_dynamic_map",
-    )));
+    let router = app(NiumaStore::new(test_path("listener_config_dynamic_map")));
 
     let save = router
         .clone()
@@ -900,7 +888,7 @@ async fn listener_config_accepts_dynamic_tool_map() {
 
 #[tokio::test]
 async fn listener_config_rejects_string_enabled_as_business_failure() {
-    let router = app(SqliteStateStore::new(test_path(
+    let router = app(NiumaStore::new(test_path(
         "listener_config_invalid_enabled",
     )));
     let response = router
@@ -928,7 +916,7 @@ async fn listener_config_rejects_string_enabled_as_business_failure() {
 
 #[tokio::test]
 async fn notification_records_returns_standard_list_envelope() {
-    let store = SqliteStateStore::new(test_path("notification_records_list"));
+    let store = NiumaStore::new(test_path("notification_records_list"));
     store
         .insert_notification_record_if_absent(&NotificationRecord {
             id: "record-api-title-body".to_string(),
@@ -970,7 +958,7 @@ async fn notification_records_returns_standard_list_envelope() {
 
 #[tokio::test]
 async fn cors_preflight_allows_json_post() {
-    let router = app(SqliteStateStore::new(test_path("cors")));
+    let router = app(NiumaStore::new(test_path("cors")));
     let response = router
         .oneshot(
             Request::builder()
@@ -994,7 +982,7 @@ async fn cors_preflight_allows_json_post() {
 
 #[tokio::test]
 async fn sse_stream_allows_cross_origin_event_source() {
-    let router = app(SqliteStateStore::new(test_path("sse_cors")));
+    let router = app(NiumaStore::new(test_path("sse_cors")));
     let response = router
         .oneshot(
             Request::builder()
@@ -1017,7 +1005,7 @@ async fn sse_stream_allows_cross_origin_event_source() {
 
 #[tokio::test]
 async fn sse_stream_emits_state_after_runtime_event() {
-    let store = SqliteStateStore::new(test_path("sse_runtime_event"));
+    let store = NiumaStore::new(test_path("sse_runtime_event"));
     enable_codex_listener(&store);
     let bus = RuntimeEventBus::new();
     let router = app_with_bus(store, bus);
@@ -1068,7 +1056,7 @@ async fn sse_stream_emits_state_after_runtime_event() {
 
 #[tokio::test]
 async fn sse_stream_emits_state_updates_to_each_connected_client() {
-    let store = SqliteStateStore::new(test_path("sse_multiple_clients"));
+    let store = NiumaStore::new(test_path("sse_multiple_clients"));
     enable_codex_listener(&store);
     let bus = RuntimeEventBus::new();
     let router = app_with_bus(store, bus);
@@ -1126,7 +1114,7 @@ async fn sse_stream_emits_state_updates_to_each_connected_client() {
 
 #[tokio::test]
 async fn events_stream_allows_cross_origin_event_source() {
-    let router = app(SqliteStateStore::new(test_path("events_sse_cors")));
+    let router = app(NiumaStore::new(test_path("events_sse_cors")));
     let response = router
         .oneshot(
             Request::builder()
@@ -1149,7 +1137,7 @@ async fn events_stream_allows_cross_origin_event_source() {
 
 #[tokio::test]
 async fn events_stream_emits_applied_event_after_post_event() {
-    let store = SqliteStateStore::new(test_path("events_sse_post_event"));
+    let store = NiumaStore::new(test_path("events_sse_post_event"));
     let router = app(store);
     let response = router
         .clone()
@@ -1188,7 +1176,7 @@ async fn events_stream_emits_applied_event_after_post_event() {
 
 #[tokio::test]
 async fn events_stream_skips_duplicate_events() {
-    let store = SqliteStateStore::new(test_path("events_sse_duplicate"));
+    let store = NiumaStore::new(test_path("events_sse_duplicate"));
     let router = app(store);
     let response = router
         .clone()
@@ -1230,7 +1218,7 @@ async fn events_stream_skips_duplicate_events() {
 
 #[tokio::test]
 async fn events_stream_emits_notification_test_requests() {
-    let store = SqliteStateStore::new(test_path("events_sse_notification_test"));
+    let store = NiumaStore::new(test_path("events_sse_notification_test"));
     let runtime_events = RuntimeEventBus::new();
     let router = app_with_bus(store, runtime_events.clone());
     let response = router
@@ -1263,7 +1251,7 @@ async fn events_stream_emits_notification_test_requests() {
 
 #[tokio::test]
 async fn plugin_notification_records_save_sent_result() {
-    let store = SqliteStateStore::new(test_path("plugin_notification_result_sent"));
+    let store = NiumaStore::new(test_path("plugin_notification_result_sent"));
     store.append_event(sample_event()).unwrap();
     let router = app_with_bus_and_plugin_dir(
         store.clone(),
@@ -1307,7 +1295,7 @@ async fn plugin_notification_records_save_sent_result() {
 
 #[tokio::test]
 async fn plugin_notification_records_rejects_non_notification_plugin() {
-    let store = SqliteStateStore::new(test_path("plugin_notification_result_non_notification"));
+    let store = NiumaStore::new(test_path("plugin_notification_result_non_notification"));
     store.append_event(sample_event()).unwrap();
     let router = app(store);
     let body = serde_json::json!({
@@ -1335,7 +1323,7 @@ async fn plugin_notification_records_rejects_non_notification_plugin() {
 
 #[tokio::test]
 async fn plugin_notification_records_rejects_unknown_event() {
-    let router = app(SqliteStateStore::new(test_path(
+    let router = app(NiumaStore::new(test_path(
         "plugin_notification_result_unknown_event",
     )));
     let body = serde_json::json!({
@@ -1364,7 +1352,7 @@ async fn plugin_notification_records_rejects_unknown_event() {
 
 #[tokio::test]
 async fn plugin_notification_test_results_save_sent_result() {
-    let store = SqliteStateStore::new(test_path("plugin_notification_test_result_sent"));
+    let store = NiumaStore::new(test_path("plugin_notification_test_result_sent"));
     let router = app_with_bus_and_plugin_dir(
         store.clone(),
         RuntimeEventBus::new(),
@@ -1407,7 +1395,7 @@ async fn plugin_notification_test_results_save_sent_result() {
 
 #[tokio::test]
 async fn plugin_notification_test_results_rejects_non_notification_plugin() {
-    let router = app(SqliteStateStore::new(test_path(
+    let router = app(NiumaStore::new(test_path(
         "plugin_notification_test_result_non_notification",
     )));
     let body = serde_json::json!({
@@ -1456,7 +1444,7 @@ fn sample_event() -> NiumaEvent {
     sample_event_with_type("event-1", "dedupe-1", EventType::ApprovalRequested, 1_000)
 }
 
-fn enable_codex_listener(store: &SqliteStateStore) {
+fn enable_codex_listener(store: &NiumaStore) {
     store
         .save_listener_config(&ListenerConfig {
             codex_listening_enabled: true,

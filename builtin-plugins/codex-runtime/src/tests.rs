@@ -11,7 +11,7 @@ fn codex_session_runtime_accepts_only_jsonl_files() {
 
 #[test]
 fn codex_session_runtime_listening_enabled_defaults_false_and_reads_saved_true() {
-    let store = SqliteStateStore::new(test_sqlite_path("runtime_listener_config"));
+    let store = NiumaStore::new(test_sqlite_path("runtime_listener_config"));
 
     assert!(!codex_listening_enabled(&store));
     store
@@ -29,12 +29,13 @@ fn fallback_scan_interval_keeps_notify_path_observable() {
 }
 
 fn test_sqlite_path(name: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "niuma-codex-runtime-{name}-{}.sqlite",
-        std::process::id()
+    let dir = std::env::temp_dir().join(format!(
+        "niuma-codex-runtime-{name}-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap()
     ));
-    let _ = std::fs::remove_file(&path);
-    path
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("niuma.sqlite")
 }
 
 #[test]
@@ -173,7 +174,7 @@ fn active_file_stays_active_when_recently_modified() {
     let mut active_files = HashMap::from([(path.clone(), now - ACTIVE_FILE_TTL * 2)]);
     let mut status_log_state = MainStatusLogState::default();
     let mutation_service = StateMutationService::new(
-        SqliteStateStore::new(path.with_extension("sqlite")),
+        NiumaStore::new(path.with_extension("sqlite")),
         RuntimeEventBus::new(),
     );
     let event_sink = StoreCodexEventSink::new(mutation_service);
@@ -198,10 +199,7 @@ fn active_file_expires_when_not_recently_seen_or_modified() {
     let mut active_files = HashMap::from([(path, now - ACTIVE_FILE_TTL * 2)]);
     let mut status_log_state = MainStatusLogState::default();
     let mutation_service = StateMutationService::new(
-        SqliteStateStore::new(std::env::temp_dir().join(format!(
-            "niuma-active-missing-{}.sqlite",
-            std::process::id()
-        ))),
+        NiumaStore::new(test_sqlite_path("active_missing")),
         RuntimeEventBus::new(),
     );
     let event_sink = StoreCodexEventSink::new(mutation_service);
@@ -239,7 +237,7 @@ fn discovered_active_file_primes_to_end_without_replaying_old_tail() {
 
     let mut scanner = CodexSessionScanner::default();
     let mut active_files = HashMap::<PathBuf, Instant>::new();
-    let store = SqliteStateStore::new(path.with_extension("sqlite"));
+    let store = NiumaStore::new(path.with_extension("sqlite"));
     add_discovered_active_file(
         &mut scanner,
         &mut active_files,

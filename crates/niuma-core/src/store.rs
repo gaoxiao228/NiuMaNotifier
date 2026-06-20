@@ -55,7 +55,7 @@ impl Default for StoredState {
 }
 
 #[derive(Clone, Debug)]
-pub struct SqliteStateStore {
+pub struct NiumaStore {
     path: PathBuf,
     runtime: Arc<Mutex<RuntimeState>>,
 }
@@ -107,7 +107,7 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 // 运行态只保留最近事件作为调试/API 快照，当前主状态引用的事件会额外保留。
 const MAX_PUBLIC_EVENT_CACHE_SIZE: usize = 200;
 
-impl SqliteStateStore {
+impl NiumaStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -395,9 +395,7 @@ impl SqliteStateStore {
         self.config_files().remove_plugin_config(plugin_id)
     }
 
-    pub fn plugin_runtime_states(
-        &self,
-    ) -> Result<HashMap<String, PluginRuntimeState>, String> {
+    pub fn plugin_runtime_states(&self) -> Result<HashMap<String, PluginRuntimeState>, String> {
         Ok(self.runtime()?.plugin_runtime_states.clone())
     }
 

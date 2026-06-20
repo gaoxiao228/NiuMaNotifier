@@ -5,14 +5,15 @@ use std::time::Duration;
 use crate::listener_config::ListenerConfig;
 use crate::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
 use crate::notification_store::{
-    NotificationNotifierType, NotificationRecord, NotificationRecordStatus, PluginNotificationResult,
+    NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
+    PluginNotificationResult,
 };
 use crate::plugin::{PluginRuntimeState, PluginRuntimeStatus};
-use crate::store::SqliteStateStore;
+use crate::store::NiumaStore;
 
 #[test]
 fn append_event_updates_session_status() {
-    let store = SqliteStateStore::new(test_sqlite_path("append_event_updates_session_status"));
+    let store = NiumaStore::new(test_sqlite_path("append_event_updates_session_status"));
     let event = sample_event("dedupe-1", EventType::ApprovalRequested);
 
     let state = store.append_event(event).unwrap();
@@ -25,7 +26,7 @@ fn append_event_updates_session_status() {
 
 #[test]
 fn sessions_returns_stored_sessions_ordered_by_activity() {
-    let store = SqliteStateStore::new(test_sqlite_path("sessions_returns_stored"));
+    let store = NiumaStore::new(test_sqlite_path("sessions_returns_stored"));
     store
         .append_event(sample_session_event(
             "dedupe-session-a",
@@ -54,7 +55,7 @@ fn sessions_returns_stored_sessions_ordered_by_activity() {
 #[test]
 fn sqlite_schema_does_not_create_events_table() {
     let path = test_sqlite_path("schema_without_events_table");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store.load().unwrap();
 
     let connection = rusqlite::Connection::open(path).unwrap();
@@ -72,7 +73,7 @@ fn sqlite_schema_does_not_create_events_table() {
 #[test]
 fn runtime_state_is_not_persisted_to_sqlite_tables() {
     let path = test_sqlite_path("runtime_state_is_not_persisted");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store
         .save_listener_config(&ListenerConfig::default())
         .unwrap();
@@ -94,7 +95,7 @@ fn runtime_state_is_not_persisted_to_sqlite_tables() {
 #[test]
 fn new_store_with_same_path_starts_with_empty_runtime_state() {
     let path = test_sqlite_path("new_store_same_path_empty_runtime");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store
         .append_event(sample_event(
             "dedupe-runtime-reset",
@@ -102,7 +103,7 @@ fn new_store_with_same_path_starts_with_empty_runtime_state() {
         ))
         .unwrap();
 
-    let reloaded = SqliteStateStore::new(path);
+    let reloaded = NiumaStore::new(path);
 
     assert!(reloaded.sessions().unwrap().is_empty());
     assert!(reloaded.public_recent_events(10).unwrap().is_empty());
@@ -115,7 +116,7 @@ fn new_store_with_same_path_starts_with_empty_runtime_state() {
 #[test]
 fn schema_initializes_only_notification_records_table() {
     let path = test_sqlite_path("schema_notification_only");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store.load().unwrap();
 
     let connection = rusqlite::Connection::open(path).unwrap();
@@ -149,16 +150,13 @@ fn schema_initializes_only_notification_records_table() {
     );
 
     assert_index_exists(&connection, "idx_notification_records_created_at");
-    assert_index_exists(
-        &connection,
-        "idx_notification_records_notifier_created_at",
-    );
+    assert_index_exists(&connection, "idx_notification_records_notifier_created_at");
 }
 
 #[test]
 fn store_write_waits_for_temporary_sqlite_write_lock() {
     let path = test_sqlite_path("temporary_write_lock_wait");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store.load().unwrap();
 
     let mut blocking_connection = rusqlite::Connection::open(&path).unwrap();
@@ -173,11 +171,13 @@ fn store_write_waits_for_temporary_sqlite_write_lock() {
 
     let writer = std::thread::spawn({
         let store = store.clone();
-        move || store.insert_notification_record_if_absent(&sample_notification_record(
-            "record-waiting-writer",
-            "builtin-bark",
-            "event-waiting-writer",
-        ))
+        move || {
+            store.insert_notification_record_if_absent(&sample_notification_record(
+                "record-waiting-writer",
+                "builtin-bark",
+                "event-waiting-writer",
+            ))
+        }
     });
     std::thread::sleep(Duration::from_millis(200));
     tx.commit().unwrap();
@@ -189,7 +189,7 @@ fn store_write_waits_for_temporary_sqlite_write_lock() {
 #[test]
 fn sqlite_store_uses_wal_journal_mode() {
     let path = test_sqlite_path("wal_journal_mode");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store.load().unwrap();
 
     let connection = rusqlite::Connection::open(path).unwrap();
@@ -202,7 +202,7 @@ fn sqlite_store_uses_wal_journal_mode() {
 
 #[test]
 fn append_event_deduplicates_by_dedupe_key() {
-    let store = SqliteStateStore::new(test_sqlite_path("append_event_deduplicates_by_dedupe_key"));
+    let store = NiumaStore::new(test_sqlite_path("append_event_deduplicates_by_dedupe_key"));
     let event = sample_event("same-dedupe", EventType::SessionStarted);
 
     store.append_event(event.clone()).unwrap();
@@ -214,7 +214,7 @@ fn append_event_deduplicates_by_dedupe_key() {
 
 #[test]
 fn append_event_deduplicates_different_ids_by_public_dedupe_key() {
-    let store = SqliteStateStore::new(test_sqlite_path(
+    let store = NiumaStore::new(test_sqlite_path(
         "append_event_deduplicates_different_ids_by_public_dedupe_key",
     ));
     let first = sample_session_event(
@@ -240,7 +240,7 @@ fn append_event_deduplicates_different_ids_by_public_dedupe_key() {
 
 #[test]
 fn append_events_deduplicates_same_batch_by_public_dedupe_key() {
-    let store = SqliteStateStore::new(test_sqlite_path(
+    let store = NiumaStore::new(test_sqlite_path(
         "append_events_deduplicates_same_batch_by_public_dedupe_key",
     ));
     let first = sample_session_event(
@@ -267,7 +267,7 @@ fn append_events_deduplicates_same_batch_by_public_dedupe_key() {
 
 #[test]
 fn append_events_writes_multiple_events_once() {
-    let store = SqliteStateStore::new(test_sqlite_path("append_events_writes_multiple"));
+    let store = NiumaStore::new(test_sqlite_path("append_events_writes_multiple"));
     let first = sample_session_event("dedupe-a", "manual-a", EventType::SessionStarted, 1_000);
     let second = sample_session_event("dedupe-b", "manual-b", EventType::ApprovalRequested, 2_000);
 
@@ -288,7 +288,7 @@ fn append_events_writes_multiple_events_once() {
 
 #[test]
 fn append_events_deduplicates_existing_events() {
-    let store = SqliteStateStore::new(test_sqlite_path("append_events_deduplicates"));
+    let store = NiumaStore::new(test_sqlite_path("append_events_deduplicates"));
     let first = sample_session_event("same-dedupe", "manual-a", EventType::SessionStarted, 1_000);
     let second = sample_session_event("same-dedupe", "manual-a", EventType::TaskFailed, 2_000);
 
@@ -300,7 +300,7 @@ fn append_events_deduplicates_existing_events() {
 
 #[test]
 fn append_events_with_result_returns_only_applied_events() {
-    let store = SqliteStateStore::new(test_sqlite_path("append_events_with_result_applied"));
+    let store = NiumaStore::new(test_sqlite_path("append_events_with_result_applied"));
     let first = sample_session_event(
         "dedupe-applied-first",
         "session-applied",
@@ -326,7 +326,7 @@ fn append_events_with_result_returns_only_applied_events() {
 
 #[test]
 fn completed_from_other_session_does_not_hide_existing_attention_item() {
-    let store = SqliteStateStore::new(test_sqlite_path("completed_does_not_hide_attention"));
+    let store = NiumaStore::new(test_sqlite_path("completed_does_not_hide_attention"));
     store
         .append_event(sample_session_event(
             "dedupe-a-waiting",
@@ -352,7 +352,7 @@ fn completed_from_other_session_does_not_hide_existing_attention_item() {
 
 #[test]
 fn running_from_same_session_clears_all_attention_items_for_that_session() {
-    let store = SqliteStateStore::new(test_sqlite_path("running_clears_same_session_attention"));
+    let store = NiumaStore::new(test_sqlite_path("running_clears_same_session_attention"));
     store
         .append_event(sample_session_event(
             "dedupe-a-approval",
@@ -397,7 +397,7 @@ fn running_from_same_session_clears_all_attention_items_for_that_session() {
 
 #[test]
 fn activity_from_same_session_clears_waiting_input() {
-    let store = SqliteStateStore::new(test_sqlite_path("activity_clears_waiting_input"));
+    let store = NiumaStore::new(test_sqlite_path("activity_clears_waiting_input"));
     store
         .append_event(sample_session_event(
             "dedupe-a-input",
@@ -425,7 +425,7 @@ fn activity_from_same_session_clears_waiting_input() {
 
 #[test]
 fn unkeyed_activity_keeps_keyed_approval_waiting() {
-    let store = SqliteStateStore::new(test_sqlite_path("activity_keeps_keyed_approval"));
+    let store = NiumaStore::new(test_sqlite_path("activity_keeps_keyed_approval"));
     let approval = sample_session_event(
         "approval-dedupe",
         "session-a",
@@ -465,7 +465,7 @@ fn unkeyed_activity_keeps_keyed_approval_waiting() {
 
 #[test]
 fn resolved_approval_activity_clears_only_matching_attention_item() {
-    let store = SqliteStateStore::new(test_sqlite_path("resolved_approval_clears_matching"));
+    let store = NiumaStore::new(test_sqlite_path("resolved_approval_clears_matching"));
     let approval = sample_session_event(
         "approval-dedupe",
         "session-a",
@@ -499,7 +499,7 @@ fn resolved_approval_activity_clears_only_matching_attention_item() {
 
 #[test]
 fn resolved_approval_activity_clears_unkeyed_hook_approval_without_hiding_input() {
-    let store = SqliteStateStore::new(test_sqlite_path("resolved_approval_clears_hook_approval"));
+    let store = NiumaStore::new(test_sqlite_path("resolved_approval_clears_hook_approval"));
     let approval = sample_session_event(
         "hook-approval-dedupe",
         "session-a",
@@ -532,7 +532,7 @@ fn resolved_approval_activity_clears_unkeyed_hook_approval_without_hiding_input(
 
 #[test]
 fn idle_from_same_session_clears_attention_without_hiding_other_attention() {
-    let store = SqliteStateStore::new(test_sqlite_path("idle_clears_same_session_attention"));
+    let store = NiumaStore::new(test_sqlite_path("idle_clears_same_session_attention"));
     store
         .append_event(sample_session_event(
             "dedupe-a-approval",
@@ -569,7 +569,7 @@ fn idle_from_same_session_clears_attention_without_hiding_other_attention() {
 
 #[test]
 fn stale_clears_same_session_running_activity_without_becoming_primary_status() {
-    let store = SqliteStateStore::new(test_sqlite_path("stale_clears_running_activity"));
+    let store = NiumaStore::new(test_sqlite_path("stale_clears_running_activity"));
     store
         .append_event(sample_session_event(
             "dedupe-running-a",
@@ -605,7 +605,7 @@ fn stale_clears_same_session_running_activity_without_becoming_primary_status() 
 
 #[test]
 fn stale_does_not_hide_attention_from_other_sessions() {
-    let store = SqliteStateStore::new(test_sqlite_path("stale_keeps_other_attention"));
+    let store = NiumaStore::new(test_sqlite_path("stale_keeps_other_attention"));
     store
         .append_event(sample_session_event(
             "dedupe-approval-a",
@@ -642,7 +642,7 @@ fn stale_does_not_hide_attention_from_other_sessions() {
 
 #[test]
 fn mark_stale_running_sessions_only_stales_old_running_sessions() {
-    let store = SqliteStateStore::new(test_sqlite_path("mark_stale_running_sessions"));
+    let store = NiumaStore::new(test_sqlite_path("mark_stale_running_sessions"));
     store
         .append_event(sample_session_event(
             "dedupe-old-running",
@@ -704,7 +704,7 @@ fn mark_stale_running_sessions_only_stales_old_running_sessions() {
 
 #[test]
 fn mark_stale_running_sessions_stales_at_exact_timeout_boundary() {
-    let store = SqliteStateStore::new(test_sqlite_path("mark_stale_running_boundary"));
+    let store = NiumaStore::new(test_sqlite_path("mark_stale_running_boundary"));
     store
         .append_event(sample_session_event(
             "dedupe-boundary-running",
@@ -732,7 +732,7 @@ fn mark_stale_running_sessions_stales_at_exact_timeout_boundary() {
 
 #[test]
 fn mark_stale_running_sessions_is_idempotent_for_same_now() {
-    let store = SqliteStateStore::new(test_sqlite_path("mark_stale_running_idempotent"));
+    let store = NiumaStore::new(test_sqlite_path("mark_stale_running_idempotent"));
     store
         .append_event(sample_session_event(
             "dedupe-old-running",
@@ -765,7 +765,7 @@ fn mark_stale_running_sessions_is_idempotent_for_same_now() {
 
 #[test]
 fn duplicate_attention_events_are_kept_when_dedupe_keys_are_different() {
-    let store = SqliteStateStore::new(test_sqlite_path("duplicate_attention_kept"));
+    let store = NiumaStore::new(test_sqlite_path("duplicate_attention_kept"));
     store
         .append_event(sample_session_event(
             "dedupe-a-approval-1",
@@ -797,7 +797,7 @@ fn duplicate_attention_events_are_kept_when_dedupe_keys_are_different() {
 
 #[test]
 fn input_requested_updates_session_to_waiting_input() {
-    let store = SqliteStateStore::new(test_sqlite_path("input_requested_updates_session"));
+    let store = NiumaStore::new(test_sqlite_path("input_requested_updates_session"));
     let event = sample_event("dedupe-input", EventType::InputRequested);
 
     let state = store.append_event(event).unwrap();
@@ -808,7 +808,7 @@ fn input_requested_updates_session_to_waiting_input() {
 
 #[test]
 fn task_failed_updates_session_to_error() {
-    let store = SqliteStateStore::new(test_sqlite_path("task_failed_updates_session"));
+    let store = NiumaStore::new(test_sqlite_path("task_failed_updates_session"));
     let event = sample_event("dedupe-error", EventType::TaskFailed);
 
     let state = store.append_event(event).unwrap();
@@ -819,7 +819,7 @@ fn task_failed_updates_session_to_error() {
 
 #[test]
 fn reset_clears_events_and_sessions() {
-    let store = SqliteStateStore::new(test_sqlite_path("reset_clears_events_and_sessions"));
+    let store = NiumaStore::new(test_sqlite_path("reset_clears_events_and_sessions"));
     store
         .append_event(sample_event("dedupe-reset", EventType::ApprovalRequested))
         .unwrap();
@@ -833,7 +833,7 @@ fn reset_clears_events_and_sessions() {
 
 #[test]
 fn notification_records_dedupe_by_notifier_and_event() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_records_dedupe"));
+    let store = NiumaStore::new(test_sqlite_path("notification_records_dedupe"));
     let record = sample_notification_record("record-1", "builtin-ntfy", "event-1");
 
     assert!(store.insert_notification_record_if_absent(&record).unwrap());
@@ -849,7 +849,7 @@ fn notification_records_dedupe_by_notifier_and_event() {
 
 #[test]
 fn notification_records_allow_same_event_on_different_notifiers() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_records_same_event"));
+    let store = NiumaStore::new(test_sqlite_path("notification_records_same_event"));
     let bark_record = sample_notification_record("record-bark", "builtin-bark", "event-1");
     let ntfy_record = sample_notification_record("record-ntfy", "builtin-ntfy", "event-1");
 
@@ -865,7 +865,7 @@ fn notification_records_allow_same_event_on_different_notifiers() {
 
 #[test]
 fn notification_records_allow_same_notifier_on_different_events() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_records_same_notifier"));
+    let store = NiumaStore::new(test_sqlite_path("notification_records_same_notifier"));
     let first = sample_notification_record("record-1", "builtin-ntfy", "event-1");
     let second = sample_notification_record("record-2", "builtin-ntfy", "event-2");
 
@@ -877,7 +877,7 @@ fn notification_records_allow_same_notifier_on_different_events() {
 
 #[test]
 fn notification_record_result_can_be_updated_after_reservation() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_record_update_result"));
+    let store = NiumaStore::new(test_sqlite_path("notification_record_update_result"));
     let mut record = sample_notification_record("record-pending", "builtin-ntfy", "event-1");
     record.status = NotificationRecordStatus::Pending;
     record.sent_at = None;
@@ -899,7 +899,7 @@ fn notification_record_result_can_be_updated_after_reservation() {
 
 #[test]
 fn plugin_notification_result_upserts_by_plugin_and_event() {
-    let store = SqliteStateStore::new(test_sqlite_path("plugin_notification_result_upsert"));
+    let store = NiumaStore::new(test_sqlite_path("plugin_notification_result_upsert"));
     let mut result =
         sample_plugin_notification_result("plugin-record-1", "builtin-bark", "event-1");
 
@@ -919,11 +919,13 @@ fn plugin_notification_result_upserts_by_plugin_and_event() {
 
 #[test]
 fn notification_history_records_marks_plugin_id_for_plugin_notifier() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_history_merge"));
+    let store = NiumaStore::new(test_sqlite_path("notification_history_merge"));
     let builtin = sample_notification_record("builtin-record", "builtin-ntfy", "event-builtin");
     let plugin = sample_plugin_notification_result("plugin-record", "builtin-ntfy", "event-plugin");
 
-    store.insert_notification_record_if_absent(&builtin).unwrap();
+    store
+        .insert_notification_record_if_absent(&builtin)
+        .unwrap();
     store.save_plugin_notification_result(&plugin).unwrap();
 
     let records = store.notification_history_records(20).unwrap();
@@ -937,7 +939,7 @@ fn notification_history_records_marks_plugin_id_for_plugin_notifier() {
 
 #[test]
 fn notification_records_return_error_on_duplicate_id_for_different_event_and_notifier() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_records_duplicate_id"));
+    let store = NiumaStore::new(test_sqlite_path("notification_records_duplicate_id"));
     let first = sample_notification_record("record-1", "builtin-bark", "event-1");
     let duplicate_id = sample_notification_record("record-1", "builtin-ntfy", "event-2");
 
@@ -981,7 +983,7 @@ fn notification_records_return_error_for_corrupted_stored_values() {
         ),
     ] {
         let path = test_sqlite_path(name);
-        let store = SqliteStateStore::new(path.clone());
+        let store = NiumaStore::new(path.clone());
         store.load().unwrap();
 
         let connection = rusqlite::Connection::open(path).unwrap();
@@ -1010,7 +1012,7 @@ fn notification_records_return_error_for_corrupted_stored_values() {
 #[test]
 fn notification_records_return_error_for_unknown_notifier_type() {
     let path = test_sqlite_path("notification_records_unknown_notifier_type");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     store.load().unwrap();
 
     let connection = rusqlite::Connection::open(path).unwrap();
@@ -1036,7 +1038,7 @@ fn notification_records_return_error_for_unknown_notifier_type() {
 
 #[test]
 fn dismiss_active_blocker_clears_all_attention_items_without_changing_latest_activity() {
-    let store = SqliteStateStore::new(test_sqlite_path("dismiss_clears_all_attention"));
+    let store = NiumaStore::new(test_sqlite_path("dismiss_clears_all_attention"));
     store
         .append_event(sample_session_event(
             "dedupe-running",
@@ -1077,7 +1079,7 @@ fn dismiss_active_blocker_clears_all_attention_items_without_changing_latest_act
 
 #[test]
 fn dismiss_active_blocker_returns_none_without_waiting_session() {
-    let store = SqliteStateStore::new(test_sqlite_path("dismiss_active_blocker_none"));
+    let store = NiumaStore::new(test_sqlite_path("dismiss_active_blocker_none"));
     store
         .append_event(sample_event("dedupe-running", EventType::SessionStarted))
         .unwrap();
@@ -1089,7 +1091,7 @@ fn dismiss_active_blocker_returns_none_without_waiting_session() {
 
 #[test]
 fn sqlite_store_matches_core_status_flow() {
-    let store = SqliteStateStore::new(test_sqlite_path("sqlite_core_status_flow"));
+    let store = NiumaStore::new(test_sqlite_path("sqlite_core_status_flow"));
     store
         .append_event(sample_session_event(
             "dedupe-running",
@@ -1135,7 +1137,7 @@ fn sqlite_store_matches_core_status_flow() {
 fn listener_config_persists_to_json_config_file() {
     let root = test_data_dir("json_listener_config");
     let path = root.join("niuma.sqlite");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
 
     let default_config = store.listener_config().unwrap();
     store
@@ -1144,7 +1146,7 @@ fn listener_config_persists_to_json_config_file() {
             ..ListenerConfig::default()
         })
         .unwrap();
-    let reloaded = SqliteStateStore::new(path).listener_config().unwrap();
+    let reloaded = NiumaStore::new(path).listener_config().unwrap();
 
     assert!(root.join("config.json").exists());
     assert!(!default_config.codex_listening_enabled);
@@ -1155,13 +1157,13 @@ fn listener_config_persists_to_json_config_file() {
 fn plugin_enabled_map_defaults_empty_and_persists() {
     let root = test_data_dir("json_plugin_enabled_map");
     let path = root.join("niuma.sqlite");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     let mut enabled = BTreeMap::new();
     enabled.insert("builtin-bark".to_string(), true);
 
     let default_map = store.plugin_enabled_map().unwrap();
     store.save_plugin_enabled_map(&enabled).unwrap();
-    let reloaded = SqliteStateStore::new(path).plugin_enabled_map().unwrap();
+    let reloaded = NiumaStore::new(path).plugin_enabled_map().unwrap();
 
     assert!(root.join("config.json").exists());
     assert!(default_map.is_empty());
@@ -1172,19 +1174,22 @@ fn plugin_enabled_map_defaults_empty_and_persists() {
 fn plugin_config_persists_to_plugin_config_json_file() {
     let root = test_data_dir("json_plugin_config");
     let path = root.join("niuma.sqlite");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
     let mut config = serde_json::Map::new();
     config.insert("device_key".to_string(), serde_json::json!("device-1"));
 
     assert!(store.plugin_config("builtin-bark").unwrap().is_none());
     store.save_plugin_config("builtin-bark", &config).unwrap();
-    let reloaded = SqliteStateStore::new(path.clone())
+    let reloaded = NiumaStore::new(path.clone())
         .plugin_config("builtin-bark")
         .unwrap()
         .unwrap();
 
-    assert!(root.join("plugin-configs").join("builtin-bark.json").exists());
-    SqliteStateStore::new(path)
+    assert!(root
+        .join("plugin-configs")
+        .join("builtin-bark.json")
+        .exists());
+    NiumaStore::new(path)
         .remove_plugin_config("builtin-bark")
         .unwrap();
 
@@ -1199,7 +1204,7 @@ fn plugin_config_persists_to_plugin_config_json_file() {
 fn language_preference_defaults_to_system_and_persists() {
     let root = test_data_dir("json_language_preference");
     let path = root.join("niuma.sqlite");
-    let store = SqliteStateStore::new(path.clone());
+    let store = NiumaStore::new(path.clone());
 
     let default_preference = store.language_preference().unwrap();
     store
@@ -1207,7 +1212,7 @@ fn language_preference_defaults_to_system_and_persists() {
             crate::platform::locale::SystemLanguage::Ja,
         ))
         .unwrap();
-    let reloaded = SqliteStateStore::new(path).language_preference().unwrap();
+    let reloaded = NiumaStore::new(path).language_preference().unwrap();
 
     assert_eq!(
         default_preference,
@@ -1224,7 +1229,7 @@ fn language_preference_defaults_to_system_and_persists() {
 #[test]
 fn plugin_runtime_states_are_memory_only() {
     let path = test_sqlite_path("runtime_states_memory_only");
-    let store = SqliteStateStore::new(&path);
+    let store = NiumaStore::new(&path);
     store
         .save_plugin_runtime_state(
             "external-demo",
@@ -1241,13 +1246,13 @@ fn plugin_runtime_states_are_memory_only() {
         Some(&PluginRuntimeStatus::Running)
     );
 
-    let reloaded = SqliteStateStore::new(path);
+    let reloaded = NiumaStore::new(path);
     assert!(reloaded.plugin_runtime_states().unwrap().is_empty());
 }
 
 #[test]
 fn clear_tool_state_removes_only_codex_aggregation() {
-    let store = SqliteStateStore::new(test_sqlite_path("clear_codex_state_only"));
+    let store = NiumaStore::new(test_sqlite_path("clear_codex_state_only"));
     store
         .append_event(sample_session_event(
             "dedupe-codex-running",
@@ -1291,7 +1296,7 @@ fn clear_tool_state_removes_only_codex_aggregation() {
 
 #[test]
 fn clear_tool_state_resets_codex_latest_activity_to_idle() {
-    let store = SqliteStateStore::new(test_sqlite_path("clear_codex_latest_idle"));
+    let store = NiumaStore::new(test_sqlite_path("clear_codex_latest_idle"));
     store
         .append_event(sample_session_event(
             "dedupe-codex-running",
@@ -1311,7 +1316,7 @@ fn clear_tool_state_resets_codex_latest_activity_to_idle() {
 
 #[test]
 fn public_recent_events_filters_stale_and_respects_limit() {
-    let store = SqliteStateStore::new(test_sqlite_path("public_recent_filters_stale"));
+    let store = NiumaStore::new(test_sqlite_path("public_recent_filters_stale"));
     store
         .append_event(sample_session_event(
             "dedupe-approval-a",
@@ -1346,7 +1351,7 @@ fn public_recent_events_filters_stale_and_respects_limit() {
 
 #[test]
 fn public_recent_events_keeps_only_recent_memory_cache() {
-    let store = SqliteStateStore::new(test_sqlite_path("public_recent_memory_cache"));
+    let store = NiumaStore::new(test_sqlite_path("public_recent_memory_cache"));
     for index in 0..250 {
         store
             .append_event(sample_session_event(
@@ -1367,7 +1372,7 @@ fn public_recent_events_keeps_only_recent_memory_cache() {
 
 #[test]
 fn session_activity_keeps_session_running_and_updates_last_activity() {
-    let store = SqliteStateStore::new(test_sqlite_path("session_activity_keeps_running"));
+    let store = NiumaStore::new(test_sqlite_path("session_activity_keeps_running"));
     store
         .append_event(sample_session_event(
             "dedupe-running",
@@ -1404,7 +1409,7 @@ fn session_activity_keeps_session_running_and_updates_last_activity() {
 
 #[test]
 fn session_activity_after_completion_does_not_reopen_session() {
-    let store = SqliteStateStore::new(test_sqlite_path("activity_after_completion_ignored"));
+    let store = NiumaStore::new(test_sqlite_path("activity_after_completion_ignored"));
     store
         .append_event(sample_session_event(
             "dedupe-running",
@@ -1445,7 +1450,7 @@ fn session_activity_after_completion_does_not_reopen_session() {
 
 #[test]
 fn codex_rollback_sequence_finishes_even_with_late_token_count() {
-    let store = SqliteStateStore::new(test_sqlite_path("rollback_sequence_late_token_count"));
+    let store = NiumaStore::new(test_sqlite_path("rollback_sequence_late_token_count"));
     store
         .append_event(sample_session_event(
             "rollback-started",
@@ -1496,7 +1501,7 @@ fn codex_rollback_sequence_finishes_even_with_late_token_count() {
 
 #[test]
 fn public_recent_events_filters_internal_session_activity() {
-    let store = SqliteStateStore::new(test_sqlite_path("public_recent_filters_activity"));
+    let store = NiumaStore::new(test_sqlite_path("public_recent_filters_activity"));
     store
         .append_event(sample_session_event(
             "dedupe-running",
@@ -1522,7 +1527,7 @@ fn public_recent_events_filters_internal_session_activity() {
 
 #[test]
 fn empty_project_path_does_not_overwrite_existing_session_path() {
-    let store = SqliteStateStore::new(test_sqlite_path("empty_path_preserves_existing"));
+    let store = NiumaStore::new(test_sqlite_path("empty_path_preserves_existing"));
     store
         .append_event(sample_session_event(
             "dedupe-with-path",
@@ -1553,7 +1558,7 @@ fn empty_project_path_does_not_overwrite_existing_session_path() {
 
 #[test]
 fn sqlite_store_reset_and_dismiss_preserve_activity_behavior() {
-    let store = SqliteStateStore::new(test_sqlite_path("sqlite_reset_and_dismiss"));
+    let store = NiumaStore::new(test_sqlite_path("sqlite_reset_and_dismiss"));
     store
         .append_event(sample_session_event(
             "dedupe-running",
@@ -1593,11 +1598,7 @@ fn sample_event(dedupe_key: &str, event_type: EventType) -> NiumaEvent {
     sample_session_event(dedupe_key, "s1", event_type, 1_000)
 }
 
-fn sample_notification_record(
-    id: &str,
-    notifier_id: &str,
-    event_id: &str,
-) -> NotificationRecord {
+fn sample_notification_record(id: &str, notifier_id: &str, event_id: &str) -> NotificationRecord {
     NotificationRecord {
         id: id.to_string(),
         notifier_id: notifier_id.to_string(),

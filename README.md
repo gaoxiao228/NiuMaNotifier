@@ -94,7 +94,7 @@ Planned support:
 - Desktop: Tauri 2
 - Frontend: TypeScript, Vite, native DOM/CSS
 - Backend / core: Rust
-- State storage: SQLite
+- Data storage: SQLite notification history, JSON configuration, in-memory runtime state
 - Notification channels: Bark, ntfy
 
 ## Quick Start
@@ -135,7 +135,7 @@ cargo test --workspace
 ## Repository Structure
 
 ```text
-crates/niuma-core/        Core models, state aggregation, SQLite storage, tool protocol parsing
+crates/niuma-core/        Core models, state aggregation, notification history, configuration, tool protocol parsing
 crates/niuma-api/         Local API and SSE
 src/                      Desktop frontend code
 src-tauri/                Tauri desktop app and background runtime
@@ -146,16 +146,17 @@ tests/                    Frontend layout and rendering tests
 
 - Raw tool events must be converted into the unified `NiumaEvent`.
 - Runtime in-process writes must go through `StateMutationService`.
-- Do not bypass `SqliteStateStore` state transitions or directly modify the main state.
+- Do not bypass `NiumaStore` state transitions or directly modify the main state.
 - Platform differences should live in `niuma_core::platform` first.
 - New UI copy must include translations for all supported languages.
 - Do not commit real tokens, local SQLite databases, private logs, build artifacts, or dependency directories.
 
 ## Local Data and Security Boundary
 
-- App state and notification settings are stored in a local SQLite database.
-- The first version of notification settings may store Bark device keys or ntfy tokens in plain text in SQLite.
-- The `secret_ref` field is reserved for future migration to system secret storage.
+- SQLite only stores notification history.
+- App configuration, plugin configuration, and plugin enabled state are stored as local JSON files.
+- Events, sessions, attention items, latest activity, and plugin runtime status are in-memory runtime state.
+- Plugin configuration may contain Bark device keys or ntfy tokens in plain text local JSON files.
 - Do not commit real tokens, private logs, user session files, or local SQLite data to the repository.
 - Third-party service marks under `public/assets/` are only used to display the corresponding notification channels. Trademark and redistribution requirements should be reviewed again before broader distribution.
 

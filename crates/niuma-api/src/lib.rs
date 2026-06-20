@@ -3,7 +3,7 @@ use std::thread;
 
 use niuma_core::config;
 use niuma_core::runtime_event::RuntimeEventBus;
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 
 mod handlers;
 mod manual_test;
@@ -18,12 +18,12 @@ pub fn local_api_addr() -> String {
     config::local_api_addr()
 }
 
-pub fn spawn_local_api(store: SqliteStateStore) -> std::io::Result<thread::JoinHandle<()>> {
+pub fn spawn_local_api(store: NiumaStore) -> std::io::Result<thread::JoinHandle<()>> {
     spawn_local_api_with_bus(store, RuntimeEventBus::new())
 }
 
 pub fn spawn_local_api_with_bus(
-    store: SqliteStateStore,
+    store: NiumaStore,
     runtime_events: RuntimeEventBus,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     let listener = TcpListener::bind(local_api_addr())?;

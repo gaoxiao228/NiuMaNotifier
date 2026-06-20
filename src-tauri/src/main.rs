@@ -1,7 +1,7 @@
 use niuma_api::{local_api_addr, spawn_local_api_with_bus};
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::state_mutation::StateMutationService;
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -22,7 +22,7 @@ const CODEX_PLUGIN_BINARY_NAME: &str = "niuma-codex-plugin";
 const BARK_PLUGIN_BINARY_NAME: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_BINARY_NAME: &str = "niuma-plugin-ntfy";
 
-fn spawn_background_services(store: SqliteStateStore, runtime_events: RuntimeEventBus) {
+fn spawn_background_services(store: NiumaStore, runtime_events: RuntimeEventBus) {
     let spawn_result = thread::Builder::new()
         .name("niuma-background-services-startup".to_string())
         .spawn(move || {
@@ -42,7 +42,7 @@ fn spawn_background_services(store: SqliteStateStore, runtime_events: RuntimeEve
 
             // Codex session 扫描放到首屏之后，避免文件系统监听和活跃文件轮询抢首屏资源。
             thread::sleep(WATCHER_START_DELAY);
-            tools::spawn_tool_runtimes(runtime_events.clone());
+            tools::spawn_tool_runtimes(store.clone(), runtime_events.clone());
         });
 
     if let Err(error) = spawn_result {
@@ -50,7 +50,7 @@ fn spawn_background_services(store: SqliteStateStore, runtime_events: RuntimeEve
     }
 }
 
-fn spawn_stale_sweep_runtime(store: SqliteStateStore, runtime_events: RuntimeEventBus) {
+fn spawn_stale_sweep_runtime(store: NiumaStore, runtime_events: RuntimeEventBus) {
     if let Err(error) = thread::Builder::new()
         .name("stale-sweep-runtime".to_string())
         .spawn(move || {
@@ -137,7 +137,7 @@ fn resolve_builtin_plugin_command(
 fn main() {
     let is_quitting = Arc::new(AtomicBool::new(false));
     let runtime_events = RuntimeEventBus::new();
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
+    let store = NiumaStore::new(NiumaStore::default_path());
     let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
 
     let app = tauri::Builder::default()
@@ -247,7 +247,7 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        let store = SqliteStateStore::new(path.clone());
+        let store = NiumaStore::new(path.clone());
         store
             .append_event(sample_event("event-running", 1_000))
             .unwrap();

@@ -6,7 +6,7 @@ use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::hook_payload::{HookPayloadParser, HookToolHint};
 use niuma_core::local_api_client::submit_event_to_local_api;
 use niuma_core::models::{NiumaEvent, ToolKind};
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use serde_json::json;
 
 pub fn run_codex_hook() -> ApiResponse<serde_json::Value> {
@@ -24,7 +24,7 @@ pub fn run_hook(tool_hint: HookToolHint) -> ApiResponse<serde_json::Value> {
 
     match HookPayloadParser::parse(&input, tool_hint, Utc::now()) {
         Ok(Some(event)) => {
-            let store = SqliteStateStore::new(SqliteStateStore::default_path());
+            let store = NiumaStore::new(NiumaStore::default_path());
             submit_parsed_event(&store, &local_api_addr(), event)
         }
         Ok(None) => ApiResponse::ok(json!({ "ignored": true })),
@@ -36,7 +36,7 @@ pub fn run_hook(tool_hint: HookToolHint) -> ApiResponse<serde_json::Value> {
 }
 
 fn submit_parsed_event(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     local_api_addr: &str,
     event: NiumaEvent,
 ) -> ApiResponse<serde_json::Value> {
@@ -79,13 +79,13 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use niuma_core::listener_config::ListenerConfig;
     use niuma_core::models::{EventType, NiumaEvent, ToolKind};
-    use niuma_core::store::SqliteStateStore;
+    use niuma_core::store::NiumaStore;
 
     use super::*;
 
     #[test]
     fn submit_parsed_codex_event_is_skipped_when_listener_disabled() {
-        let store = SqliteStateStore::new(test_sqlite_path("codex_listener_disabled"));
+        let store = NiumaStore::new(test_sqlite_path("codex_listener_disabled"));
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: false,
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn submit_parsed_claude_code_event_is_skipped_when_listener_disabled() {
-        let store = SqliteStateStore::new(test_sqlite_path("claude_listener_disabled"));
+        let store = NiumaStore::new(test_sqlite_path("claude_listener_disabled"));
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,
@@ -149,11 +149,12 @@ mod tests {
     }
 
     fn test_sqlite_path(name: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "niuma-cli-hook-{name}-{}.sqlite",
-            std::process::id()
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-cli-hook-{name}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
         ));
-        let _ = std::fs::remove_file(&path);
-        path
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 }

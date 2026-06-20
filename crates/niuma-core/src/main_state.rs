@@ -13,7 +13,7 @@ use crate::models::{
     AttentionItem, LatestActivity, NiumaEvent, NiumaSession, SessionStatus, ToolKind,
 };
 use crate::runtime_event::RuntimeEventBus;
-use crate::store::SqliteStateStore;
+use crate::store::NiumaStore;
 
 const COMPLETED_RETENTION: chrono::Duration = chrono::Duration::minutes(1);
 pub const MAIN_STATE_REFRESH_INTERVAL: StdDuration = StdDuration::from_secs(5);
@@ -61,7 +61,7 @@ pub struct StateDetail {
 
 #[derive(Clone)]
 pub struct MainStateService {
-    store: SqliteStateStore,
+    store: NiumaStore,
 }
 
 pub struct MainStateWatcher {
@@ -86,7 +86,7 @@ impl MainStateWatcher {
 }
 
 impl MainStateService {
-    pub fn new(store: SqliteStateStore) -> Self {
+    pub fn new(store: NiumaStore) -> Self {
         Self { store }
     }
 
@@ -319,11 +319,11 @@ mod tests {
     use crate::listener_config::ListenerConfig;
     use crate::main_state::{MainStateService, MainStateStatus};
     use crate::models::{CompletionReason, EventType, FailureReason, NiumaEvent, ToolKind};
-    use crate::store::SqliteStateStore;
+    use crate::store::NiumaStore;
 
     #[test]
     fn waiting_approval_uses_event_content_with_summary_fallback() {
-        let store = SqliteStateStore::new(test_sqlite_path("waiting_approval_detail"));
+        let store = NiumaStore::new(test_sqlite_path("waiting_approval_detail"));
         enable_codex_listener(&store);
         let mut event = sample_event(
             "approval-1",
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn completed_expires_to_idle_after_one_minute() {
-        let store = SqliteStateStore::new(test_sqlite_path("completed_expiry"));
+        let store = NiumaStore::new(test_sqlite_path("completed_expiry"));
         enable_codex_listener(&store);
         let mut event = sample_event(
             "completed-1",
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn error_does_not_expire_and_uses_error_message_fallback() {
-        let store = SqliteStateStore::new(test_sqlite_path("error_no_expiry"));
+        let store = NiumaStore::new(test_sqlite_path("error_no_expiry"));
         enable_codex_listener(&store);
         let mut event = sample_event("failed-1", EventType::TaskFailed, "请求失败", 1_000);
         event.error_message = None;
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn stale_is_not_exposed_as_public_status() {
-        let store = SqliteStateStore::new(test_sqlite_path("stale_hidden"));
+        let store = NiumaStore::new(test_sqlite_path("stale_hidden"));
         enable_codex_listener(&store);
         store
             .append_event(sample_event(
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn disabled_ai_listeners_force_main_state_to_idle() {
-        let store = SqliteStateStore::new(test_sqlite_path("listeners_disabled_idle"));
+        let store = NiumaStore::new(test_sqlite_path("listeners_disabled_idle"));
         store
             .append_event(sample_event(
                 "approval-disabled",
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn enabled_ai_listener_uses_existing_main_state_priority() {
-        let store = SqliteStateStore::new(test_sqlite_path("listener_enabled_priority"));
+        let store = NiumaStore::new(test_sqlite_path("listener_enabled_priority"));
         enable_codex_listener(&store);
         store
             .append_event(sample_event(
@@ -493,7 +493,7 @@ mod tests {
         Utc.timestamp_opt(timestamp, 0).single().unwrap()
     }
 
-    fn enable_codex_listener(store: &SqliteStateStore) {
+    fn enable_codex_listener(store: &NiumaStore) {
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,

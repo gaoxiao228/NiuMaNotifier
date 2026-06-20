@@ -463,7 +463,7 @@ fn parses_plan_item_completed_as_input_requested() {
 fn plan_confirmation_task_complete_does_not_clear_waiting_input() {
     use niuma_core::listener_config::ListenerConfig;
     use niuma_core::main_state::{MainStateService, MainStateStatus};
-    use niuma_core::store::SqliteStateStore;
+    use niuma_core::store::NiumaStore;
 
     let mut parser = CodexJsonlParser::default();
     parser
@@ -514,7 +514,7 @@ fn plan_confirmation_task_complete_does_not_clear_waiting_input() {
     );
 
     let temp = tempfile::tempdir().unwrap();
-    let store = SqliteStateStore::new(temp.path().join("niuma.sqlite"));
+    let store = NiumaStore::new(temp.path().join("niuma.sqlite"));
     store
         .save_listener_config(&ListenerConfig {
             codex_listening_enabled: true,

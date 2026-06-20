@@ -3,7 +3,7 @@ use axum::Router;
 use niuma_core::plugin::default_user_plugin_dir;
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::state_mutation::StateMutationService;
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -18,16 +18,16 @@ use crate::response::{preflight, route_not_found};
 use crate::sse::{events_stream, sse_stream, MainStateBroadcaster};
 use crate::state::AppState;
 
-pub fn app(store: SqliteStateStore) -> Router {
+pub fn app(store: NiumaStore) -> Router {
     app_with_bus(store, RuntimeEventBus::new())
 }
 
-pub fn app_with_bus(store: SqliteStateStore, runtime_events: RuntimeEventBus) -> Router {
+pub fn app_with_bus(store: NiumaStore, runtime_events: RuntimeEventBus) -> Router {
     app_with_bus_and_plugin_dir(store, runtime_events, default_user_plugin_dir())
 }
 
 pub fn app_with_bus_and_plugin_dir(
-    store: SqliteStateStore,
+    store: NiumaStore,
     runtime_events: RuntimeEventBus,
     plugin_dir: PathBuf,
 ) -> Router {

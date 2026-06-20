@@ -16,7 +16,7 @@ use niuma_core::runtime_event::{
     PluginNotificationTestRequest, RuntimeEventBus, StateChangeReason,
 };
 use niuma_core::state_mutation::StateMutationService;
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::thread;
@@ -27,7 +27,7 @@ const NOTIFICATION_TEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub(crate) struct AppRuntimeState {
-    pub(crate) store: SqliteStateStore,
+    pub(crate) store: NiumaStore,
     pub(crate) mutation_service: StateMutationService,
     pub(crate) runtime_events: RuntimeEventBus,
 }
@@ -121,8 +121,10 @@ pub(crate) fn save_listener_config(
 }
 
 #[tauri::command]
-pub(crate) fn get_plugins() -> ApiResponse<serde_json::Value> {
-    match plugin_management_items() {
+pub(crate) fn get_plugins(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    match plugin_management_items_from_store(&runtime_state.store) {
         Ok(plugins) => ApiResponse::ok(json!({ "list": plugins })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
@@ -136,10 +138,10 @@ pub(crate) fn select_and_import_plugin_dir(
         return ApiResponse::ok(json!({
             "imported": false,
             "cancelled": true,
-            "plugins": plugin_management_items().unwrap_or_default()
+            "plugins": plugin_management_items_from_store(&runtime_state.store).unwrap_or_default()
         }));
     };
-    let response = import_plugin_dir_from_path(path);
+    let response = import_plugin_dir_from_path(&runtime_state.store, path);
     if response.code == 0 {
         runtime_state
             .runtime_events
@@ -154,6 +156,7 @@ pub(crate) fn remove_plugin(
     plugin_id: String,
 ) -> ApiResponse<serde_json::Value> {
     remove_plugin_by_id(
+        &runtime_state.store,
         &runtime_state.mutation_service,
         &runtime_state.runtime_events,
         &plugin_id,
@@ -167,6 +170,7 @@ pub(crate) fn set_plugin_enabled(
     enabled: bool,
 ) -> ApiResponse<serde_json::Value> {
     set_plugin_enabled_by_id(
+        &runtime_state.store,
         &runtime_state.mutation_service,
         &runtime_state.runtime_events,
         &plugin_id,
@@ -222,7 +226,7 @@ pub(crate) fn dismiss_active_blocker(
     }
 }
 
-fn get_listener_config_from_store(store: SqliteStateStore) -> ApiResponse<serde_json::Value> {
+fn get_listener_config_from_store(store: NiumaStore) -> ApiResponse<serde_json::Value> {
     match store.listener_config() {
         Ok(config) => ApiResponse::ok(json!({
             "codex_listening_enabled": config.is_tool_enabled(&ToolId::Codex),
@@ -273,8 +277,9 @@ fn listener_tools(config: &niuma_core::listener_config::ListenerConfig) -> Vec<s
         .collect()
 }
 
-fn plugin_management_items() -> Result<Vec<PluginManagementItem>, String> {
-    let store = default_store();
+fn plugin_management_items_from_store(
+    store: &NiumaStore,
+) -> Result<Vec<PluginManagementItem>, String> {
     let config = store.listener_config()?;
     let runtime_states = store.plugin_runtime_states()?;
     let plugin_enabled_map = store.plugin_enabled_map()?;
@@ -355,7 +360,7 @@ fn request_plugin_test_notification(
 }
 
 fn validate_notification_test_plugin(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     plugin: &PluginManifest,
 ) -> Result<(), ApiResponse<serde_json::Value>> {
     let enabled = store
@@ -391,7 +396,7 @@ fn validate_notification_test_plugin(
 }
 
 fn wait_for_plugin_notification_test_result(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     plugin_id: &str,
     test_id: &str,
 ) -> Result<niuma_core::notification_store::PluginNotificationResult, String> {
@@ -405,8 +410,10 @@ fn wait_for_plugin_notification_test_result(
     Err("测试通知等待插件回写结果超时".to_string())
 }
 
-fn import_plugin_dir_from_path(path: std::path::PathBuf) -> ApiResponse<serde_json::Value> {
-    let store = default_store();
+fn import_plugin_dir_from_path(
+    store: &NiumaStore,
+    path: std::path::PathBuf,
+) -> ApiResponse<serde_json::Value> {
     let config = match store.listener_config() {
         Ok(config) => config,
         Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
@@ -432,11 +439,11 @@ fn import_plugin_dir_from_path(path: std::path::PathBuf) -> ApiResponse<serde_js
 }
 
 fn remove_plugin_by_id(
+    store: &NiumaStore,
     service: &StateMutationService,
     runtime_events: &RuntimeEventBus,
     plugin_id: &str,
 ) -> ApiResponse<serde_json::Value> {
-    let store = default_store();
     if PluginRegistry::with_builtin_plugins()
         .plugin_by_id(plugin_id)
         .is_some()
@@ -552,7 +559,7 @@ fn save_plugin_config_by_id(
 }
 
 fn resolved_plugin_config(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     plugin: &PluginManifest,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let stored_config = store.plugin_config(&plugin.id)?;
@@ -560,12 +567,12 @@ fn resolved_plugin_config(
 }
 
 fn set_plugin_enabled_by_id(
+    store: &NiumaStore,
     service: &StateMutationService,
     runtime_events: &RuntimeEventBus,
     plugin_id: &str,
     enabled: bool,
 ) -> ApiResponse<serde_json::Value> {
-    let store = default_store();
     let registry = current_plugin_registry();
     let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
         return ApiResponse::fail(
@@ -590,7 +597,7 @@ fn set_plugin_enabled_by_id(
         runtime_events.publish_state_changed(StateChangeReason::PluginConfigChanged);
     }
 
-    match plugin_management_items() {
+    match plugin_management_items_from_store(store) {
         Ok(plugins) => ApiResponse::ok(json!({
             "saved": true,
             "plugin_id": plugin_id,
@@ -621,8 +628,8 @@ pub(crate) fn restore_language_preference_from_store() -> Result<(), String> {
     Ok(())
 }
 
-fn default_store() -> SqliteStateStore {
-    SqliteStateStore::new(SqliteStateStore::default_path())
+fn default_store() -> NiumaStore {
+    NiumaStore::new(NiumaStore::default_path())
 }
 
 #[cfg(test)]
@@ -633,7 +640,7 @@ mod tests {
 
     #[test]
     fn listener_config_helpers_default_disabled_and_save_enabled() {
-        let store = SqliteStateStore::new(test_sqlite_path("listener_config_helpers"));
+        let store = NiumaStore::new(test_sqlite_path("listener_config_helpers"));
         let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
 
         let default_config = get_listener_config_from_store(store.clone());
@@ -646,6 +653,25 @@ mod tests {
         assert_eq!(save.data["saved"], true);
         assert_eq!(save.data["codex_listening_enabled"], true);
         assert_eq!(reloaded.data["codex_listening_enabled"], true);
+    }
+
+    #[test]
+    fn plugin_management_items_from_store_reads_shared_runtime_state() {
+        let store = NiumaStore::new(test_sqlite_path("plugin_management_runtime_state"));
+        store
+            .save_plugin_runtime_state(
+                "builtin-codex",
+                niuma_core::plugin::PluginRuntimeState::running(),
+            )
+            .unwrap();
+
+        let plugins = plugin_management_items_from_store(&store).unwrap();
+        let codex = plugins
+            .iter()
+            .find(|plugin| plugin.id == "builtin-codex")
+            .unwrap();
+
+        assert_eq!(codex.runtime_status, PluginRuntimeStatus::Running);
     }
 
     fn test_sqlite_path(name: &str) -> PathBuf {

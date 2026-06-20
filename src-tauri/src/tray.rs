@@ -10,7 +10,7 @@ use niuma_core::platform::locale::{
     LanguagePreference, SystemLanguage,
 };
 use niuma_core::runtime_event::RuntimeEventBus;
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -70,7 +70,7 @@ impl From<SystemLanguage> for TrayLocale {
 pub fn register_tray<R: Runtime>(
     app: &AppHandle<R>,
     is_quitting: Arc<AtomicBool>,
-    store: SqliteStateStore,
+    store: NiumaStore,
     runtime_events: RuntimeEventBus,
 ) -> tauri::Result<TrayIcon<R>> {
     let locale = TrayLocale::from_active();
@@ -127,7 +127,7 @@ pub fn register_tray<R: Runtime>(
                 }
                 id => {
                     if let Some(preference) = language_preference_from_menu_id(id) {
-                        if let Err(error) = SqliteStateStore::new(SqliteStateStore::default_path())
+                        if let Err(error) = NiumaStore::new(NiumaStore::default_path())
                             .save_language_preference(preference)
                         {
                             eprintln!("NiumaNotifier language preference not saved: {error}");
@@ -208,7 +208,7 @@ fn set_dock_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
 fn start_tray_status_refresh<R: Runtime>(
     tray: TrayIcon<R>,
     menu_items: TrayMenuItems<R>,
-    store: SqliteStateStore,
+    store: NiumaStore,
     runtime_events: RuntimeEventBus,
 ) {
     thread::spawn(move || {
@@ -236,7 +236,7 @@ fn start_tray_status_refresh<R: Runtime>(
 fn refresh_tray_labels<R: Runtime>(
     tray: &TrayIcon<R>,
     menu_items: &TrayMenuItems<R>,
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     last_labels: &mut Option<TrayLabels>,
 ) {
     let locale = TrayLocale::from_active();
@@ -254,7 +254,7 @@ fn refresh_tray_labels<R: Runtime>(
     *last_labels = Some(labels);
 }
 
-fn current_status_from_store(store: &SqliteStateStore, now: DateTime<Utc>) -> SessionStatus {
+fn current_status_from_store(store: &NiumaStore, now: DateTime<Utc>) -> SessionStatus {
     MainStateService::new(store.clone())
         .current_state(now)
         .map(|state| session_status_from_main_state(&state.status))
@@ -615,7 +615,7 @@ mod tests {
     use niuma_core::listener_config::ListenerConfig;
     use niuma_core::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
     use niuma_core::platform::locale::SystemLanguage;
-    use niuma_core::store::SqliteStateStore;
+    use niuma_core::store::NiumaStore;
 
     use crate::tray::{
         current_status_from_store, language_preference_from_menu_id, policy_for_exit_request,
@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn current_status_from_store_uses_main_state_completed_expiry() {
-        let store = SqliteStateStore::new(test_sqlite_path("tray_completed_expiry"));
+        let store = NiumaStore::new(test_sqlite_path("tray_completed_expiry"));
         enable_codex_listener(&store);
         store.append_event(completed_event(1_000)).unwrap();
 
@@ -759,7 +759,7 @@ mod tests {
         Utc.timestamp_opt(timestamp, 0).single().unwrap()
     }
 
-    fn enable_codex_listener(store: &SqliteStateStore) {
+    fn enable_codex_listener(store: &NiumaStore) {
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,

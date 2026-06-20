@@ -16,7 +16,7 @@ use niuma_core::models::{NiumaEvent, ToolKind};
 use niuma_core::runtime_event::RuntimeEventBus;
 #[cfg(test)]
 use niuma_core::state_mutation::StateMutationService;
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 use notify::{Config, Event, RecommendedWatcher, Watcher};
 
 mod codex;
@@ -53,7 +53,7 @@ const PARENT_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(test)]
 #[allow(dead_code)]
 pub fn spawn_codex_session_runtime(
-    store: SqliteStateStore,
+    store: NiumaStore,
     runtime_events: RuntimeEventBus,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
@@ -213,7 +213,7 @@ impl CodexEventSink for LocalApiCodexEventSink {
     }
 }
 
-fn run_runtime(event_sink: Box<dyn CodexEventSink>, listener_store: Option<SqliteStateStore>) {
+fn run_runtime(event_sink: Box<dyn CodexEventSink>, listener_store: Option<NiumaStore>) {
     let codex_home = config::codex_home();
     if watcher_debug_enabled() {
         watcher_debug_log(format!(
@@ -368,7 +368,7 @@ fn run_runtime(event_sink: Box<dyn CodexEventSink>, listener_store: Option<Sqlit
     }
 }
 
-fn codex_listening_enabled(store: &SqliteStateStore) -> bool {
+fn codex_listening_enabled(store: &NiumaStore) -> bool {
     store
         .listener_config()
         .map(|config| config.is_tool_enabled(&ToolKind::Codex))

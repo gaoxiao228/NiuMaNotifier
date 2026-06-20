@@ -10,19 +10,19 @@ use niuma_core::plugin::{
     PluginRegistry, PluginRuntimeState, BUILTIN_BARK_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 
 const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const PARENT_PID_ENV: &str = "NIUMA_PARENT_PID";
 
-pub fn spawn_plugin_runtimes(runtime_events: RuntimeEventBus) {
-    spawn_plugin_manager(runtime_events);
+pub fn spawn_plugin_runtimes(store: NiumaStore, runtime_events: RuntimeEventBus) {
+    spawn_plugin_manager(store, runtime_events);
 }
 
-fn spawn_plugin_manager(runtime_events: RuntimeEventBus) {
+fn spawn_plugin_manager(store: NiumaStore, runtime_events: RuntimeEventBus) {
     if let Err(error) = thread::Builder::new()
         .name("plugin-runtime-manager".to_string())
-        .spawn(move || run_plugin_manager(runtime_events))
+        .spawn(move || run_plugin_manager(store, runtime_events))
     {
         eprintln!("NiumaNotifier plugin manager not started: {error}");
     }
@@ -34,8 +34,7 @@ struct ManagedPlugin {
     next_start: Instant,
 }
 
-fn run_plugin_manager(runtime_events: RuntimeEventBus) {
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
+fn run_plugin_manager(store: NiumaStore, runtime_events: RuntimeEventBus) {
     let mut managed = HashMap::<String, ManagedPlugin>::new();
     let mut receiver = runtime_events.subscribe();
     let runtime = match tokio::runtime::Runtime::new() {
@@ -52,10 +51,7 @@ fn run_plugin_manager(runtime_events: RuntimeEventBus) {
     }
 }
 
-fn reconcile_managed_plugins(
-    store: &SqliteStateStore,
-    managed: &mut HashMap<String, ManagedPlugin>,
-) {
+fn reconcile_managed_plugins(store: &NiumaStore, managed: &mut HashMap<String, ManagedPlugin>) {
     let registry = current_plugin_registry();
     let manifests = managed_runtime_manifests(&registry);
     let current_ids = manifests
@@ -139,7 +135,7 @@ fn wait_for_plugin_reconcile_signal(
     });
 }
 
-fn tick_managed_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
+fn tick_managed_plugin(store: &NiumaStore, entry: &mut ManagedPlugin) {
     if !plugin_runtime_enabled(store, &entry.manifest) {
         stop_child(store, &entry.manifest, &mut entry.child);
         entry.next_start = Instant::now();
@@ -214,7 +210,7 @@ fn tick_managed_plugin(store: &SqliteStateStore, entry: &mut ManagedPlugin) {
 }
 
 fn prepare_plugin_launch_files(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     manifest: &PluginManifest,
 ) -> Result<(), String> {
     if manifest.id == BUILTIN_BARK_PLUGIN_ID || manifest.id == BUILTIN_NTFY_PLUGIN_ID {
@@ -224,7 +220,7 @@ fn prepare_plugin_launch_files(
 }
 
 fn write_notification_plugin_config(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     manifest: &PluginManifest,
     path: &PathBuf,
 ) -> Result<(), String> {
@@ -245,7 +241,7 @@ fn write_notification_plugin_config(
 }
 
 fn notification_plugin_config_payload(
-    store: &SqliteStateStore,
+    store: &NiumaStore,
     manifest: &PluginManifest,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let stored_config = store.plugin_config(&manifest.id)?;
@@ -257,7 +253,7 @@ fn notification_plugin_config_payload(
     Ok(config)
 }
 
-fn plugin_runtime_enabled(store: &SqliteStateStore, manifest: &PluginManifest) -> bool {
+fn plugin_runtime_enabled(store: &NiumaStore, manifest: &PluginManifest) -> bool {
     if let Some(tool) = &manifest.tool_id {
         return store
             .listener_config()
@@ -303,9 +299,7 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
         .env(PARENT_PID_ENV, std::process::id().to_string())
         .env(
             "NIUMA_DB_PATH",
-            SqliteStateStore::default_path()
-                .to_string_lossy()
-                .to_string(),
+            NiumaStore::default_path().to_string_lossy().to_string(),
         )
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -334,7 +328,7 @@ fn plugin_data_dir(plugin_id: &str) -> PathBuf {
         .join(plugin_id)
 }
 
-fn stop_child(store: &SqliteStateStore, manifest: &PluginManifest, child: &mut Option<Child>) {
+fn stop_child(store: &NiumaStore, manifest: &PluginManifest, child: &mut Option<Child>) {
     let Some(mut process) = child.take() else {
         return;
     };
@@ -345,7 +339,7 @@ fn stop_child(store: &SqliteStateStore, manifest: &PluginManifest, child: &mut O
     let _ = process.wait();
 }
 
-fn save_runtime_state(store: &SqliteStateStore, plugin_id: &str, state: PluginRuntimeState) {
+fn save_runtime_state(store: &NiumaStore, plugin_id: &str, state: PluginRuntimeState) {
     if let Err(error) = store.save_plugin_runtime_state(plugin_id, state) {
         eprintln!("NiumaNotifier plugin runtime state save failed for {plugin_id}: {error}");
     }
@@ -514,8 +508,13 @@ mod tests {
     }
 
     #[test]
+    fn spawn_plugin_runtimes_requires_shared_store_from_main_app() {
+        let _spawn: fn(NiumaStore, RuntimeEventBus) = spawn_plugin_runtimes;
+    }
+
+    #[test]
     fn event_consumer_runtime_enabled_reads_plugin_enabled_map() {
-        let store = SqliteStateStore::new(test_sqlite_path("event_consumer_enabled"));
+        let store = NiumaStore::new(test_sqlite_path("event_consumer_enabled"));
         let mut enabled = BTreeMap::new();
         enabled.insert("builtin-bark".to_string(), true);
         enabled.insert("status-indicator-demo".to_string(), true);
@@ -533,7 +532,7 @@ mod tests {
 
     #[test]
     fn event_consumer_runtime_disabled_by_default() {
-        let store = SqliteStateStore::new(test_sqlite_path("event_consumer_disabled"));
+        let store = NiumaStore::new(test_sqlite_path("event_consumer_disabled"));
         let manifest = notification_consumer_manifest("builtin-bark");
 
         assert!(!plugin_runtime_enabled(&store, &manifest));
@@ -575,7 +574,7 @@ mod tests {
 
     #[test]
     fn bark_plugin_config_payload_uses_plugin_config_store() {
-        let store = SqliteStateStore::new(test_sqlite_path("bark_plugin_config_store"));
+        let store = NiumaStore::new(test_sqlite_path("bark_plugin_config_store"));
         let manifest = niuma_core::plugin::builtin_bark_manifest();
         let mut config = serde_json::Map::new();
         config.insert("device_key".to_string(), json!("device-1"));

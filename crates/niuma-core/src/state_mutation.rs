@@ -5,12 +5,12 @@ use crate::models::NiumaEvent;
 use crate::models::ToolKind;
 use crate::runtime_event::{RuntimeEventBus, StateChangeReason};
 use crate::store::{
-    AppendEventsResult, DismissAttentionResult, SqliteStateStore, StaleSweepResult, StoredState,
+    AppendEventsResult, DismissAttentionResult, NiumaStore, StaleSweepResult, StoredState,
 };
 
 #[derive(Clone)]
 pub struct StateMutationService {
-    store: SqliteStateStore,
+    store: NiumaStore,
     runtime_events: RuntimeEventBus,
 }
 
@@ -21,7 +21,7 @@ pub struct ListenerConfigUpdateResult {
 }
 
 impl StateMutationService {
-    pub fn new(store: SqliteStateStore, runtime_events: RuntimeEventBus) -> Self {
+    pub fn new(store: NiumaStore, runtime_events: RuntimeEventBus) -> Self {
         Self {
             store,
             runtime_events,
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn append_events_publishes_only_applied_events() {
-        let store = SqliteStateStore::new(test_sqlite_path("append_events_publish_applied"));
+        let store = NiumaStore::new(test_sqlite_path("append_events_publish_applied"));
         let runtime_events = RuntimeEventBus::new();
         let mut receiver = runtime_events.subscribe();
         let service = StateMutationService::new(store, runtime_events);
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn append_events_skips_publish_when_all_events_are_duplicates() {
-        let store = SqliteStateStore::new(test_sqlite_path("append_events_no_publish_duplicate"));
+        let store = NiumaStore::new(test_sqlite_path("append_events_no_publish_duplicate"));
         let runtime_events = RuntimeEventBus::new();
         let mut receiver = runtime_events.subscribe();
         let service = StateMutationService::new(store, runtime_events);
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn stale_sweep_publishes_only_when_session_changed() {
-        let store = SqliteStateStore::new(test_sqlite_path("stale_sweep_publish_changed"));
+        let store = NiumaStore::new(test_sqlite_path("stale_sweep_publish_changed"));
         let runtime_events = RuntimeEventBus::new();
         let mut receiver = runtime_events.subscribe();
         let service = StateMutationService::new(store.clone(), runtime_events);
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn disabling_codex_listener_saves_config_clears_state_and_publishes_change() {
-        let store = SqliteStateStore::new(test_sqlite_path("disable_codex_listener"));
+        let store = NiumaStore::new(test_sqlite_path("disable_codex_listener"));
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn disabling_tool_listener_clears_only_that_tool_state() {
-        let store = SqliteStateStore::new(test_sqlite_path("disable_one_tool_listener"));
+        let store = NiumaStore::new(test_sqlite_path("disable_one_tool_listener"));
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,

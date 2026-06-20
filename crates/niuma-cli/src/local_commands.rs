@@ -1,9 +1,9 @@
 use niuma_api::{local_api_addr, spawn_local_api};
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
-use niuma_core::store::SqliteStateStore;
+use niuma_core::store::NiumaStore;
 
 pub(crate) fn serve() {
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
+    let store = NiumaStore::new(NiumaStore::default_path());
     match spawn_local_api(store) {
         Ok(handle) => {
             eprintln!(

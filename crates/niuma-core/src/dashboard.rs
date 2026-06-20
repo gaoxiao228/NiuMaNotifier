@@ -1,13 +1,13 @@
 use crate::models::{NiumaEvent, NiumaSession};
-use crate::store::SqliteStateStore;
+use crate::store::NiumaStore;
 
 #[derive(Clone)]
 pub struct DashboardService {
-    store: SqliteStateStore,
+    store: NiumaStore,
 }
 
 impl DashboardService {
-    pub fn new(store: SqliteStateStore) -> Self {
+    pub fn new(store: NiumaStore) -> Self {
         Self { store }
     }
 
