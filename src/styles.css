@@ -967,9 +967,9 @@ select {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
-  padding: 0;
+  padding: 0 2px 2px 0;
   list-style: none;
 }
 
@@ -992,15 +992,19 @@ select {
 .event-center-row {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(104px, 0.9fr) minmax(72px, 0.65fr) minmax(110px, 1fr) minmax(140px, 2fr) minmax(128px, auto);
-  gap: 10px;
+  grid-template-columns: minmax(96px, 0.8fr) minmax(64px, 0.55fr) minmax(110px, 0.9fr) minmax(180px, 1.6fr) minmax(136px, auto);
+  gap: 8px;
   align-items: center;
   border: 0;
-  padding: 10px 12px;
+  min-height: 42px;
+  padding: 8px 12px;
   color: #334155;
   background: transparent;
   text-align: left;
   cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .event-center-row:hover {
@@ -1016,6 +1020,7 @@ select {
 
 .event-center-row strong {
   color: #0f172a;
+  font-weight: 650;
 }
 
 .event-center-summary {
@@ -1024,20 +1029,21 @@ select {
 
 .event-center-row time {
   color: #64748b;
+  font-weight: 500;
   text-align: right;
 }
 
 .event-center-json {
-  max-height: 220px;
+  max-height: 160px;
   overflow: auto;
   margin: 0;
-  padding: 12px;
+  padding: 10px 12px;
   border-top: 1px solid rgba(148, 163, 184, 0.28);
   color: #dbeafe;
   background: #0f172a;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .settings-notification-history {

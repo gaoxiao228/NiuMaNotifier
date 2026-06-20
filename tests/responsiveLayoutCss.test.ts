@@ -174,10 +174,19 @@ if (
   !ruleIncludes('.event-center-row', 'display: grid;') ||
   !ruleIncludes(
     '.event-center-row',
-    'grid-template-columns: minmax(104px, 0.9fr) minmax(72px, 0.65fr) minmax(110px, 1fr) minmax(140px, 2fr) minmax(128px, auto);'
+    'grid-template-columns: minmax(96px, 0.8fr) minmax(64px, 0.55fr) minmax(110px, 0.9fr) minmax(180px, 1.6fr) minmax(136px, auto);'
   )
 ) {
   throw new Error('事件中心事件行应在桌面端保持多列网格布局')
+}
+
+if (
+  !ruleIncludes('.event-center-row', 'font-size: 13px;') ||
+  !ruleIncludes('.event-center-row', 'font-weight: 500;') ||
+  !ruleIncludes('.event-center-row', 'line-height: 1.35;') ||
+  !ruleIncludes('.event-center-row', 'min-height: 42px;')
+) {
+  throw new Error('事件中心事件行应使用紧凑字号和稳定行高，避免实时事件列表显得拥挤')
 }
 
 if (
@@ -190,7 +199,7 @@ if (
 }
 
 if (
-  !ruleIncludes('.event-center-json', 'max-height: 220px;') ||
+  !ruleIncludes('.event-center-json', 'max-height: 160px;') ||
   !ruleIncludes('.event-center-json', 'overflow: auto;')
 ) {
   throw new Error('事件中心 JSON 详情应限制高度并在块内滚动')
