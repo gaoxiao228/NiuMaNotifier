@@ -14,6 +14,15 @@ function ruleIncludes(selector: string, property: string) {
   return cssRule(selector).includes(property)
 }
 
+function cssBlockAfter(marker: string) {
+  const start = css.indexOf(marker)
+  if (start < 0) {
+    return ''
+  }
+  const nextMedia = css.indexOf('@media', start + marker.length)
+  return css.slice(start, nextMedia < 0 ? undefined : nextMedia)
+}
+
 if (!css.includes('grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);')) {
   throw new Error('桌面主布局应保持弹性两列，避免中等窗口被挤成竖向布局')
 }
@@ -136,10 +145,37 @@ if (
 }
 
 if (
+  !ruleIncludes('.event-center-shell', 'display: grid;') ||
+  !ruleIncludes('.event-center-shell', 'grid-template-rows: auto minmax(0, 1fr);') ||
+  !ruleIncludes('.event-center-shell', 'min-height: 0;')
+) {
+  throw new Error('事件中心内容壳应延续固定高度网格链路，让列表获得可滚动剩余空间')
+}
+
+if (
   !ruleIncludes('.event-center-list', 'overflow: auto;') ||
   !ruleIncludes('.event-center-list', 'min-height: 0;')
 ) {
   throw new Error('事件中心列表应在面板剩余区域内独立滚动')
+}
+
+if (
+  !ruleIncludes('.event-center-row', 'display: grid;') ||
+  !ruleIncludes(
+    '.event-center-row',
+    'grid-template-columns: minmax(104px, 0.9fr) minmax(72px, 0.65fr) minmax(110px, 1fr) minmax(140px, 2fr) minmax(128px, auto);'
+  )
+) {
+  throw new Error('事件中心事件行应在桌面端保持多列网格布局')
+}
+
+if (
+  !ruleIncludes('.event-center-row > *', 'min-width: 0;') ||
+  !ruleIncludes('.event-center-row > *', 'overflow: hidden;') ||
+  !ruleIncludes('.event-center-row > *', 'text-overflow: ellipsis;') ||
+  !ruleIncludes('.event-center-row > *', 'white-space: nowrap;')
+) {
+  throw new Error('事件中心事件行子项应允许收缩并截断长文本')
 }
 
 if (
@@ -149,8 +185,17 @@ if (
   throw new Error('事件中心 JSON 详情应限制高度并在块内滚动')
 }
 
+const mobileMediaBlock = cssBlockAfter('@media (max-width: 720px)')
+
 if (!css.includes('@media (max-width: 720px)')) {
   throw new Error('主界面只应在移动端宽度切换为竖向布局')
+}
+
+if (
+  !mobileMediaBlock.includes('.event-center-row') ||
+  !mobileMediaBlock.includes('grid-template-columns: 1fr;')
+) {
+  throw new Error('事件中心事件行应在 720px 移动端断点栈叠为单列布局')
 }
 
 if (css.includes('@media (max-width: 980px)')) {
