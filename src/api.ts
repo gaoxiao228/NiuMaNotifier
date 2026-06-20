@@ -240,7 +240,7 @@ export async function dismissActiveBlocker() {
     const response = await fetch(`${apiUrl}/api/v1/blocker/dismiss`, { method: 'POST' })
     return (await response.json()) as ApiResponse<{ dismissed: boolean; dismissed_count: number }>
   } catch {
-    // Local API 可能在开发阶段被旧进程占用或未启动，回退到 Tauri command 直接写同一份状态库。
+    // Local API 可能在开发阶段被旧进程占用或未启动，回退到 Tauri command 写同一份进程内应用状态。
     return invoke<ApiResponse<{ dismissed: boolean; dismissed_count: number }>>('dismiss_active_blocker')
   }
 }

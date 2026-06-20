@@ -274,7 +274,7 @@ impl SqliteStateStore {
     }
 
     pub fn recent_events(&self, limit: usize) -> Result<Vec<NiumaEvent>, String> {
-        // 保留旧方法名作为兼容门面，实际列表统一读取公开事件表。
+        // 保留旧方法名作为兼容门面，实际列表统一读取内存公开事件缓存。
         self.public_recent_events(limit)
     }
 
@@ -490,10 +490,10 @@ impl SqliteStateStore {
     fn open(&self) -> Result<Connection, String> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|error| format!("创建状态目录失败：{error}"))?;
+                .map_err(|error| format!("创建应用数据目录失败：{error}"))?;
         }
         let connection = Connection::open(&self.path)
-            .map_err(|error| format!("打开 SQLite 状态库失败：{error}"))?;
+            .map_err(|error| format!("打开 SQLite 通知库失败：{error}"))?;
         configure_connection(&connection)?;
         init_schema(&connection)?;
         Ok(connection)

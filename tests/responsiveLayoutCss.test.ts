@@ -84,6 +84,25 @@ if (css.includes('max-height: 460px;') || css.includes('.plugin-management-list 
 }
 
 if (
+  css.includes('grid-template-columns: minmax(0, 1fr) 292px;') ||
+  !css.includes('grid-template-columns: minmax(260px, 0.85fr) minmax(320px, 1fr);') ||
+  !css.includes('.plugin-card-info {\n  display: grid;') ||
+  !css.includes('grid-column: 1;') ||
+  !css.includes('.plugin-meta {\n  background: #f8fafc;') ||
+  !css.includes('.plugin-config-form {\n  display: grid;') ||
+  !css.includes('grid-column: 2;')
+) {
+  throw new Error('插件管理卡片应统一左侧显示插件信息，右侧显示插件配置')
+}
+
+if (
+  !css.includes('.plugin-card-info .plugin-card-actions {\n  justify-content: flex-start;') ||
+  !css.includes('margin-top: 10px;')
+) {
+  throw new Error('移除插件按钮应放在左侧插件信息区底部并左对齐')
+}
+
+if (
   !css.includes('.settings-notification-history') ||
   !css.includes('grid-template-rows: auto minmax(0, 1fr);') ||
   !css.includes('height: 100%;')
@@ -114,6 +133,34 @@ if (
   !css.includes('.notification-record-detail')
 ) {
   throw new Error('通知历史条目应有分层卡片布局样式')
+}
+
+if (
+  css.includes('grid-template-columns: minmax(96px, 1.2fr) 110px') ||
+  css.includes('grid-template-columns: minmax(140px, 1.1fr) max-content') ||
+  !css.includes('grid-template-columns: max-content max-content minmax(180px, 1fr) max-content;')
+) {
+  throw new Error('通知历史第一行标题、状态和插件名称应按内容宽度连续左对齐')
+}
+
+if (!css.includes('justify-items: start;')) {
+  throw new Error('通知历史第一行的状态标记和插件名称应在各自列内左对齐')
+}
+
+if (
+  !css.includes('.notification-record-meta {\n  display: flex;') ||
+  css.includes('grid-template-columns: 72px minmax(0, 1fr) 72px minmax(0, 1fr) 72px minmax(0, 1fr);') ||
+  !css.includes('column-gap: 0;') ||
+  !css.includes('margin: 0 32px 0 0;')
+) {
+  throw new Error('通知历史元信息标签和值应紧贴显示，只在字段组之间保留间距')
+}
+
+if (
+  !css.includes('.notification-record-channel {\n  overflow-wrap: anywhere;') ||
+  css.includes('.notification-record-title,\n.notification-record-channel {\n  color: #53627a;\n  font-size: 12px;\n  min-width: 0;\n  overflow: hidden;')
+) {
+  throw new Error('通知历史插件名称不应被单行省略，应允许换行完整显示')
 }
 
 if (!css.includes('@media (max-width: 720px)')) {

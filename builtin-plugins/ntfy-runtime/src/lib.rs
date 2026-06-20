@@ -423,7 +423,7 @@ fn non_empty_env_path(key: &str) -> Option<PathBuf> {
 
 fn prepare_runtime_files(env: &RuntimeEnv) -> Result<(), String> {
     if let Some(data_dir) = &env.data_dir {
-        // 插件数据目录只保存 ntfy 自己的去重记录，不写主程序状态库。
+        // 插件数据目录只保存 ntfy 自己的去重记录，不写主程序持久化文件。
         std::fs::create_dir_all(data_dir)
             .map_err(|error| format!("创建 ntfy 插件数据目录失败：{error}"))?;
     }

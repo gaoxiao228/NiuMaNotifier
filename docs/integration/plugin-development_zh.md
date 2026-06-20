@@ -14,9 +14,22 @@
 
 - 插件是本机受信可执行程序，由用户安装并由 NiumaNotifier 启停。
 - NiumaNotifier 不在 v1 中提供强沙箱、签名校验或插件市场。
-- 插件不得直接写 SQLite 状态库；所有状态事件和通知结果必须通过 Local API 上报。
+- 插件不得直接写 NiumaNotifier 的持久化文件；所有状态事件和通知结果必须通过 Local API 上报。
 - 状态指示插件不需要理解事件上报或通知回写协议，只消费 `/api/v1/state/stream` SSE 主状态流。
 - Local API 默认只面向本机可信调用方，不内置鉴权；如果显式绑定到非 loopback 地址，应由外层网络策略保护。
+
+## 开发流程总览
+
+建议按以下顺序开发外部插件：
+
+1. 编写 `plugin.json`，先确认 `id`、`kind`、`tool_id`、`capabilities` 和当前平台匹配。
+2. 编写可独立启动的本机可执行程序，优先从环境变量读取 Local API 地址和插件 ID。
+3. 工具监听插件先实现 `/api/v1/plugin-events` 上报，并保证 `dedupe_key` 稳定。
+4. 通知插件先订阅 `/api/v1/events/stream`，再实现通知发送、本地去重和通知结果回写。
+5. 状态指示插件只订阅 `/api/v1/state/stream`，不要自行写事件或通知历史。
+6. 把插件目录放入用户插件目录，重启 NiumaNotifier，在插件管理列表中启用并观察运行状态。
+
+最小可用插件应该先做到“能启动、能退出、能处理 Local API 失败”。复杂功能应建立在这个基础上逐步增加。
 
 ## 插件包结构
 
@@ -56,6 +69,24 @@ cp -R examples/plugins/niuma-plugin-demo "$HOME/Library/Application Support/Nium
 ```
 
 外部插件不能覆盖内置插件 ID，例如 `builtin-codex`、`builtin-bark`、`builtin-ntfy`。
+
+## 运行生命周期
+
+NiumaNotifier 会周期性发现插件目录中的 `plugin.json`，并根据启用状态管理常驻插件进程：
+
+1. 发现：主程序加载内置插件和用户插件目录中的外部插件。
+2. 启用：`tool` 插件由工具监听开关控制；无 `tool_id` 的插件由通用插件启用状态控制。
+3. 启动：声明 `event_watcher`、`event_consumer` 或 `state_consumer` 的插件会作为常驻子进程启动。
+4. 运行：主程序向插件注入环境变量，并把插件工作目录设置为 `plugin.json` 所在目录。
+5. 停止：插件停用、manifest 变化或插件被移除时，主程序会终止旧进程。
+6. 重启：插件异常退出后，主程序会记录 `failed` 状态，并在短暂退避后重试启动。
+
+插件进程应满足以下要求：
+
+- 能响应 `SIGTERM` 或平台等效终止信号，并尽快退出。
+- 不要假设自己只会启动一次；重启后应能从 `NIUMA_PLUGIN_DATA_DIR` 恢复本地去重状态。
+- 不要把运行状态写入 NiumaNotifier 的内部持久化文件。
+- `stdout` 和 `stderr` 当前不会作为用户可见日志展示；调试阶段建议自行写入插件数据目录中的日志文件。
 
 ## Manifest
 
@@ -200,6 +231,23 @@ NiumaNotifier 启动插件时会注入：
 
 建议外部插件把 `NIUMA_PARENT_PID` 作为自清理信号使用。该变量缺失或格式错误时，插件应保持兼容并继续运行；只有确认父进程不存在时才主动退出。
 
+## 配置与本地数据
+
+插件开发时需要区分三类数据：
+
+| 数据 | 推荐位置 | 说明 |
+| --- | --- | --- |
+| 插件配置 | `/api/v1/plugins/config` | 由主程序根据 `config_schema` 校验并持久化。外部插件运行时应通过 Local API 读取。 |
+| 插件本地运行数据 | `NIUMA_PLUGIN_DATA_DIR` | 插件自行维护，例如通知去重记录、重连状态、窗口位置或调试日志。 |
+| 通知历史 | Local API 回写 | 真实通知和测试通知结果通过回写接口交给主程序保存。 |
+
+约束：
+
+- 外部插件不应直接读写 `config.json`、`plugin-configs`、`niuma.sqlite` 或其他主程序内部文件。
+- `NIUMA_DB_PATH` 只用于诊断路径，不是插件扩展点。
+- 事件、会话、关注项和最新活动是主程序内存运行态；插件不能依赖数据库查询历史事件。
+- 通知插件应把“是否已经给某个事件发过通知”的本地去重记录保存在 `NIUMA_PLUGIN_DATA_DIR`，再把发送结果通过 Local API 回写主程序。
+
 ## Local API 约定
 
 除 SSE 流外，插件相关 JSON 接口都使用统一响应结构：
@@ -230,6 +278,28 @@ NiumaNotifier 启动插件时会注入：
 | `100101` | 业务校验失败，例如未知插件、插件类型不匹配、配置校验失败。 |
 | `900001` | 系统错误。 |
 | `900005` | 路由不存在。 |
+
+调用建议：
+
+- 业务接口返回 `HTTP 200` 时仍必须检查 `code`，不能只看 HTTP 状态码。
+- `GET` 请求把业务参数放在 query，例如 `/api/v1/plugins/config?plugin_id=...`。
+- `POST` 请求使用 JSON body，失败时直接读取外层 `message` 作为诊断信息。
+- 插件启动早于 Local API 可用时，应进行有限重试，而不是立刻永久退出。
+- 调试时可先用 `curl` 验证 API，再接入插件进程。
+
+读取插件配置示例：
+
+```bash
+curl "$NIUMA_LOCAL_API_URL/api/v1/plugins/config?plugin_id=$NIUMA_PLUGIN_ID"
+```
+
+上报工具事件示例：
+
+```bash
+curl -X POST "$NIUMA_LOCAL_API_URL/api/v1/plugin-events" \
+  -H "Content-Type: application/json" \
+  -d '{"plugin_id":"niuma-plugin-demo","events":[]}'
+```
 
 ## 工具事件上报
 
@@ -291,6 +361,7 @@ Content-Type: application/json
 - `event.tool` 必须等于插件 manifest 中的 `tool_id`。
 - `dedupe_key` 必须稳定，重复扫描同一原始事件时应保持一致。
 - 成功上报后，NiumaNotifier 会通过 `StateMutationService` 写入状态并触发 SSE 更新。
+- 返回 `applied_count = 0` 通常表示事件已被去重；插件不需要因此重试同一事件。
 
 ## NiumaEvent 字段
 
@@ -355,6 +426,19 @@ fatal
 unknown
 ```
 
+## SSE 客户端实现要求
+
+通知插件和状态指示插件都通过 SSE 消费主程序实时数据。建议实现统一的 SSE 客户端逻辑：
+
+- 请求头带上 `Accept: text/event-stream`。
+- 忽略以 `:` 开头的 keep-alive 注释行。
+- 按空行分隔 SSE frame，支持同一个 frame 中出现多行 `data:`。
+- 根据 `event:` 区分事件类型；未知事件类型应忽略。
+- 连接断开后自动重连，推荐使用 2 到 5 秒固定间隔或指数退避。
+- 不要假设 SSE 会补发历史数据；断线期间错过的事件不应通过数据库回查补偿。
+
+SSE 当前没有鉴权和订阅参数。外部插件应只连接本机可信 Local API，不要把该接口暴露给公网。
+
 ## 通知插件事件消费
 
 `event_consumer` 通知插件应订阅实时事件流：
@@ -388,6 +472,17 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 - 插件应在 `NIUMA_PLUGIN_DATA_DIR` 中保存本地去重状态，避免重连后重复发送。
 - SSE keep-alive 注释行应忽略。
 
+推荐通知处理流程：
+
+1. 从 SSE 收到 `event`。
+2. 依据 `event_type`、`severity`、项目名或插件配置判断是否需要通知。
+3. 使用 `plugin_id + event.id` 或更细的业务键检查本地去重记录。
+4. 调用外部通知服务。
+5. 无论成功或失败，都调用 `/api/v1/plugins/notification-results` 回写结果。
+6. 成功发送后更新本地去重记录；失败时可按插件策略重试，但应避免无限重试刷屏。
+
+通知插件不需要查询最近事件列表，也不需要直接写通知历史数据库。
+
 ## 状态指示插件主状态消费
 
 `state_consumer` 状态指示插件应订阅主状态流：
@@ -419,7 +514,7 @@ error
 消费约束：
 
 - `/api/v1/state/stream` 连接建立后会先发送一次当前主状态快照，后续仅在主状态内容变化时发送。
-- 状态指示插件不应上报事件、不应写通知历史，也不应直接写 SQLite 状态库。
+- 状态指示插件不应上报事件、不应写通知历史，也不应直接写 NiumaNotifier 的持久化文件。
 - 状态展示应以 `status` 为准；不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。
 - 插件可以使用 `NIUMA_PLUGIN_DATA_DIR` 保存窗口位置、展示样式等本地运行状态。
 - SSE keep-alive 注释行应忽略，断线后插件应自行重连。
@@ -479,6 +574,7 @@ Content-Type: application/json
 - `event_id` 必须对应已存在事件。
 - 非通知插件调用会返回业务校验失败。
 - `status = failed` 时不会保存 `sent_at`。
+- 同一个 `plugin_id + event_id` 会覆盖同一条插件通知记录，适合插件在失败后重试并回写最终结果。
 
 ## 测试通知结果回写
 
@@ -672,6 +768,26 @@ Content-Type: application/json
 
 配置保存成功后会唤醒插件运行管理器。插件应在收到配置变化后自行重连或由主程序重启进程完成配置刷新。
 
+## 调试建议
+
+外部插件启动失败时，优先按以下顺序排查：
+
+1. `plugin.json` 是否是合法 JSON，`id` 是否与内置插件冲突。
+2. `platforms` 是否包含当前平台，或是否为空数组。
+3. `command` 是否可执行；相对路径是否相对 `plugin.json` 所在目录。
+4. 插件是否已经在界面或 `/api/v1/plugins/enabled` 中启用。
+5. `/api/v1/plugins` 中的 `runtime_status` 和 `last_error` 是否指出启动错误。
+6. 插件是否能访问 `NIUMA_LOCAL_API_URL`。
+7. 通知插件是否在 `NIUMA_PLUGIN_DATA_DIR` 中保存了过旧或错误的去重记录。
+
+运行中排查可以先调用：
+
+```bash
+curl "$NIUMA_LOCAL_API_URL/api/v1/plugins"
+curl "$NIUMA_LOCAL_API_URL/api/v1/main-state"
+curl "$NIUMA_LOCAL_API_URL/api/v1/notification-records"
+```
+
 ## SSE 展示边界
 
 插件只负责生成或消费 `NiumaEvent`。状态优先级、完成态保留时间、阻塞项清理和主状态 SSE 推送由主程序统一处理。
@@ -699,3 +815,7 @@ GET /api/v1/main-state
 - 插件退出时能响应 `SIGTERM` 或等效终止信号。
 - 插件使用 `NIUMA_PARENT_PID` 做父进程退出自清理。
 - 通知插件把发送去重状态保存到 `NIUMA_PLUGIN_DATA_DIR`。
+- 外部插件通过 Local API 读取配置，不依赖主程序内部配置文件路径。
+- 插件不直接读写 `niuma.sqlite`，也不通过数据库查询历史事件。
+- SSE 断线后能自动重连，且不会把断线重连当成必须补发历史事件。
+- 所有 JSON API 调用都检查外层 `code` 和 `message`。

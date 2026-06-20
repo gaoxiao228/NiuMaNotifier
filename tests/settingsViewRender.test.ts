@@ -239,6 +239,23 @@ if (!listElement.innerHTML.includes('data-plugin-remove="niuma-plugin-demo"')) {
   throw new Error('外部插件应渲染移除按钮')
 }
 
+const demoCardStart = listElement.innerHTML.indexOf('data-plugin-id="niuma-plugin-demo"')
+const demoInfoIndex = listElement.innerHTML.indexOf('class="plugin-card-info"', demoCardStart)
+const demoMetaIndex = listElement.innerHTML.indexOf('class="plugin-meta"', demoCardStart)
+const demoRemoveIndex = listElement.innerHTML.indexOf('data-plugin-remove="niuma-plugin-demo"', demoCardStart)
+const demoBodyEnd = listElement.innerHTML.indexOf('</div>', demoRemoveIndex)
+if (
+  demoCardStart < 0 ||
+  demoInfoIndex < 0 ||
+  demoMetaIndex < 0 ||
+  demoRemoveIndex < 0 ||
+  demoInfoIndex > demoMetaIndex ||
+  demoMetaIndex > demoRemoveIndex ||
+  demoRemoveIndex > demoBodyEnd
+) {
+  throw new Error('移除插件按钮应放在左侧插件信息区域底部')
+}
+
 if (!listElement.innerHTML.includes('运行中') || !listElement.innerHTML.includes('失败')) {
   throw new Error('插件列表应渲染运行状态')
 }
@@ -274,6 +291,13 @@ if (
   !listElement.innerHTML.includes('value="device-1"')
 ) {
   throw new Error('带配置 schema 的插件应渲染插件配置表单')
+}
+
+const barkCardStart = listElement.innerHTML.indexOf('data-plugin-id="builtin-bark"')
+const barkMetaIndex = listElement.innerHTML.indexOf('class="plugin-meta"', barkCardStart)
+const barkConfigIndex = listElement.innerHTML.indexOf('class="plugin-config-form"', barkCardStart)
+if (barkCardStart < 0 || barkMetaIndex < 0 || barkConfigIndex < 0 || barkMetaIndex > barkConfigIndex) {
+  throw new Error('插件管理卡片应先渲染插件信息，再渲染插件配置，保证信息在左侧、配置在右侧')
 }
 
 if (

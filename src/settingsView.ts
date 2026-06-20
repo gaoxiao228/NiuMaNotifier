@@ -97,6 +97,21 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
             </label>
           </div>
           <div class="plugin-card-body">
+            <div class="plugin-card-info">
+              <dl class="plugin-meta">
+                <dt>${escapeHtml(t.pluginSource)}</dt>
+                <dd>${escapeHtml(translatePluginSource(options.language, plugin.source))}</dd>
+                <dt>${escapeHtml(t.pluginVersion)}</dt>
+                <dd>${escapeHtml(plugin.version)}</dd>
+                <dt>${escapeHtml(t.pluginRuntimeStatus)}</dt>
+                <dd>${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</dd>
+                <dt>${escapeHtml(t.pluginInstallPath)}</dt>
+                <dd>${escapeHtml(plugin.install_path || t.none)}</dd>
+                <dt>${escapeHtml(t.pluginLastError)}</dt>
+                <dd>${escapeHtml(plugin.last_error || t.none)}</dd>
+              </dl>
+              ${plugin.source === 'external' ? renderPluginActions(plugin, busy, t.removePlugin) : ''}
+            </div>
             ${renderPluginConfigForm(
               plugin,
               options.pluginConfigs[plugin.id] ?? {},
@@ -104,20 +119,7 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
               options.configResultText,
               t
             )}
-            <dl class="plugin-meta">
-              <dt>${escapeHtml(t.pluginSource)}</dt>
-              <dd>${escapeHtml(translatePluginSource(options.language, plugin.source))}</dd>
-              <dt>${escapeHtml(t.pluginVersion)}</dt>
-              <dd>${escapeHtml(plugin.version)}</dd>
-              <dt>${escapeHtml(t.pluginRuntimeStatus)}</dt>
-              <dd>${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</dd>
-              <dt>${escapeHtml(t.pluginInstallPath)}</dt>
-              <dd>${escapeHtml(plugin.install_path || t.none)}</dd>
-              <dt>${escapeHtml(t.pluginLastError)}</dt>
-              <dd>${escapeHtml(plugin.last_error || t.none)}</dd>
-            </dl>
           </div>
-          ${plugin.source === 'external' ? renderPluginActions(plugin, busy, t.removePlugin) : ''}
         </article>
       `
     })

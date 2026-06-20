@@ -65,6 +65,14 @@ if (
   throw new Error('通知历史应渲染插件渠道和失败原因')
 }
 
+if (
+  !historyElement.innerHTML.includes('原因：') ||
+  !historyElement.innerHTML.includes('创建时间：') ||
+  !historyElement.innerHTML.includes('发送时间：')
+) {
+  throw new Error('通知历史元信息标签应带中文冒号')
+}
+
 if (formElement.innerHTML !== '<input data-field="device_key" value="draft-key">') {
   throw new Error('通知历史刷新不应修改通知配置表单')
 }

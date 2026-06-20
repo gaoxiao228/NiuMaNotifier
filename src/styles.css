@@ -590,10 +590,12 @@ select {
 .plugin-runtime-inline,
 .notification-record-status {
   border-radius: 999px;
+  display: inline-flex;
   font-size: 12px;
   font-weight: 650;
   padding: 3px 8px;
   white-space: nowrap;
+  width: max-content;
 }
 
 .notification-plugin-runtime.running,
@@ -791,14 +793,25 @@ select {
 .plugin-card-body {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) 292px;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(320px, 1fr);
   margin-top: 12px;
+}
+
+.plugin-card-info {
+  display: grid;
+  gap: 10px;
+  grid-column: 1;
 }
 
 .plugin-card-actions {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+.plugin-card-info .plugin-card-actions {
+  justify-content: flex-start;
+  margin-top: 10px;
 }
 
 .plugin-card-actions button {
@@ -817,6 +830,7 @@ select {
 .plugin-config-form {
   display: grid;
   gap: 10px;
+  grid-column: 2;
 }
 
 .plugin-config-heading {
@@ -884,6 +898,7 @@ select {
   border-radius: 7px;
   display: grid;
   gap: 5px 12px;
+  grid-column: 1;
   grid-template-columns: 70px minmax(0, 1fr);
   margin: 0;
   padding: 10px;
@@ -940,7 +955,9 @@ select {
   align-items: center;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(96px, 1.2fr) 110px minmax(110px, 1fr) minmax(160px, 2fr);
+  justify-items: start;
+  /* 前三个字段按内容连续排列，避免状态标记被弹到中间。 */
+  grid-template-columns: max-content max-content minmax(180px, 1fr) max-content;
 }
 
 .notification-record-header strong {
@@ -956,16 +973,24 @@ select {
   color: #53627a;
   font-size: 12px;
   min-width: 0;
+}
+
+.notification-record-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.notification-record-channel {
+  overflow-wrap: anywhere;
+}
+
 .notification-record-meta {
-  display: grid;
-  gap: 6px 12px;
-  grid-template-columns: 72px minmax(0, 1fr) 72px minmax(0, 1fr) 72px minmax(0, 1fr);
+  display: flex;
+  column-gap: 0;
+  flex-wrap: wrap;
   margin: 0;
+  row-gap: 6px;
 }
 
 .notification-record-meta dt {
@@ -977,7 +1002,7 @@ select {
 .notification-record-meta dd {
   color: #53627a;
   font-size: 12px;
-  margin: 0;
+  margin: 0 32px 0 0;
   overflow-wrap: anywhere;
 }
 
@@ -1015,6 +1040,12 @@ select {
 
   .plugin-card-body {
     grid-template-columns: 1fr;
+  }
+
+  .plugin-card-info,
+  .plugin-config-form,
+  .plugin-meta {
+    grid-column: 1;
   }
 }
 

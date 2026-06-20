@@ -864,8 +864,8 @@ fn notification_records_allow_same_event_on_different_notifiers() {
 }
 
 #[test]
-fn notification_records_allow_same_channel_on_different_events() {
-    let store = SqliteStateStore::new(test_sqlite_path("notification_records_same_channel"));
+fn notification_records_allow_same_notifier_on_different_events() {
+    let store = SqliteStateStore::new(test_sqlite_path("notification_records_same_notifier"));
     let first = sample_notification_record("record-1", "builtin-ntfy", "event-1");
     let second = sample_notification_record("record-2", "builtin-ntfy", "event-2");
 
@@ -936,7 +936,7 @@ fn notification_history_records_marks_plugin_id_for_plugin_notifier() {
 }
 
 #[test]
-fn notification_records_return_error_on_duplicate_id_for_different_event_and_channel() {
+fn notification_records_return_error_on_duplicate_id_for_different_event_and_notifier() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_records_duplicate_id"));
     let first = sample_notification_record("record-1", "builtin-bark", "event-1");
     let duplicate_id = sample_notification_record("record-1", "builtin-ntfy", "event-2");

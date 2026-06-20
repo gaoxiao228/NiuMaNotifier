@@ -1262,7 +1262,7 @@ async fn events_stream_emits_notification_test_requests() {
 }
 
 #[tokio::test]
-async fn plugin_notification_results_save_sent_result() {
+async fn plugin_notification_records_save_sent_result() {
     let store = SqliteStateStore::new(test_path("plugin_notification_result_sent"));
     store.append_event(sample_event()).unwrap();
     let router = app_with_bus_and_plugin_dir(
@@ -1306,7 +1306,7 @@ async fn plugin_notification_results_save_sent_result() {
 }
 
 #[tokio::test]
-async fn plugin_notification_results_rejects_non_notification_plugin() {
+async fn plugin_notification_records_rejects_non_notification_plugin() {
     let store = SqliteStateStore::new(test_path("plugin_notification_result_non_notification"));
     store.append_event(sample_event()).unwrap();
     let router = app(store);
@@ -1334,7 +1334,7 @@ async fn plugin_notification_results_rejects_non_notification_plugin() {
 }
 
 #[tokio::test]
-async fn plugin_notification_results_rejects_unknown_event() {
+async fn plugin_notification_records_rejects_unknown_event() {
     let router = app(SqliteStateStore::new(test_path(
         "plugin_notification_result_unknown_event",
     )));

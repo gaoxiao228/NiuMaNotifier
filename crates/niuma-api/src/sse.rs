@@ -81,7 +81,7 @@ pub(crate) async fn events_stream(State(state): State<AppState>) -> Response {
                     }
                 }
                 Ok(RuntimeEvent::PluginNotificationTestRequested { request, .. }) => {
-                    // 测试通知是控制事件，不写入 public_events，避免污染主事件历史。
+                    // 测试通知是控制事件，不写入公开事件缓存，避免污染主事件历史。
                     if let Ok(data) = serde_json::to_string(&request) {
                         yield Ok::<Event, std::convert::Infallible>(
                             Event::default()

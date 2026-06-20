@@ -163,6 +163,7 @@ function renderNotificationHistory(options: NotificationHistoryRenderOptions) {
     .map((record) => {
       const title = record.title || translateEventType(options.language, record.event_type)
       const body = record.body || record.error_message || ''
+      const metaLabelSuffix = options.language === 'en' || options.language === 'de' ? ':' : '：'
       const detailClass = record.error_message
         ? 'notification-record-detail error'
         : 'notification-record-detail'
@@ -179,11 +180,11 @@ function renderNotificationHistory(options: NotificationHistoryRenderOptions) {
             )}</span>
           </div>
           <dl class="notification-record-meta">
-            <dt>${escapeHtml(t.notificationReason)}</dt>
+            <dt>${escapeHtml(`${t.notificationReason}${metaLabelSuffix}`)}</dt>
             <dd>${escapeHtml(translateNotificationReason(options.language, record.reason))}</dd>
-            <dt>${escapeHtml(t.notificationCreatedAt)}</dt>
+            <dt>${escapeHtml(`${t.notificationCreatedAt}${metaLabelSuffix}`)}</dt>
             <dd>${escapeHtml(formatLocalTime(record.created_at, options.language))}</dd>
-            <dt>${escapeHtml(t.notificationSentAt)}</dt>
+            <dt>${escapeHtml(`${t.notificationSentAt}${metaLabelSuffix}`)}</dt>
             <dd>${escapeHtml(record.sent_at ? formatLocalTime(record.sent_at, options.language) : t.none)}</dd>
           </dl>
           ${
