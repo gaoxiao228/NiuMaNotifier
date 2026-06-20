@@ -96,6 +96,7 @@ let notificationRecordsLoaded = false
 let eventCenterEvents: NiumaEvent[] = []
 let eventCenterExpandedIds = new Set<string>()
 let eventCenterStream: EventSource | undefined
+let eventCenterStreamGeneration = 0
 let eventCenterStreamConnected = false
 let eventCenterStreamConnecting = false
 let eventCenterErrorText = ''
@@ -362,41 +363,65 @@ function renderSettingsEventCenter() {
 }
 
 function startEventCenterStream() {
-  if (eventCenterStream || activeView !== 'settings' || activeSettingsPanel !== 'event-center') {
+  if (
+    eventCenterStream ||
+    eventCenterStreamConnecting ||
+    activeView !== 'settings' ||
+    activeSettingsPanel !== 'event-center'
+  ) {
     return
   }
+  eventCenterStreamGeneration += 1
+  const generation = eventCenterStreamGeneration
   eventCenterEvents = []
   eventCenterExpandedIds = new Set()
   eventCenterStreamConnected = false
   eventCenterStreamConnecting = true
   eventCenterErrorText = ''
   renderSettingsEventCenter()
-  void connectEventCenterStream()
+  void connectEventCenterStream(generation)
 }
 
-async function connectEventCenterStream() {
+async function connectEventCenterStream(generation: number) {
   try {
     const apiUrl = await getLocalApiUrl()
-    if (activeView !== 'settings' || activeSettingsPanel !== 'event-center') {
+    if (!isCurrentEventCenterStream(generation)) {
       return
     }
-    eventCenterStream = new EventSource(`${apiUrl}${eventStreamPath}`)
-    eventCenterStream.onopen = () => {
+    const source = new EventSource(`${apiUrl}${eventStreamPath}`)
+    if (!isCurrentEventCenterStream(generation)) {
+      source.close()
+      return
+    }
+    eventCenterStream = source
+    source.onopen = () => {
+      if (!isCurrentEventCenterStream(generation, source)) {
+        return
+      }
       eventCenterStreamConnected = true
       eventCenterStreamConnecting = false
       eventCenterErrorText = ''
       renderSettingsEventCenter()
     }
-    eventCenterStream.addEventListener('event', (message) => {
+    source.addEventListener('event', (message) => {
+      if (!isCurrentEventCenterStream(generation, source)) {
+        return
+      }
       appendEventCenterEvent((message as MessageEvent<string>).data)
     })
-    eventCenterStream.onerror = () => {
+    source.onerror = () => {
+      if (!isCurrentEventCenterStream(generation, source)) {
+        return
+      }
       eventCenterStreamConnected = false
       eventCenterStreamConnecting = false
       eventCenterErrorText = translations[currentLanguage].eventCenterDisconnected
       renderSettingsEventCenter()
     }
   } catch (error) {
+    if (!isCurrentEventCenterStream(generation)) {
+      return
+    }
     eventCenterStreamConnected = false
     eventCenterStreamConnecting = false
     eventCenterErrorText = error instanceof Error ? error.message : String(error)
@@ -404,7 +429,19 @@ async function connectEventCenterStream() {
   }
 }
 
+function isCurrentEventCenterStream(generation: number, source?: EventSource) {
+  if (
+    generation !== eventCenterStreamGeneration ||
+    activeView !== 'settings' ||
+    activeSettingsPanel !== 'event-center'
+  ) {
+    return false
+  }
+  return source === undefined || eventCenterStream === source
+}
+
 function stopEventCenterStream() {
+  eventCenterStreamGeneration += 1
   eventCenterStream?.close()
   eventCenterStream = undefined
   eventCenterStreamConnected = false
@@ -416,10 +453,12 @@ function appendEventCenterEvent(data: string) {
   try {
     const nextEvent = JSON.parse(data) as NiumaEvent
     if (eventCenterEvents.some((event) => event.id === nextEvent.id)) {
+      eventCenterErrorText = ''
       return
     }
     // 事件中心是实时观察窗口，新消息按到达顺序追加到底部。
     eventCenterEvents = [...eventCenterEvents, nextEvent]
+    eventCenterErrorText = ''
     renderSettingsEventCenter()
   } catch (error) {
     eventCenterErrorText = error instanceof Error ? error.message : String(error)
@@ -576,6 +615,9 @@ settingsViewEl?.addEventListener('click', async (event) => {
     settingsPanel === 'event-center' ||
     settingsPanel === 'notification-history'
   ) {
+    if (settingsPanel === activeSettingsPanel) {
+      return
+    }
     stopEventCenterStream()
     activeSettingsPanel = settingsPanel
     renderSettings()
@@ -591,7 +633,9 @@ settingsViewEl?.addEventListener('click', async (event) => {
     await refreshNotificationRecords()
     return
   }
-  const eventCenterToggleId = target?.dataset.eventCenterToggle
+  const eventCenterToggleId = target
+    ?.closest<HTMLElement>('[data-event-center-toggle]')
+    ?.dataset.eventCenterToggle
   if (eventCenterToggleId) {
     if (eventCenterExpandedIds.has(eventCenterToggleId)) {
       eventCenterExpandedIds.delete(eventCenterToggleId)
@@ -1032,4 +1076,5 @@ startStream()
 
 window.addEventListener('beforeunload', () => {
   stream?.close()
+  eventCenterStream?.close()
 })
