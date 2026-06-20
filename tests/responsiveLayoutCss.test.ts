@@ -116,6 +116,31 @@ if (
   throw new Error('通知历史条目应有分层卡片布局样式')
 }
 
+// 事件中心应继承设置页固定高度布局，内部列表和 JSON 详情各自滚动。
+if (
+  !css.includes('.settings-event-center') ||
+  !css.includes('grid-template-rows: auto minmax(0, 1fr);') ||
+  !css.includes('height: 100%;')
+) {
+  throw new Error('事件中心面板应填满右侧区域，并让实时事件列表占据标题下方剩余空间')
+}
+
+if (
+  !css.includes('.event-center-list') ||
+  !css.includes('overflow: auto;') ||
+  !css.includes('min-height: 0;')
+) {
+  throw new Error('事件中心列表应在面板剩余区域内独立滚动')
+}
+
+if (
+  !css.includes('.event-center-json') ||
+  !css.includes('max-height: 220px;') ||
+  !css.includes('overflow: auto;')
+) {
+  throw new Error('事件中心 JSON 详情应限制高度并在块内滚动')
+}
+
 if (!css.includes('@media (max-width: 720px)')) {
   throw new Error('主界面只应在移动端宽度切换为竖向布局')
 }
