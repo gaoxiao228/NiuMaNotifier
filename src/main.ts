@@ -16,6 +16,7 @@ import {
   sendTestNotification,
   type ListenerToolConfig,
   type MainStatePayload,
+  type NiumaEvent,
   type NotificationRecord,
   type PluginManagementItem,
   type PluginRuntimeStatus
@@ -48,6 +49,7 @@ import {
   renderSettingsShell,
   type SettingsPanel
 } from './settingsView'
+import { renderEventCenter } from './eventCenterView'
 import {
   hasPluginReachedTransitionTarget,
   isPluginTransitioning,
@@ -61,6 +63,7 @@ const languageChangedEvent = 'niuma-language-changed'
 const pluginTransitionPollDelayMs = 500
 const pluginTransitionPollMaxAttempts = 20
 const stateStreamPath = '/api/v1/state/stream'
+const eventStreamPath = '/api/v1/events/stream'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -90,6 +93,12 @@ let activeView: 'dashboard' | 'settings' = 'dashboard'
 let activeSettingsPanel: SettingsPanel = 'plugins'
 let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
+let eventCenterEvents: NiumaEvent[] = []
+let eventCenterExpandedIds = new Set<string>()
+let eventCenterStream: EventSource | undefined
+let eventCenterStreamConnected = false
+let eventCenterStreamConnecting = false
+let eventCenterErrorText = ''
 let localApiUrlText = ''
 let localSseConnected = false
 
@@ -214,6 +223,7 @@ function renderActiveView() {
 
 function showDashboardView() {
   activeView = 'dashboard'
+  stopEventCenterStream()
   renderActiveView()
 }
 
@@ -228,6 +238,9 @@ function showSettingsView() {
   // 通知历史只属于通知历史侧边栏面板，避免在插件管理页触发无关刷新。
   if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
     void refreshNotificationRecords()
+  }
+  if (activeSettingsPanel === 'event-center') {
+    startEventCenterStream()
   }
 }
 
@@ -270,6 +283,7 @@ function renderSettings() {
   })
   renderPluginSettings()
   renderSettingsNotificationHistory()
+  renderSettingsEventCenter()
 }
 
 function renderPluginSettings() {
@@ -333,6 +347,84 @@ function renderSettingsNotificationHistory() {
     records: notificationRecords,
     recordsLoaded: notificationRecordsLoaded
   })
+}
+
+function renderSettingsEventCenter() {
+  renderEventCenter({
+    element: document.querySelector<HTMLElement>('#settings-event-center'),
+    language: currentLanguage,
+    events: eventCenterEvents,
+    expandedEventIds: eventCenterExpandedIds,
+    connected: eventCenterStreamConnected,
+    connecting: eventCenterStreamConnecting,
+    errorText: eventCenterErrorText
+  })
+}
+
+function startEventCenterStream() {
+  if (eventCenterStream || activeView !== 'settings' || activeSettingsPanel !== 'event-center') {
+    return
+  }
+  eventCenterEvents = []
+  eventCenterExpandedIds = new Set()
+  eventCenterStreamConnected = false
+  eventCenterStreamConnecting = true
+  eventCenterErrorText = ''
+  renderSettingsEventCenter()
+  void connectEventCenterStream()
+}
+
+async function connectEventCenterStream() {
+  try {
+    const apiUrl = await getLocalApiUrl()
+    if (activeView !== 'settings' || activeSettingsPanel !== 'event-center') {
+      return
+    }
+    eventCenterStream = new EventSource(`${apiUrl}${eventStreamPath}`)
+    eventCenterStream.onopen = () => {
+      eventCenterStreamConnected = true
+      eventCenterStreamConnecting = false
+      eventCenterErrorText = ''
+      renderSettingsEventCenter()
+    }
+    eventCenterStream.addEventListener('event', (message) => {
+      appendEventCenterEvent((message as MessageEvent<string>).data)
+    })
+    eventCenterStream.onerror = () => {
+      eventCenterStreamConnected = false
+      eventCenterStreamConnecting = false
+      eventCenterErrorText = translations[currentLanguage].eventCenterDisconnected
+      renderSettingsEventCenter()
+    }
+  } catch (error) {
+    eventCenterStreamConnected = false
+    eventCenterStreamConnecting = false
+    eventCenterErrorText = error instanceof Error ? error.message : String(error)
+    renderSettingsEventCenter()
+  }
+}
+
+function stopEventCenterStream() {
+  eventCenterStream?.close()
+  eventCenterStream = undefined
+  eventCenterStreamConnected = false
+  eventCenterStreamConnecting = false
+  eventCenterErrorText = ''
+}
+
+function appendEventCenterEvent(data: string) {
+  try {
+    const nextEvent = JSON.parse(data) as NiumaEvent
+    if (eventCenterEvents.some((event) => event.id === nextEvent.id)) {
+      return
+    }
+    // 事件中心是实时观察窗口，新消息按到达顺序追加到底部。
+    eventCenterEvents = [...eventCenterEvents, nextEvent]
+    renderSettingsEventCenter()
+  } catch (error) {
+    eventCenterErrorText = error instanceof Error ? error.message : String(error)
+    renderSettingsEventCenter()
+  }
 }
 
 function renderNotificationPage() {
@@ -452,6 +544,9 @@ function applyLanguage() {
   renderNotificationSettings()
   renderLocalSseStatus()
   renderSettings()
+  if (activeSettingsPanel === 'event-center') {
+    renderSettingsEventCenter()
+  }
   renderDashboard()
   renderActiveView()
 }
@@ -476,16 +571,34 @@ settingsViewEl?.addEventListener('click', async (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null
   const t = translations[currentLanguage]
   const settingsPanel = target?.dataset.settingsPanel
-  if (settingsPanel === 'plugins' || settingsPanel === 'notification-history') {
+  if (
+    settingsPanel === 'plugins' ||
+    settingsPanel === 'event-center' ||
+    settingsPanel === 'notification-history'
+  ) {
+    stopEventCenterStream()
     activeSettingsPanel = settingsPanel
     renderSettings()
     if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
       await refreshNotificationRecords()
     }
+    if (activeSettingsPanel === 'event-center') {
+      startEventCenterStream()
+    }
     return
   }
   if (target?.id === 'settings-notification-history-refresh') {
     await refreshNotificationRecords()
+    return
+  }
+  const eventCenterToggleId = target?.dataset.eventCenterToggle
+  if (eventCenterToggleId) {
+    if (eventCenterExpandedIds.has(eventCenterToggleId)) {
+      eventCenterExpandedIds.delete(eventCenterToggleId)
+    } else {
+      eventCenterExpandedIds.add(eventCenterToggleId)
+    }
+    renderSettingsEventCenter()
     return
   }
   const pluginConfigSaveId = target?.dataset.pluginConfigSave
