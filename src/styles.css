@@ -978,6 +978,11 @@ select {
   padding: 18px 4px;
 }
 
+/* 列表项不能被 flex 容器压缩，否则大量实时事件会挤在当前视口里而不是滚动。 */
+.event-center-list > li {
+  flex: 0 0 auto;
+}
+
 .event-center-item {
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 8px;

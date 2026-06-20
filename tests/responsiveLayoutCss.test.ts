@@ -170,6 +170,10 @@ if (
   throw new Error('事件中心列表应在面板剩余区域内独立滚动')
 }
 
+if (!ruleIncludes('.event-center-list > li', 'flex: 0 0 auto;')) {
+  throw new Error('事件中心列表项不应在 flex 列表中被压缩，应保持自身高度后交给列表滚动')
+}
+
 if (
   !ruleIncludes('.event-center-row', 'display: grid;') ||
   !ruleIncludes(
