@@ -1039,10 +1039,22 @@ select {
 }
 
 .event-center-detail {
-  animation: event-center-detail-expand 180ms ease-out;
   border-top: 1px solid rgba(148, 163, 184, 0.28);
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
   overflow: hidden;
-  transform-origin: top;
+  transition: grid-template-rows 180ms ease, opacity 180ms ease;
+}
+
+.event-center-item.expanded .event-center-detail {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.event-center-detail-inner {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .event-center-json {
@@ -1055,20 +1067,6 @@ select {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   line-height: 1.5;
-}
-
-@keyframes event-center-detail-expand {
-  from {
-    max-height: 0;
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-
-  to {
-    max-height: 190px;
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .settings-notification-history {
@@ -1174,7 +1172,7 @@ select {
 
 @media (prefers-reduced-motion: reduce) {
   .event-center-detail {
-    animation: none;
+    transition: none;
   }
 }
 

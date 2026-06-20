@@ -167,15 +167,19 @@ async function ignoresCallbacksWhenPanelIsNoLongerActive() {
 }
 
 function toggleUpdatesExpandedIds() {
-  const { runtime } = createHarness()
+  const { runtime, changes } = createHarness()
+  const changesBeforeToggle = changes()
 
-  runtime.toggle('event-a')
+  const expanded = runtime.toggle('event-a')
   let snapshot = runtime.snapshot()
+  assert(expanded, 'toggle 应返回当前事件展开后的状态')
   assert(snapshot.expandedEventIds.has('event-a'), 'toggle 应展开指定事件')
 
-  runtime.toggle('event-a')
+  const collapsed = runtime.toggle('event-a')
   snapshot = runtime.snapshot()
+  assert(!collapsed, '再次 toggle 应返回当前事件收起后的状态')
   assert(!snapshot.expandedEventIds.has('event-a'), '再次 toggle 应收起指定事件')
+  assert(changes() === changesBeforeToggle, 'toggle 只应局部更新事件项，不应触发整列表重新渲染')
 }
 
 function doesNotStartWhenInactive() {

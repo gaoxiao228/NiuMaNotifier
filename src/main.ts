@@ -48,7 +48,7 @@ import {
   renderSettingsShell,
   type SettingsPanel
 } from './settingsView'
-import { renderEventCenter } from './eventCenterView'
+import { renderEventCenter, setEventCenterItemExpanded } from './eventCenterView'
 import { createEventCenterRuntime, type EventSourceLike } from './eventCenterRuntime'
 import {
   hasPluginReachedTransitionTarget,
@@ -549,7 +549,12 @@ settingsViewEl?.addEventListener('click', async (event) => {
     ?.closest<HTMLElement>('[data-event-center-toggle]')
     ?.dataset.eventCenterToggle
   if (eventCenterToggleId) {
-    eventCenterRuntime.toggle(eventCenterToggleId)
+    const expanded = eventCenterRuntime.toggle(eventCenterToggleId)
+    setEventCenterItemExpanded(
+      document.querySelector<HTMLElement>('#settings-event-center'),
+      eventCenterToggleId,
+      expanded
+    )
     return
   }
   const pluginConfigSaveId = target?.dataset.pluginConfigSave

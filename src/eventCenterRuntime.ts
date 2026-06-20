@@ -29,7 +29,7 @@ export type EventCenterRuntime = {
   snapshot: () => EventCenterRuntimeSnapshot
   start: () => void
   stop: () => void
-  toggle: (eventId: string) => void
+  toggle: (eventId: string) => boolean
 }
 
 const requiredStringFields = [
@@ -99,10 +99,11 @@ export function createEventCenterRuntime(deps: EventCenterRuntimeDependencies): 
   function toggle(eventId: string) {
     if (expandedEventIds.has(eventId)) {
       expandedEventIds.delete(eventId)
+      return false
     } else {
       expandedEventIds.add(eventId)
+      return true
     }
-    deps.onChange()
   }
 
   async function connect(streamGeneration: number) {

@@ -211,17 +211,21 @@ if (
 
 if (
   !ruleIncludes('.event-center-detail', 'overflow: hidden;') ||
-  !ruleIncludes('.event-center-detail', 'animation: event-center-detail-expand 180ms ease-out;')
+  !ruleIncludes('.event-center-detail', 'display: grid;') ||
+  !ruleIncludes('.event-center-detail', 'grid-template-rows: 0fr;') ||
+  !ruleIncludes('.event-center-detail', 'transition: grid-template-rows 180ms ease, opacity 180ms ease;')
 ) {
-  throw new Error('事件中心详情应在当前事件下方使用展开动画，而不是通过滚动跳转展示')
+  throw new Error('事件中心详情应使用稳定网格行高过渡，支持原地展开和收缩动画')
 }
 
 if (
-  !css.includes('@keyframes event-center-detail-expand') ||
+  !ruleIncludes('.event-center-item.expanded .event-center-detail', 'grid-template-rows: 1fr;') ||
+  !ruleIncludes('.event-center-detail-inner', 'min-height: 0;') ||
+  !ruleIncludes('.event-center-detail-inner', 'overflow: hidden;') ||
   !css.includes('@media (prefers-reduced-motion: reduce)') ||
-  !css.includes('.event-center-detail {\n    animation: none;')
+  !css.includes('.event-center-detail {\n    transition: none;')
 ) {
-  throw new Error('事件中心详情展开动画应有关键帧，并尊重减少动态效果设置')
+  throw new Error('事件中心详情展开状态、内层裁剪和减少动态效果规则应完整')
 }
 
 if (!css.includes('@media (max-width: 720px)')) {

@@ -49,9 +49,13 @@ function renderEventCenterItems(options: EventCenterRenderOptions) {
 
 function renderEventCenterItem(event: NiumaEvent, options: EventCenterRenderOptions) {
   const expanded = options.expandedEventIds.has(event.id)
-  const detail = expanded
-    ? `<div class="event-center-detail"><pre class="event-center-json">${escapeHtml(JSON.stringify(event, null, 2))}</pre></div>`
-    : ''
+  const detail = `
+    <div class="event-center-detail" aria-hidden="${!expanded}">
+      <div class="event-center-detail-inner">
+        <pre class="event-center-json">${escapeHtml(JSON.stringify(event, null, 2))}</pre>
+      </div>
+    </div>
+  `
   // 每条事件只把摘要放在折叠行，完整原始字段统一交给 JSON 详情区展示。
   return `
     <li class="event-center-item ${expanded ? 'expanded' : ''}">
@@ -65,4 +69,26 @@ function renderEventCenterItem(event: NiumaEvent, options: EventCenterRenderOpti
       ${detail}
     </li>
   `
+}
+
+export function setEventCenterItemExpanded(element: HTMLElement | null, eventId: string, expanded: boolean) {
+  if (!element) {
+    return
+  }
+  const toggle = element.querySelector<HTMLElement>(
+    `[data-event-center-toggle="${escapeAttributeSelector(eventId)}"]`
+  )
+  const item = toggle?.closest<HTMLElement>('.event-center-item')
+  const detail = item?.querySelector<HTMLElement>('.event-center-detail')
+  if (!toggle || !item || !detail) {
+    return
+  }
+  // 点击展开只更新当前事件项，避免整列表重建导致动画和滚动位置不稳定。
+  item.classList.toggle('expanded', expanded)
+  toggle.setAttribute('aria-expanded', String(expanded))
+  detail.setAttribute('aria-hidden', String(!expanded))
+}
+
+function escapeAttributeSelector(value: string) {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"')
 }

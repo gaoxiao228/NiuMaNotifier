@@ -1,5 +1,5 @@
 import type { NiumaEvent } from '../src/api'
-import { renderEventCenter } from '../src/eventCenterView'
+import { renderEventCenter, setEventCenterItemExpanded } from '../src/eventCenterView'
 
 class FakeElement {
   // 测试只需要验证 renderer 写入的 HTML 字符串。
@@ -83,6 +83,14 @@ if (!element.innerHTML.includes('class="event-center-detail"')) {
   throw new Error('展开事件时应在当前事件行下方渲染带动画的详情容器')
 }
 
+if (!element.innerHTML.includes('class="event-center-detail-inner"')) {
+  throw new Error('事件详情应使用稳定内层容器支持展开和收缩动画')
+}
+
+if (!element.innerHTML.includes('aria-hidden="true"') || !element.innerHTML.includes('aria-hidden="false"')) {
+  throw new Error('每条事件都应渲染稳定详情容器，并通过 aria-hidden 标识展开状态')
+}
+
 if (!element.innerHTML.includes('&quot;id&quot;: &quot;event-b&quot;')) {
   throw new Error('格式化 JSON 应经过 HTML 转义，避免原始事件内容注入页面')
 }
@@ -103,4 +111,50 @@ renderEventCenter({
 
 if (!element.innerHTML.includes('实时已断开') || !element.innerHTML.includes('连接失败')) {
   throw new Error('事件中心断开时应显示断开状态和错误文案')
+}
+
+let queriedSelector = ''
+let itemExpanded = false
+let toggleAriaExpanded = ''
+let detailAriaHidden = ''
+const detailElement = {
+  setAttribute: (name: string, value: string) => {
+    if (name === 'aria-hidden') {
+      detailAriaHidden = value
+    }
+  }
+}
+const itemElement = {
+  classList: {
+    toggle: (className: string, force?: boolean) => {
+      if (className === 'expanded') {
+        itemExpanded = force === true
+      }
+    }
+  },
+  querySelector: (selector: string) => (selector === '.event-center-detail' ? detailElement : null)
+}
+const toggleElement = {
+  setAttribute: (name: string, value: string) => {
+    if (name === 'aria-expanded') {
+      toggleAriaExpanded = value
+    }
+  },
+  closest: (selector: string) => (selector === '.event-center-item' ? itemElement : null)
+}
+const rootElement = {
+  querySelector: (selector: string) => {
+    queriedSelector = selector
+    return toggleElement
+  }
+}
+
+setEventCenterItemExpanded(rootElement as unknown as HTMLElement, 'event-b', true)
+
+if (queriedSelector !== '[data-event-center-toggle="event-b"]') {
+  throw new Error('事件中心应按事件 id 局部查找当前事件行')
+}
+
+if (!itemExpanded || toggleAriaExpanded !== 'true' || detailAriaHidden !== 'false') {
+  throw new Error('展开事件时应只局部更新当前事件项 class 和 aria 状态')
 }
