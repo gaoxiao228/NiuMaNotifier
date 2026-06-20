@@ -110,6 +110,10 @@ export type Translation = {
   noSessionSelected: string
   none: string
   noEvents: string
+  eventCenterConnected?: string
+  eventCenterConnecting?: string
+  eventCenterDisconnected?: string
+  eventCenterWaiting?: string
   loading: string
   error: string
   status: Record<string, string>
@@ -234,6 +238,10 @@ export const translations: Record<LanguageCode, Translation> = {
     noSessionSelected: '未选择 Session',
     none: '暂无',
     noEvents: '暂无事件',
+    eventCenterConnected: '实时已连接',
+    eventCenterConnecting: '实时连接中',
+    eventCenterDisconnected: '实时已断开',
+    eventCenterWaiting: '等待新的实时事件',
     loading: '加载中',
     error: '错误',
     status: {
