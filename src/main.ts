@@ -48,7 +48,7 @@ import {
   renderSettingsShell,
   type SettingsPanel
 } from './settingsView'
-import { renderEventCenter, scrollEventCenterItemIntoView } from './eventCenterView'
+import { renderEventCenter } from './eventCenterView'
 import { createEventCenterRuntime, type EventSourceLike } from './eventCenterRuntime'
 import {
   hasPluginReachedTransitionTarget,
@@ -94,7 +94,6 @@ let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
 let localApiUrlText = ''
 let localSseConnected = false
-let pendingEventCenterScrollId = ''
 
 const eventCenterRuntime = createEventCenterRuntime({
   getLocalApiUrl,
@@ -354,6 +353,8 @@ function renderSettingsNotificationHistory() {
 function renderSettingsEventCenter() {
   const snapshot = eventCenterRuntime.snapshot()
   const element = document.querySelector<HTMLElement>('#settings-event-center')
+  // 展开详情必须保持当前事件行位置稳定，只恢复列表滚动位置，不主动滚动到详情。
+  const previousScrollTop = element?.querySelector<HTMLOListElement>('.event-center-list')?.scrollTop ?? 0
   renderEventCenter({
     element,
     language: currentLanguage,
@@ -363,10 +364,9 @@ function renderSettingsEventCenter() {
     connecting: snapshot.connecting,
     errorText: snapshot.errorText
   })
-  if (pendingEventCenterScrollId) {
-    const eventId = pendingEventCenterScrollId
-    pendingEventCenterScrollId = ''
-    window.requestAnimationFrame(() => scrollEventCenterItemIntoView(element, eventId))
+  const nextList = element?.querySelector<HTMLOListElement>('.event-center-list')
+  if (nextList) {
+    nextList.scrollTop = previousScrollTop
   }
 }
 
@@ -549,7 +549,6 @@ settingsViewEl?.addEventListener('click', async (event) => {
     ?.closest<HTMLElement>('[data-event-center-toggle]')
     ?.dataset.eventCenterToggle
   if (eventCenterToggleId) {
-    pendingEventCenterScrollId = eventCenterToggleId
     eventCenterRuntime.toggle(eventCenterToggleId)
     return
   }

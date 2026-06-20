@@ -1,5 +1,5 @@
 import type { NiumaEvent } from '../src/api'
-import { renderEventCenter, scrollEventCenterItemIntoView } from '../src/eventCenterView'
+import { renderEventCenter } from '../src/eventCenterView'
 
 class FakeElement {
   // 测试只需要验证 renderer 写入的 HTML 字符串。
@@ -79,6 +79,10 @@ if (!element.innerHTML.includes('class="event-center-json"')) {
   throw new Error('展开事件时应显示格式化 JSON 详情')
 }
 
+if (!element.innerHTML.includes('class="event-center-detail"')) {
+  throw new Error('展开事件时应在当前事件行下方渲染带动画的详情容器')
+}
+
 if (!element.innerHTML.includes('&quot;id&quot;: &quot;event-b&quot;')) {
   throw new Error('格式化 JSON 应经过 HTML 转义，避免原始事件内容注入页面')
 }
@@ -99,61 +103,4 @@ renderEventCenter({
 
 if (!element.innerHTML.includes('实时已断开') || !element.innerHTML.includes('连接失败')) {
   throw new Error('事件中心断开时应显示断开状态和错误文案')
-}
-
-let queriedSelector = ''
-let closestSelector = ''
-const listElement = {
-  scrollTop: 24,
-  getBoundingClientRect: () => ({ top: 100, bottom: 500 })
-}
-const visibleItemElement = {
-  closest: (selector: string) => (selector === '.event-center-list' ? listElement : null),
-  getBoundingClientRect: () => ({ top: 130, bottom: 320 })
-}
-const toggleElement = {
-  closest: (selector: string) => {
-    closestSelector = selector
-    return visibleItemElement
-  }
-}
-const rootElement = {
-  querySelector: (selector: string) => {
-    queriedSelector = selector
-    return toggleElement
-  }
-}
-
-scrollEventCenterItemIntoView(rootElement as unknown as HTMLElement, 'event-b')
-
-if (queriedSelector !== '[data-event-center-toggle="event-b"]') {
-  throw new Error('事件中心应按事件 id 查找刚展开的事件行')
-}
-
-if (closestSelector !== '.event-center-item') {
-  throw new Error('事件中心应滚动整个事件项，确保展开详情也进入可视区域')
-}
-
-if (listElement.scrollTop !== 24) {
-  throw new Error('展开已完整可见的事件项时不应改变当前滚动位置')
-}
-
-const overflowListElement = {
-  scrollTop: 40,
-  getBoundingClientRect: () => ({ top: 100, bottom: 500 })
-}
-const overflowItemElement = {
-  closest: (selector: string) => (selector === '.event-center-list' ? overflowListElement : null),
-  getBoundingClientRect: () => ({ top: 420, bottom: 560 })
-}
-const overflowRootElement = {
-  querySelector: () => ({
-    closest: () => overflowItemElement
-  })
-}
-
-scrollEventCenterItemIntoView(overflowRootElement as unknown as HTMLElement, 'event-b')
-
-if (overflowListElement.scrollTop !== 100) {
-  throw new Error('展开详情超出列表底部时，应只按溢出高度补充滚动')
 }

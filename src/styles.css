@@ -1038,17 +1038,37 @@ select {
   text-align: right;
 }
 
+.event-center-detail {
+  animation: event-center-detail-expand 180ms ease-out;
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+  overflow: hidden;
+  transform-origin: top;
+}
+
 .event-center-json {
   max-height: 160px;
   overflow: auto;
   margin: 0;
   padding: 10px 12px;
-  border-top: 1px solid rgba(148, 163, 184, 0.28);
   color: #dbeafe;
   background: #0f172a;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   line-height: 1.5;
+}
+
+@keyframes event-center-detail-expand {
+  from {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    max-height: 190px;
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .settings-notification-history {
@@ -1150,6 +1170,12 @@ select {
 .empty {
   color: #667085;
   font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .event-center-detail {
+    animation: none;
+  }
 }
 
 @media (max-width: 920px) {

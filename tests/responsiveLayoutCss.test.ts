@@ -209,6 +209,21 @@ if (
   throw new Error('事件中心 JSON 详情应限制高度并在块内滚动')
 }
 
+if (
+  !ruleIncludes('.event-center-detail', 'overflow: hidden;') ||
+  !ruleIncludes('.event-center-detail', 'animation: event-center-detail-expand 180ms ease-out;')
+) {
+  throw new Error('事件中心详情应在当前事件下方使用展开动画，而不是通过滚动跳转展示')
+}
+
+if (
+  !css.includes('@keyframes event-center-detail-expand') ||
+  !css.includes('@media (prefers-reduced-motion: reduce)') ||
+  !css.includes('.event-center-detail {\n    animation: none;')
+) {
+  throw new Error('事件中心详情展开动画应有关键帧，并尊重减少动态效果设置')
+}
+
 if (!css.includes('@media (max-width: 720px)')) {
   throw new Error('主界面只应在移动端宽度切换为竖向布局')
 }

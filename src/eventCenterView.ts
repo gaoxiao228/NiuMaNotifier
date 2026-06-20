@@ -39,31 +39,6 @@ export function renderEventCenter(options: EventCenterRenderOptions) {
   `
 }
 
-export function scrollEventCenterItemIntoView(element: HTMLElement | null, eventId: string) {
-  if (!element) {
-    return
-  }
-  const toggle = element.querySelector<HTMLElement>(
-    `[data-event-center-toggle="${escapeAttributeSelector(eventId)}"]`
-  )
-  const item = toggle?.closest<HTMLElement>('.event-center-item') ?? toggle
-  const list = item?.closest<HTMLElement>('.event-center-list')
-  if (!item || !list) {
-    return
-  }
-  const itemRect = item.getBoundingClientRect()
-  const listRect = list.getBoundingClientRect()
-  const bottomOverflow = itemRect.bottom - listRect.bottom
-  if (bottomOverflow > 0) {
-    list.scrollTop += bottomOverflow
-    return
-  }
-  const topOverflow = listRect.top - itemRect.top
-  if (topOverflow > 0) {
-    list.scrollTop -= topOverflow
-  }
-}
-
 function renderEventCenterItems(options: EventCenterRenderOptions) {
   const t = translations[options.language]
   if (options.events.length === 0) {
@@ -72,14 +47,10 @@ function renderEventCenterItems(options: EventCenterRenderOptions) {
   return options.events.map((event) => renderEventCenterItem(event, options)).join('')
 }
 
-function escapeAttributeSelector(value: string) {
-  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"')
-}
-
 function renderEventCenterItem(event: NiumaEvent, options: EventCenterRenderOptions) {
   const expanded = options.expandedEventIds.has(event.id)
   const detail = expanded
-    ? `<pre class="event-center-json">${escapeHtml(JSON.stringify(event, null, 2))}</pre>`
+    ? `<div class="event-center-detail"><pre class="event-center-json">${escapeHtml(JSON.stringify(event, null, 2))}</pre></div>`
     : ''
   // 每条事件只把摘要放在折叠行，完整原始字段统一交给 JSON 详情区展示。
   return `
