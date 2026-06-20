@@ -3,6 +3,17 @@ declare function require(name: string): { readFileSync(path: string, encoding: s
 const { readFileSync } = require('fs')
 const css = readFileSync('src/styles.css', 'utf8')
 
+// 只截取目标 selector 的第一段声明，避免全文件同名属性导致误判。
+function cssRule(selector: string) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))
+  return match?.[1] ?? ''
+}
+
+function ruleIncludes(selector: string, property: string) {
+  return cssRule(selector).includes(property)
+}
+
 if (!css.includes('grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);')) {
   throw new Error('桌面主布局应保持弹性两列，避免中等窗口被挤成竖向布局')
 }
@@ -118,25 +129,22 @@ if (
 
 // 事件中心应继承设置页固定高度布局，内部列表和 JSON 详情各自滚动。
 if (
-  !css.includes('.settings-event-center') ||
-  !css.includes('grid-template-rows: auto minmax(0, 1fr);') ||
-  !css.includes('height: 100%;')
+  !ruleIncludes('.settings-event-center', 'grid-template-rows: auto minmax(0, 1fr);') ||
+  !ruleIncludes('.settings-event-center', 'height: 100%;')
 ) {
   throw new Error('事件中心面板应填满右侧区域，并让实时事件列表占据标题下方剩余空间')
 }
 
 if (
-  !css.includes('.event-center-list') ||
-  !css.includes('overflow: auto;') ||
-  !css.includes('min-height: 0;')
+  !ruleIncludes('.event-center-list', 'overflow: auto;') ||
+  !ruleIncludes('.event-center-list', 'min-height: 0;')
 ) {
   throw new Error('事件中心列表应在面板剩余区域内独立滚动')
 }
 
 if (
-  !css.includes('.event-center-json') ||
-  !css.includes('max-height: 220px;') ||
-  !css.includes('overflow: auto;')
+  !ruleIncludes('.event-center-json', 'max-height: 220px;') ||
+  !ruleIncludes('.event-center-json', 'overflow: auto;')
 ) {
   throw new Error('事件中心 JSON 详情应限制高度并在块内滚动')
 }
