@@ -103,16 +103,18 @@ if (!element.innerHTML.includes('实时已断开') || !element.innerHTML.include
 
 let queriedSelector = ''
 let closestSelector = ''
-let scrollOptions: ScrollIntoViewOptions | undefined
-const itemElement = {
-  scrollIntoView: (options?: ScrollIntoViewOptions) => {
-    scrollOptions = options
-  }
+const listElement = {
+  scrollTop: 24,
+  getBoundingClientRect: () => ({ top: 100, bottom: 500 })
+}
+const visibleItemElement = {
+  closest: (selector: string) => (selector === '.event-center-list' ? listElement : null),
+  getBoundingClientRect: () => ({ top: 130, bottom: 320 })
 }
 const toggleElement = {
   closest: (selector: string) => {
     closestSelector = selector
-    return itemElement
+    return visibleItemElement
   }
 }
 const rootElement = {
@@ -132,6 +134,26 @@ if (closestSelector !== '.event-center-item') {
   throw new Error('事件中心应滚动整个事件项，确保展开详情也进入可视区域')
 }
 
-if (scrollOptions?.block !== 'nearest' || scrollOptions.inline !== 'nearest') {
-  throw new Error('展开事件后应把事件项按最近距离滚入可视区域')
+if (listElement.scrollTop !== 24) {
+  throw new Error('展开已完整可见的事件项时不应改变当前滚动位置')
+}
+
+const overflowListElement = {
+  scrollTop: 40,
+  getBoundingClientRect: () => ({ top: 100, bottom: 500 })
+}
+const overflowItemElement = {
+  closest: (selector: string) => (selector === '.event-center-list' ? overflowListElement : null),
+  getBoundingClientRect: () => ({ top: 420, bottom: 560 })
+}
+const overflowRootElement = {
+  querySelector: () => ({
+    closest: () => overflowItemElement
+  })
+}
+
+scrollEventCenterItemIntoView(overflowRootElement as unknown as HTMLElement, 'event-b')
+
+if (overflowListElement.scrollTop !== 100) {
+  throw new Error('展开详情超出列表底部时，应只按溢出高度补充滚动')
 }

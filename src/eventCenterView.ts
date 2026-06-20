@@ -47,7 +47,21 @@ export function scrollEventCenterItemIntoView(element: HTMLElement | null, event
     `[data-event-center-toggle="${escapeAttributeSelector(eventId)}"]`
   )
   const item = toggle?.closest<HTMLElement>('.event-center-item') ?? toggle
-  item?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  const list = item?.closest<HTMLElement>('.event-center-list')
+  if (!item || !list) {
+    return
+  }
+  const itemRect = item.getBoundingClientRect()
+  const listRect = list.getBoundingClientRect()
+  const bottomOverflow = itemRect.bottom - listRect.bottom
+  if (bottomOverflow > 0) {
+    list.scrollTop += bottomOverflow
+    return
+  }
+  const topOverflow = listRect.top - itemRect.top
+  if (topOverflow > 0) {
+    list.scrollTop -= topOverflow
+  }
 }
 
 function renderEventCenterItems(options: EventCenterRenderOptions) {
