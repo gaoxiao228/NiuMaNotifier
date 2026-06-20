@@ -23,6 +23,16 @@ function cssBlockAfter(marker: string) {
   return css.slice(start, nextMedia < 0 ? undefined : nextMedia)
 }
 
+// 校验 media 块内的同一条规则，避免 selector 和属性分别来自不同规则。
+function mediaRuleIncludes(mediaMarker: string, selectorPart: string, property: string) {
+  const block = cssBlockAfter(mediaMarker)
+  const rules = block.match(/[^{}]+\{[^}]*\}/g) ?? []
+  return rules.some((rule) => {
+    const [selector, body = ''] = rule.split('{')
+    return selector.includes(selectorPart) && body.includes(property)
+  })
+}
+
 if (!css.includes('grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);')) {
   throw new Error('桌面主布局应保持弹性两列，避免中等窗口被挤成竖向布局')
 }
@@ -138,6 +148,7 @@ if (
 
 // 事件中心应继承设置页固定高度布局，内部列表和 JSON 详情各自滚动。
 if (
+  !ruleIncludes('.settings-event-center', 'display: grid;') ||
   !ruleIncludes('.settings-event-center', 'grid-template-rows: auto minmax(0, 1fr);') ||
   !ruleIncludes('.settings-event-center', 'height: 100%;')
 ) {
@@ -185,16 +196,11 @@ if (
   throw new Error('事件中心 JSON 详情应限制高度并在块内滚动')
 }
 
-const mobileMediaBlock = cssBlockAfter('@media (max-width: 720px)')
-
 if (!css.includes('@media (max-width: 720px)')) {
   throw new Error('主界面只应在移动端宽度切换为竖向布局')
 }
 
-if (
-  !mobileMediaBlock.includes('.event-center-row') ||
-  !mobileMediaBlock.includes('grid-template-columns: 1fr;')
-) {
+if (!mediaRuleIncludes('@media (max-width: 720px)', '.event-center-row', 'grid-template-columns: 1fr;')) {
   throw new Error('事件中心事件行应在 720px 移动端断点栈叠为单列布局')
 }
 
