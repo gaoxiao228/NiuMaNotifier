@@ -453,7 +453,10 @@ function appendEventCenterEvent(data: string) {
   try {
     const nextEvent = JSON.parse(data) as NiumaEvent
     if (eventCenterEvents.some((event) => event.id === nextEvent.id)) {
-      eventCenterErrorText = ''
+      if (eventCenterErrorText) {
+        eventCenterErrorText = ''
+        renderSettingsEventCenter()
+      }
       return
     }
     // 事件中心是实时观察窗口，新消息按到达顺序追加到底部。
