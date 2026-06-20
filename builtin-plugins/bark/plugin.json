@@ -7,6 +7,7 @@
   "args": [],
   "platforms": ["macos", "windows", "linux"],
   "capabilities": ["event_consumer", "notification_test"],
+  "icon_url": "/assets/bark-icon.png",
   "config_schema": [
     {
       "key": "device_key",

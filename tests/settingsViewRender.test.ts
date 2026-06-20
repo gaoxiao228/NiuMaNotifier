@@ -85,7 +85,7 @@ renderPluginManagement({
       enabled: true,
       runtime_status: 'running',
       last_error: null,
-      icon_url: null,
+      icon_url: '/assets/codex-icon.png',
       config_schema: [],
       install_path: null
     },
@@ -100,7 +100,7 @@ renderPluginManagement({
       enabled: false,
       runtime_status: 'stopped',
       last_error: null,
-      icon_url: null,
+      icon_url: '/assets/bark-icon.png',
       config_schema: [
         {
           key: 'device_key',
@@ -122,7 +122,7 @@ renderPluginManagement({
       enabled: true,
       runtime_status: 'running',
       last_error: null,
-      icon_url: null,
+      icon_url: '/assets/ntfy-logo.svg',
       config_schema: [
         {
           key: 'topic',
@@ -225,6 +225,26 @@ if (
   listElement.innerHTML.includes('data-plugin-toggle="builtin-ntfy"  disabled')
 ) {
   throw new Error('notification 插件应渲染可用开关')
+}
+
+if (
+  !listElement.innerHTML.includes('class="plugin-icon image"') ||
+  !listElement.innerHTML.includes('src="/assets/codex-icon.png"') ||
+  !listElement.innerHTML.includes('alt="Codex"') ||
+  !listElement.innerHTML.includes('src="/assets/bark-icon.png"') ||
+  !listElement.innerHTML.includes('alt="Bark"') ||
+  !listElement.innerHTML.includes('src="/assets/ntfy-logo.svg"') ||
+  !listElement.innerHTML.includes('alt="ntfy"')
+) {
+  throw new Error('插件管理页应渲染 manifest 提供的插件图标')
+}
+
+if (
+  !listElement.innerHTML.includes('class="plugin-icon fallback"') ||
+  !listElement.innerHTML.includes('aria-label="Demo Tool"') ||
+  !listElement.innerHTML.includes('>D</span>')
+) {
+  throw new Error('插件管理页应为缺少 icon_url 的插件渲染稳定 fallback 图标')
 }
 
 if (listElement.innerHTML.includes('data-plugin-remove="builtin-codex"')) {

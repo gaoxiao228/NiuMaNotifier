@@ -28,7 +28,7 @@ renderNotificationPage({
       enabled: true,
       runtime_status: 'running',
       last_error: null,
-      icon_url: null,
+      icon_url: '/assets/bark-icon.png',
       config_schema: [],
       install_path: null
     },
@@ -46,6 +46,21 @@ renderNotificationPage({
       icon_url: null,
       config_schema: [],
       install_path: null
+    },
+    {
+      id: 'webhook-plugin',
+      kind: 'notification',
+      tool_id: null,
+      display_name: 'Webhook',
+      version: '0.1.0',
+      source: 'external',
+      capabilities: ['event_consumer', 'notification_test'],
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: null,
+      config_schema: [],
+      install_path: '/tmp/webhook-plugin'
     }
   ],
   resultText: '',
@@ -58,9 +73,26 @@ if (titleElement.textContent !== '通知插件') {
 
 if (
   !formElement.innerHTML.includes('data-notification-plugin-id="builtin-bark"') ||
-  !formElement.innerHTML.includes('data-notification-plugin-toggle="builtin-ntfy"')
+  !formElement.innerHTML.includes('data-notification-plugin-toggle="builtin-ntfy"') ||
+  !formElement.innerHTML.includes('data-notification-plugin-id="webhook-plugin"')
 ) {
   throw new Error('主界面应根据 notification 类型插件渲染通知插件列表')
+}
+
+if (
+  !formElement.innerHTML.includes('class="plugin-icon image"') ||
+  !formElement.innerHTML.includes('src="/assets/bark-icon.png"') ||
+  !formElement.innerHTML.includes('alt="Bark"')
+) {
+  throw new Error('主界面推送插件卡片应渲染 manifest 提供的插件图标')
+}
+
+if (
+  !formElement.innerHTML.includes('class="plugin-icon fallback"') ||
+  !formElement.innerHTML.includes('aria-label="Webhook"') ||
+  !formElement.innerHTML.includes('>W</span>')
+) {
+  throw new Error('主界面推送插件卡片应为缺少 icon_url 的插件渲染稳定 fallback 图标')
 }
 
 if (formElement.innerHTML.includes('data-action="save"')) {

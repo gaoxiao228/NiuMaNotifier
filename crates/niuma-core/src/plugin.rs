@@ -829,6 +829,10 @@ mod tests {
         assert_eq!(plugin.id, "builtin-codex");
         assert_eq!(plugin.kind, PluginKind::Tool);
         assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
+        assert_eq!(
+            plugin.icon_url.as_deref(),
+            Some("/assets/codex-icon.png")
+        );
     }
 
     #[test]
@@ -847,6 +851,7 @@ mod tests {
                 PluginCapability::NotificationTest
             ]
         );
+        assert_eq!(plugin.icon_url.as_deref(), Some("/assets/bark-icon.png"));
     }
 
     #[test]
@@ -865,6 +870,7 @@ mod tests {
                 PluginCapability::NotificationTest
             ]
         );
+        assert_eq!(plugin.icon_url.as_deref(), Some("/assets/ntfy-logo.svg"));
         assert_eq!(plugin.config_schema[0].key, "topic");
     }
 

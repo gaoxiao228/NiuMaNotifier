@@ -1,5 +1,6 @@
 import type { PluginConfigField, PluginManagementItem } from './api'
 import { translations, type LanguageCode } from './i18n'
+import { renderPluginIcon } from './pluginIcon'
 import { escapeHtml } from './viewUtils'
 
 export type SettingsShellRenderOptions = {
@@ -85,6 +86,7 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
       return `
         <article class="plugin-card" data-plugin-id="${escapeHtml(plugin.id)}">
           <div class="plugin-card-main">
+            ${renderPluginIcon(plugin)}
             <div>
               <h3>${escapeHtml(plugin.display_name)} <span class="plugin-runtime-inline ${escapeHtml(
                 plugin.runtime_status

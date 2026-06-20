@@ -16,6 +16,8 @@ const shellBlock = cssBlock('.shell')
 const dashboardGridBlock = cssBlock('.dashboard-grid')
 const statusPanelBlock = cssBlock('.status-panel')
 const statusCardBlock = cssBlock('.status-card')
+const pluginIconImageBlock = cssBlock('.plugin-icon.image')
+const pluginIconImgBlock = cssBlock('.plugin-icon img')
 
 if (!css.includes('grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);')) {
   throw new Error('桌面主布局应保持弹性两列，避免中等窗口被挤成竖向布局')
@@ -76,6 +78,16 @@ if (css.includes('.listener-card {\n  min-height: 346px;')) {
 
 if (css.includes('.icon-action::before') || css.includes('.icon-action::after')) {
   throw new Error('设置按钮图标应使用明确的圆形齿轮 SVG，不应再用伪元素拼接')
+}
+
+if (
+  pluginIconImageBlock.includes('background: #ffffff;') ||
+  pluginIconImageBlock.includes('border: 1px solid') ||
+  !pluginIconImgBlock.includes('height: 34px;') ||
+  !pluginIconImgBlock.includes('width: 34px;') ||
+  !pluginIconImgBlock.includes('object-fit: cover;')
+) {
+  throw new Error('真实插件图标应填满图标区域，不应出现白色内框或四周留白')
 }
 
 if (

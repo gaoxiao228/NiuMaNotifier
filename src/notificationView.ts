@@ -9,6 +9,7 @@ import {
   translations,
   type LanguageCode
 } from './i18n'
+import { renderPluginIcon } from './pluginIcon'
 import { escapeHtml, formatLocalTime } from './viewUtils'
 
 export type NotificationPageRenderOptions = {
@@ -106,6 +107,7 @@ function renderNotificationPluginItem(
   // 主界面只展示通知插件运行摘要，具体 key/value 配置统一放在插件管理。
   return `
     <article class="notification-plugin-item" data-notification-plugin-id="${escapeHtml(plugin.id)}">
+      ${renderPluginIcon(plugin)}
       <div class="notification-plugin-copy">
         <strong>${escapeHtml(plugin.display_name)} <span class="notification-plugin-runtime ${escapeHtml(
           plugin.runtime_status

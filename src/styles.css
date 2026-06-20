@@ -547,8 +547,36 @@ select {
   border-radius: 7px;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   padding: 13px 14px;
+}
+
+.plugin-icon {
+  align-items: center;
+  background: #e8eef7;
+  border: 1px solid #d6e0ec;
+  border-radius: 7px;
+  color: #263755;
+  display: inline-flex;
+  flex: 0 0 34px;
+  font-size: 14px;
+  font-weight: 750;
+  height: 34px;
+  justify-content: center;
+  overflow: hidden;
+  width: 34px;
+}
+
+.plugin-icon.image {
+  background: transparent;
+  border: 0;
+}
+
+.plugin-icon img {
+  display: block;
+  height: 34px;
+  object-fit: cover;
+  width: 34px;
 }
 
 .notification-plugin-copy {

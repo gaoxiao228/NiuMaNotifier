@@ -8,5 +8,6 @@
   "args": [],
   "platforms": ["macos", "windows", "linux"],
   "capabilities": ["event_watcher"],
+  "icon_url": "/assets/codex-icon.png",
   "source": "builtin"
 }
