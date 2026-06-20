@@ -946,6 +946,173 @@ select {
   overflow-wrap: anywhere;
 }
 
+/* 事件中心固定标题区域，实时列表和 JSON 详情在各自容器内滚动。 */
+.settings-event-center {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+}
+
+.event-center-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.event-center-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.event-center-status {
+  border: 1px solid rgba(148, 163, 184, 0.65);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: #475569;
+  background: #f8fafc;
+  white-space: nowrap;
+}
+
+.event-center-status.connected {
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.event-center-status.connecting {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.event-center-status.disconnected {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.event-center-error {
+  min-width: 0;
+  color: #991b1b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-center-list {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0 2px 2px 0;
+  list-style: none;
+}
+
+.event-center-list > li.empty {
+  color: #64748b;
+  padding: 18px 4px;
+}
+
+/* 列表项不能被 flex 容器压缩，否则大量实时事件会挤在当前视口里而不是滚动。 */
+.event-center-list > li {
+  flex: 0 0 auto;
+}
+
+.event-center-item {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.event-center-item.expanded {
+  border-color: rgba(71, 85, 105, 0.45);
+}
+
+.event-center-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(96px, 0.8fr) minmax(64px, 0.55fr) minmax(110px, 0.9fr) minmax(180px, 1.6fr) minmax(136px, auto);
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  min-height: 42px;
+  padding: 8px 12px;
+  color: #334155;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.event-center-row:hover {
+  background: #f8fafc;
+}
+
+.event-center-row > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-center-row strong {
+  color: #0f172a;
+  font-weight: 650;
+}
+
+.event-center-summary {
+  color: #475569;
+}
+
+.event-center-row time {
+  color: #64748b;
+  font-weight: 500;
+  text-align: right;
+}
+
+.event-center-detail {
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  overflow: hidden;
+  transition: grid-template-rows 180ms ease, opacity 180ms ease;
+}
+
+.event-center-item.expanded .event-center-detail {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.event-center-detail-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.event-center-json {
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  color: #dbeafe;
+  background: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .settings-notification-history {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1057,6 +1224,12 @@ select {
   font-size: 13px;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .event-center-detail {
+    transition: none;
+  }
+}
+
 @media (max-width: 920px) {
   .dashboard-grid,
   .settings-layout {
@@ -1107,8 +1280,13 @@ select {
   }
 
   .plugin-config-fields,
+  .event-center-row,
   .notification-record-header,
   .notification-record-meta {
     grid-template-columns: 1fr;
+  }
+
+  .event-center-row time {
+    text-align: left;
   }
 }

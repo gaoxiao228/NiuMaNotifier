@@ -48,6 +48,8 @@ import {
   renderSettingsShell,
   type SettingsPanel
 } from './settingsView'
+import { renderEventCenter, setEventCenterItemExpanded } from './eventCenterView'
+import { createEventCenterRuntime, type EventSourceLike } from './eventCenterRuntime'
 import {
   hasPluginReachedTransitionTarget,
   isPluginTransitioning,
@@ -98,6 +100,14 @@ let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
 let localApiUrlText = ''
 let localSseConnected = false
+
+const eventCenterRuntime = createEventCenterRuntime({
+  getLocalApiUrl,
+  createEventSource: (url) => new EventSource(url) as EventSourceLike,
+  isActive: () => activeView === 'settings' && activeSettingsPanel === 'event-center',
+  onChange: renderSettingsEventCenter,
+  disconnectedText: () => translations[currentLanguage].eventCenterDisconnected
+})
 
 app.innerHTML = renderDashboardShell()
 
@@ -238,6 +248,7 @@ function renderActiveView() {
 
 function showDashboardView() {
   activeView = 'dashboard'
+  stopEventCenterStream()
   renderActiveView()
 }
 
@@ -252,6 +263,9 @@ function showSettingsView() {
   // 通知历史只属于通知历史侧边栏面板，避免在插件管理页触发无关刷新。
   if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
     void refreshNotificationRecords()
+  }
+  if (activeSettingsPanel === 'event-center') {
+    startEventCenterStream()
   }
 }
 
@@ -294,6 +308,7 @@ function renderSettings() {
   })
   renderPluginSettings()
   renderSettingsNotificationHistory()
+  renderSettingsEventCenter()
 }
 
 function renderPluginSettings() {
@@ -357,6 +372,34 @@ function renderSettingsNotificationHistory() {
     records: notificationRecords,
     recordsLoaded: notificationRecordsLoaded
   })
+}
+
+function renderSettingsEventCenter() {
+  const snapshot = eventCenterRuntime.snapshot()
+  const element = document.querySelector<HTMLElement>('#settings-event-center')
+  // 展开详情必须保持当前事件行位置稳定，只恢复列表滚动位置，不主动滚动到详情。
+  const previousScrollTop = element?.querySelector<HTMLOListElement>('.event-center-list')?.scrollTop ?? 0
+  renderEventCenter({
+    element,
+    language: currentLanguage,
+    events: snapshot.events,
+    expandedEventIds: snapshot.expandedEventIds,
+    connected: snapshot.connected,
+    connecting: snapshot.connecting,
+    errorText: snapshot.errorText
+  })
+  const nextList = element?.querySelector<HTMLOListElement>('.event-center-list')
+  if (nextList) {
+    nextList.scrollTop = previousScrollTop
+  }
+}
+
+function startEventCenterStream() {
+  eventCenterRuntime.start()
+}
+
+function stopEventCenterStream() {
+  eventCenterRuntime.stop()
 }
 
 function renderNotificationPage() {
@@ -476,6 +519,9 @@ function applyLanguage() {
   renderNotificationSettings()
   renderLocalSseStatus()
   renderSettings()
+  if (activeSettingsPanel === 'event-center') {
+    renderSettingsEventCenter()
+  }
   renderDashboard()
   renderActiveView()
 }
@@ -500,16 +546,39 @@ settingsViewEl?.addEventListener('click', async (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null
   const t = translations[currentLanguage]
   const settingsPanel = target?.dataset.settingsPanel
-  if (settingsPanel === 'plugins' || settingsPanel === 'notification-history') {
+  if (
+    settingsPanel === 'plugins' ||
+    settingsPanel === 'event-center' ||
+    settingsPanel === 'notification-history'
+  ) {
+    if (settingsPanel === activeSettingsPanel) {
+      return
+    }
+    stopEventCenterStream()
     activeSettingsPanel = settingsPanel
     renderSettings()
     if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
       await refreshNotificationRecords()
     }
+    if (activeSettingsPanel === 'event-center') {
+      startEventCenterStream()
+    }
     return
   }
   if (target?.id === 'settings-notification-history-refresh') {
     await refreshNotificationRecords()
+    return
+  }
+  const eventCenterToggleId = target
+    ?.closest<HTMLElement>('[data-event-center-toggle]')
+    ?.dataset.eventCenterToggle
+  if (eventCenterToggleId) {
+    const expanded = eventCenterRuntime.toggle(eventCenterToggleId)
+    setEventCenterItemExpanded(
+      document.querySelector<HTMLElement>('#settings-event-center'),
+      eventCenterToggleId,
+      expanded
+    )
     return
   }
   const pluginConfigSaveId = target?.dataset.pluginConfigSave
@@ -945,4 +1014,5 @@ startPluginRuntimeRefresh()
 window.addEventListener('beforeunload', () => {
   stream?.close()
   pluginRuntimeRefresh?.stop()
+  eventCenterRuntime.stop()
 })
