@@ -70,10 +70,11 @@ impl From<SystemLanguage> for TrayLocale {
 pub fn register_tray<R: Runtime>(
     app: &AppHandle<R>,
     is_quitting: Arc<AtomicBool>,
+    store: SqliteStateStore,
     runtime_events: RuntimeEventBus,
 ) -> tauri::Result<TrayIcon<R>> {
     let locale = TrayLocale::from_active();
-    let status = current_status();
+    let status = current_status_from_store(&store, Utc::now());
     let labels = tray_labels(&status, locale);
     let show_item = MenuItem::with_id(app, SHOW_MENU_ID, labels.show_window, true, None::<&str>)?;
     let status_item =
@@ -109,6 +110,7 @@ pub fn register_tray<R: Runtime>(
         language_items: language_items.clone(),
     };
 
+    let menu_event_store = store.clone();
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .icon(icon)
@@ -134,7 +136,12 @@ pub fn register_tray<R: Runtime>(
                         notify_language_changed(app);
                         if let Some(tray) = app.tray_by_id(TRAY_ID) {
                             let mut last_labels = None;
-                            refresh_tray_labels(&tray, &menu_items, &mut last_labels);
+                            refresh_tray_labels(
+                                &tray,
+                                &menu_items,
+                                &menu_event_store,
+                                &mut last_labels,
+                            );
                         }
                     }
                 }
@@ -142,7 +149,7 @@ pub fn register_tray<R: Runtime>(
         })
         .build(app)?;
 
-    start_tray_status_refresh(tray.clone(), menu_items, runtime_events);
+    start_tray_status_refresh(tray.clone(), menu_items, store, runtime_events);
     Ok(tray)
 }
 
@@ -201,6 +208,7 @@ fn set_dock_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
 fn start_tray_status_refresh<R: Runtime>(
     tray: TrayIcon<R>,
     menu_items: TrayMenuItems<R>,
+    store: SqliteStateStore,
     runtime_events: RuntimeEventBus,
 ) {
     thread::spawn(move || {
@@ -217,9 +225,9 @@ fn start_tray_status_refresh<R: Runtime>(
         runtime.block_on(async move {
             let mut watcher = MainStateWatcher::new(&runtime_events);
             let mut last_labels = None;
-            refresh_tray_labels(&tray, &menu_items, &mut last_labels);
+            refresh_tray_labels(&tray, &menu_items, &store, &mut last_labels);
             while watcher.wait_for_refresh().await {
-                refresh_tray_labels(&tray, &menu_items, &mut last_labels);
+                refresh_tray_labels(&tray, &menu_items, &store, &mut last_labels);
             }
         });
     });
@@ -228,10 +236,11 @@ fn start_tray_status_refresh<R: Runtime>(
 fn refresh_tray_labels<R: Runtime>(
     tray: &TrayIcon<R>,
     menu_items: &TrayMenuItems<R>,
+    store: &SqliteStateStore,
     last_labels: &mut Option<TrayLabels>,
 ) {
     let locale = TrayLocale::from_active();
-    let labels = tray_labels(&current_status(), locale);
+    let labels = tray_labels(&current_status_from_store(store, Utc::now()), locale);
     update_language_menu_checks(&menu_items.language_items, active_language_preference());
     if last_labels.as_ref() == Some(&labels) {
         return;
@@ -243,11 +252,6 @@ fn refresh_tray_labels<R: Runtime>(
     let _ = menu_items.language_menu.set_text(labels.language);
     let _ = menu_items.quit_item.set_text(labels.quit);
     *last_labels = Some(labels);
-}
-
-fn current_status() -> SessionStatus {
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
-    current_status_from_store(&store, Utc::now())
 }
 
 fn current_status_from_store(store: &SqliteStateStore, now: DateTime<Utc>) -> SessionStatus {
@@ -765,9 +769,12 @@ mod tests {
     }
 
     fn test_sqlite_path(name: &str) -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("niuma-tray-{name}-{}.sqlite", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        path
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-tray-{name}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 }

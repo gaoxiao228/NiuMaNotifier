@@ -1,9 +1,6 @@
-use chrono::Utc;
 use niuma_api::local_api_addr;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::local_api_client::{get_local_api, post_local_api};
-use niuma_core::main_state::MainStateService;
-use niuma_core::store::SqliteStateStore;
 use serde_json::json;
 
 pub(crate) fn doctor() -> ApiResponse<serde_json::Value> {
@@ -25,15 +22,7 @@ pub(crate) fn status() -> ApiResponse<serde_json::Value> {
         return response;
     }
 
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
-    match MainStateService::new(store).current_state(Utc::now()) {
-        Ok(state) => ApiResponse::ok(json!({
-            "state": state,
-            "mode": "offline_fallback",
-            "warning": "Local API 未连接，当前结果来自 SQLite 直接读取，可能不是实时推送状态"
-        })),
-        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
-    }
+    offline_runtime_state_response("读取运行状态")
 }
 
 pub(crate) fn sample_event() -> ApiResponse<serde_json::Value> {
@@ -53,16 +42,7 @@ pub(crate) fn reset() -> ApiResponse<serde_json::Value> {
         return response;
     }
 
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
-    match store.reset() {
-        Ok(state) => ApiResponse::ok(json!({
-            "event_count": state.events.len(),
-            "session_count": state.sessions.len(),
-            "mode": "offline_direct",
-            "warning": "reset 是显式本地清空操作，不通过 Local API 发布运行时事件"
-        })),
-        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
-    }
+    offline_runtime_state_response("重置运行状态")
 }
 
 pub(crate) fn dismiss_blocker() -> ApiResponse<serde_json::Value> {
@@ -70,23 +50,7 @@ pub(crate) fn dismiss_blocker() -> ApiResponse<serde_json::Value> {
         return response;
     }
 
-    let store = SqliteStateStore::new(SqliteStateStore::default_path());
-    match store.dismiss_active_blocker() {
-        Ok(Some(result)) => ApiResponse::ok(json!({
-            "dismissed": true,
-            "dismissed_count": result.dismissed_count,
-            "event": result.event,
-            "mode": "offline_fallback",
-            "warning": "Local API 未连接，本次直接写 SQLite，桌面端可能需要等待兜底刷新"
-        })),
-        Ok(None) => ApiResponse::ok(json!({
-            "dismissed": false,
-            "dismissed_count": 0,
-            "mode": "offline_fallback",
-            "warning": "Local API 未连接，本次直接读 SQLite，桌面端可能需要等待兜底刷新"
-        })),
-        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
-    }
+    offline_runtime_state_response("处理阻塞状态")
 }
 
 fn local_api_envelope(method: &str, path: &str) -> Result<ApiResponse<serde_json::Value>, String> {
@@ -112,6 +76,13 @@ fn reset_request_body() -> String {
         "reason": "cli_reset"
     })
     .to_string()
+}
+
+fn offline_runtime_state_response(action: &str) -> ApiResponse<serde_json::Value> {
+    ApiResponse::fail(
+        ApiErrorCode::ServiceUnavailable,
+        format!("Local API 未连接，无法{action}；运行状态只保存在应用进程内，请先启动桌面端或 niuma serve"),
+    )
 }
 
 fn api_response_from_body(body: &str) -> Result<ApiResponse<serde_json::Value>, String> {
@@ -164,5 +135,15 @@ mod tests {
 
         assert_eq!(value["confirm"], "RESET_NIUMA_STATE");
         assert_eq!(value["reason"], "cli_reset");
+    }
+
+    #[test]
+    fn offline_runtime_state_response_is_service_unavailable() {
+        let response = super::offline_runtime_state_response("status");
+
+        assert_eq!(response.code, 900004);
+        assert!(response.message.contains("Local API 未连接"));
+        assert!(response.message.contains("进程内"));
+        assert!(response.data.is_null());
     }
 }

@@ -346,9 +346,12 @@ mod tests {
     }
 
     fn test_sqlite_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "niuma-state-mutation-{name}-{}.sqlite",
-            std::process::id()
-        ))
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-state-mutation-{name}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 }

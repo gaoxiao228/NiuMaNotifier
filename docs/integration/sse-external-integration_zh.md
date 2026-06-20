@@ -26,7 +26,7 @@ http://127.0.0.1:27874
 - Local API 默认面向本机可信调用方，不内置鉴权。
 - JSON 接口和 SSE 响应会带 CORS 头，允许浏览器端本地页面直接访问。
 - 如果把监听地址绑定到 `0.0.0.0` 或局域网 IP，应在外层增加网络访问控制。
-- `NIUMA_STATE_PATH` 会影响当前实例读写的 SQLite 状态文件；调试和 reset 前应确认目标实例。
+- `NIUMA_DB_PATH` 会影响当前实例使用的 SQLite 通知历史数据库；调试通知历史时应确认目标实例。
 - 当所有 AI 监听开关关闭时，主状态会对外固定展示为 `idle`。
 
 ## 接口总览
@@ -267,11 +267,11 @@ Content-Type: application/json
 
 注意事项：
 
-- 该接口会重置当前 Local API 使用的 SQLite 状态。
+- 该接口会重置当前 Local API 使用的内存聚合状态。
 - 调用成功后会通过运行时事件总线发布重置事件，已连接的 SSE 客户端会收到新的 `state` 事件。
 - reset 只恢复 NiumaNotifier 的聚合状态，不会停止或修复 Codex、Claude Code 等底层工具本身。
 - 如果底层工具仍在继续写 session/log，reset 后状态可能再次变为 `running`、`waiting_approval`、`waiting_input` 或 `error`。
-- 调用前应确认目标 Local API 地址和 `NIUMA_STATE_PATH`，避免重置错误实例。
+- 调用前应确认目标 Local API 地址，避免重置错误实例。
 
 ## JavaScript 接入示例
 
@@ -320,7 +320,7 @@ curl -s -X POST http://127.0.0.1:27874/api/v1/state/reset \
 | 现象 | 建议 |
 | --- | --- |
 | 连接不上 `/api/v1/state/stream` | 确认 NiumaNotifier Local API 已启动，并检查 `NIUMA_LOCAL_API_ADDR`。 |
-| 一直是 `idle` | 确认 AI 监听开关已启用，并检查目标实例的 `NIUMA_STATE_PATH`。 |
+| 一直是 `idle` | 确认 AI 监听开关已启用，并确认请求的是目标实例的 Local API 地址。 |
 | `completed` 很快消失 | 这是预期行为，完成态默认保留 1 分钟。 |
 | reset 后又变成运行中或等待中 | 底层工具仍在写入新事件，应回到对应工具处理。 |
 | 浏览器跨域失败 | 确认请求的是 Local API，且没有被代理或外层网关移除 CORS 响应头。 |

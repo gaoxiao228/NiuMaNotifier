@@ -251,7 +251,7 @@ fn notification_plugin_config_payload(
     let stored_config = store.plugin_config(&manifest.id)?;
     let config = resolve_plugin_config(manifest, stored_config.clone());
     if stored_config.is_none() {
-        // 首次启动写入 manifest 默认配置，后续只以 plugin_configs 为权威来源。
+        // 首次启动写入 manifest 默认配置，后续只以插件 JSON 配置为权威来源。
         store.save_plugin_config(&manifest.id, &config)?;
     }
     Ok(config)
@@ -302,7 +302,7 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
         )
         .env(PARENT_PID_ENV, std::process::id().to_string())
         .env(
-            "NIUMA_STATE_PATH",
+            "NIUMA_DB_PATH",
             SqliteStateStore::default_path()
                 .to_string_lossy()
                 .to_string(),
@@ -638,11 +638,12 @@ mod tests {
     }
 
     fn test_sqlite_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "niuma-plugin-runtime-{name}-{}.sqlite",
-            std::process::id()
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-plugin-runtime-{name}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
         ));
-        let _ = std::fs::remove_file(&path);
-        path
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 }

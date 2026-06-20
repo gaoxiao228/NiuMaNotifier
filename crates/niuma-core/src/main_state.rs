@@ -503,11 +503,12 @@ mod tests {
     }
 
     fn test_sqlite_path(name: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "niuma-main-state-{name}-{}.sqlite",
-            std::process::id()
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-main-state-{name}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
         ));
-        let _ = std::fs::remove_file(&path);
-        path
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 }

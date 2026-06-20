@@ -27,21 +27,26 @@ const NOTIFICATION_TEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub(crate) struct AppRuntimeState {
+    pub(crate) store: SqliteStateStore,
     pub(crate) mutation_service: StateMutationService,
     pub(crate) runtime_events: RuntimeEventBus,
 }
 
 #[tauri::command]
-pub(crate) fn get_main_state() -> ApiResponse<serde_json::Value> {
-    match MainStateService::new(default_store()).current_state(Utc::now()) {
+pub(crate) fn get_main_state(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    match MainStateService::new(runtime_state.store.clone()).current_state(Utc::now()) {
         Ok(state) => ApiResponse::ok(json!({ "state": state })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
 }
 
 #[tauri::command]
-pub(crate) fn get_recent_events() -> ApiResponse<serde_json::Value> {
-    match dashboard_service().recent_events(10) {
+pub(crate) fn get_recent_events(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    match DashboardService::new(runtime_state.store.clone()).recent_events(10) {
         Ok(events) => ApiResponse::ok(json!({ "list": events })),
         Err(error) => ApiResponse::ok(json!({
             "list": [],
@@ -51,8 +56,10 @@ pub(crate) fn get_recent_events() -> ApiResponse<serde_json::Value> {
 }
 
 #[tauri::command]
-pub(crate) fn get_sessions() -> ApiResponse<serde_json::Value> {
-    match dashboard_service().sessions() {
+pub(crate) fn get_sessions(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    match DashboardService::new(runtime_state.store.clone()).sessions() {
         Ok(sessions) => ApiResponse::ok(json!({ "list": sessions })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
@@ -608,10 +615,6 @@ fn listener_tool(
     })
 }
 
-fn dashboard_service() -> DashboardService {
-    DashboardService::new(default_store())
-}
-
 pub(crate) fn restore_language_preference_from_store() -> Result<(), String> {
     let preference = default_store().language_preference()?;
     set_active_language_preference(preference);
@@ -646,11 +649,12 @@ mod tests {
     }
 
     fn test_sqlite_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "niuma-tauri-commands-{name}-{}.sqlite",
-            std::process::id()
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-tauri-commands-{name}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
         ));
-        let _ = std::fs::remove_file(&path);
-        path
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 }

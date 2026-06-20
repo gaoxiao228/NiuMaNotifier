@@ -22,15 +22,14 @@ const CODEX_PLUGIN_BINARY_NAME: &str = "niuma-codex-plugin";
 const BARK_PLUGIN_BINARY_NAME: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_BINARY_NAME: &str = "niuma-plugin-ntfy";
 
-fn spawn_background_services(runtime_events: RuntimeEventBus) {
+fn spawn_background_services(store: SqliteStateStore, runtime_events: RuntimeEventBus) {
     let spawn_result = thread::Builder::new()
         .name("niuma-background-services-startup".to_string())
         .spawn(move || {
             if LOCAL_API_START_DELAY > Duration::ZERO {
                 thread::sleep(LOCAL_API_START_DELAY);
             }
-            let store = SqliteStateStore::new(SqliteStateStore::default_path());
-            match spawn_local_api_with_bus(store, runtime_events.clone()) {
+            match spawn_local_api_with_bus(store.clone(), runtime_events.clone()) {
                 Ok(_) => {
                     eprintln!("NiumaNotifier Local API started at {}", local_api_addr());
                 }
@@ -39,7 +38,7 @@ fn spawn_background_services(runtime_events: RuntimeEventBus) {
                     eprintln!("NiumaNotifier Local API not started: {error}");
                 }
             }
-            spawn_stale_sweep_runtime(runtime_events.clone());
+            spawn_stale_sweep_runtime(store.clone(), runtime_events.clone());
 
             // Codex session 扫描放到首屏之后，避免文件系统监听和活跃文件轮询抢首屏资源。
             thread::sleep(WATCHER_START_DELAY);
@@ -51,14 +50,11 @@ fn spawn_background_services(runtime_events: RuntimeEventBus) {
     }
 }
 
-fn spawn_stale_sweep_runtime(runtime_events: RuntimeEventBus) {
+fn spawn_stale_sweep_runtime(store: SqliteStateStore, runtime_events: RuntimeEventBus) {
     if let Err(error) = thread::Builder::new()
         .name("stale-sweep-runtime".to_string())
         .spawn(move || {
-            let service = StateMutationService::new(
-                SqliteStateStore::new(SqliteStateStore::default_path()),
-                runtime_events,
-            );
+            let service = StateMutationService::new(store, runtime_events);
             loop {
                 thread::sleep(STALE_SWEEP_INTERVAL);
                 if let Err(error) = run_stale_sweep_once(&service, chrono::Utc::now()) {
@@ -141,13 +137,12 @@ fn resolve_builtin_plugin_command(
 fn main() {
     let is_quitting = Arc::new(AtomicBool::new(false));
     let runtime_events = RuntimeEventBus::new();
-    let mutation_service = StateMutationService::new(
-        SqliteStateStore::new(SqliteStateStore::default_path()),
-        runtime_events.clone(),
-    );
+    let store = SqliteStateStore::new(SqliteStateStore::default_path());
+    let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
 
     let app = tauri::Builder::default()
         .manage(commands::AppRuntimeState {
+            store: store.clone(),
             mutation_service,
             runtime_events: runtime_events.clone(),
         })
@@ -165,13 +160,14 @@ fn main() {
                 let _tray = tray::register_tray(
                     app.handle(),
                     Arc::clone(&is_quitting),
+                    store.clone(),
                     runtime_events.clone(),
                 )?;
                 if tray::install_macos_terminate_guard() {
                     #[cfg(target_os = "macos")]
                     macos::install_terminate_guard();
                 }
-                spawn_background_services(runtime_events.clone());
+                spawn_background_services(store.clone(), runtime_events.clone());
                 Ok(())
             }
         })

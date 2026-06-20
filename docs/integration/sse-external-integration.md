@@ -26,7 +26,7 @@ You can override the bind address with `NIUMA_LOCAL_API_ADDR`. LAN or external a
 - The Local API is designed for trusted local callers and does not include built-in authentication.
 - JSON endpoints and SSE responses include CORS headers, so local browser pages can call them directly.
 - If you bind the API to `0.0.0.0` or a LAN IP, add network-level access control outside NiumaNotifier.
-- `NIUMA_STATE_PATH` controls the SQLite state file used by the current instance; verify it before debugging or calling reset.
+- `NIUMA_DB_PATH` controls the SQLite notification history database used by the current instance; verify it when debugging notification history.
 - When all AI listener switches are disabled, the public main state is forced to `idle`.
 
 ## Endpoint Overview
@@ -270,11 +270,11 @@ Successful response:
 
 Important notes:
 
-- This endpoint resets the SQLite state used by the current Local API instance.
+- This endpoint resets the in-memory aggregated state used by the current Local API instance.
 - After a successful reset, the runtime event bus publishes a reset event, and connected SSE clients receive a new `state` event.
 - Reset only restores NiumaNotifier's aggregated state. It does not stop or repair underlying tools such as Codex or Claude Code.
 - If the underlying tool continues writing session/log events, the state may become `running`, `waiting_approval`, `waiting_input`, or `error` again after reset.
-- Verify the target Local API address and `NIUMA_STATE_PATH` before calling reset.
+- Verify the target Local API address before calling reset.
 
 ## JavaScript Example
 
@@ -323,7 +323,7 @@ curl -s -X POST http://127.0.0.1:27874/api/v1/state/reset \
 | Symptom | Recommendation |
 | --- | --- |
 | Cannot connect to `/api/v1/state/stream` | Confirm that the NiumaNotifier Local API is running and check `NIUMA_LOCAL_API_ADDR`. |
-| State is always `idle` | Confirm that AI listening is enabled and check the target instance's `NIUMA_STATE_PATH`. |
+| State is always `idle` | Confirm that AI listening is enabled and that the request is sent to the target Local API instance. |
 | `completed` disappears quickly | This is expected. Completed state is retained for 1 minute by default. |
 | State becomes running or waiting again after reset | The underlying tool is still writing new events; return to that tool and handle it there. |
 | Browser CORS fails | Confirm that the request reaches the Local API directly and that no proxy or gateway strips CORS headers. |

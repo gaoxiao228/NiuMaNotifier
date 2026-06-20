@@ -5,8 +5,9 @@ use std::time::Duration;
 use crate::listener_config::ListenerConfig;
 use crate::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
 use crate::notification_store::{
-    NotificationChannel, NotificationRecord, NotificationRecordStatus, PluginNotificationResult,
+    NotificationNotifierType, NotificationRecord, NotificationRecordStatus, PluginNotificationResult,
 };
+use crate::plugin::{PluginRuntimeState, PluginRuntimeStatus};
 use crate::store::SqliteStateStore;
 
 #[test]
@@ -69,78 +70,89 @@ fn sqlite_schema_does_not_create_events_table() {
 }
 
 #[test]
-fn sqlite_schema_creates_first_release_columns_and_indexes() {
-    let path = test_sqlite_path("schema_first_release_columns");
+fn runtime_state_is_not_persisted_to_sqlite_tables() {
+    let path = test_sqlite_path("runtime_state_is_not_persisted");
+    let store = SqliteStateStore::new(path.clone());
+    store
+        .save_listener_config(&ListenerConfig::default())
+        .unwrap();
+
+    store
+        .append_event(sample_event(
+            "dedupe-memory-only",
+            EventType::ApprovalRequested,
+        ))
+        .unwrap();
+
+    let connection = rusqlite::Connection::open(path).unwrap();
+    assert_table_missing(&connection, "sessions");
+    assert_table_missing(&connection, "attention_items");
+    assert_table_missing(&connection, "latest_activity");
+    assert_table_missing(&connection, "public_events");
+}
+
+#[test]
+fn new_store_with_same_path_starts_with_empty_runtime_state() {
+    let path = test_sqlite_path("new_store_same_path_empty_runtime");
+    let store = SqliteStateStore::new(path.clone());
+    store
+        .append_event(sample_event(
+            "dedupe-runtime-reset",
+            EventType::ApprovalRequested,
+        ))
+        .unwrap();
+
+    let reloaded = SqliteStateStore::new(path);
+
+    assert!(reloaded.sessions().unwrap().is_empty());
+    assert!(reloaded.public_recent_events(10).unwrap().is_empty());
+    assert_eq!(
+        reloaded.internal_status_snapshot().unwrap().status,
+        SessionStatus::Idle
+    );
+}
+
+#[test]
+fn schema_initializes_only_notification_records_table() {
+    let path = test_sqlite_path("schema_notification_only");
     let store = SqliteStateStore::new(path.clone());
     store.load().unwrap();
 
     let connection = rusqlite::Connection::open(path).unwrap();
 
+    assert_table_exists(&connection, "notification_records");
+    assert_table_missing(&connection, "sessions");
+    assert_table_missing(&connection, "attention_items");
+    assert_table_missing(&connection, "latest_activity");
+    assert_table_missing(&connection, "public_events");
+    assert_table_missing(&connection, "app_settings");
+    assert_table_missing(&connection, "plugin_configs");
+    assert_table_missing(&connection, "plugin_notification_results");
+
     assert_table_has_columns(
         &connection,
-        "sessions",
+        "notification_records",
         &[
             "id",
-            "tool",
-            "project_path",
-            "project_name",
-            "status",
-            "last_event_id",
-            "last_activity_at",
-            "payload",
-        ],
-    );
-    assert_table_has_columns(
-        &connection,
-        "attention_items",
-        &[
+            "notifier_id",
+            "notifier_type",
             "event_id",
-            "session_id",
-            "status",
-            "attention_resolve_key",
-            "created_at",
-            "payload",
-        ],
-    );
-    assert_table_has_columns(
-        &connection,
-        "latest_activity",
-        &[
-            "id",
-            "event_id",
-            "session_id",
-            "status",
-            "updated_at",
-            "payload",
-        ],
-    );
-    assert_table_has_columns(
-        &connection,
-        "public_events",
-        &[
-            "id",
-            "dedupe_key",
-            "source",
-            "tool",
-            "session_id",
-            "project_path",
-            "project_name",
             "event_type",
-            "severity",
+            "status",
+            "title",
+            "body",
+            "reason",
+            "error_message",
             "created_at",
-            "payload",
+            "sent_at",
         ],
-    );
-    assert_table_has_columns(
-        &connection,
-        "plugin_configs",
-        &["plugin_id", "payload", "updated_at"],
     );
 
-    assert_index_exists(&connection, "idx_sessions_last_activity_at");
-    assert_index_exists(&connection, "idx_attention_items_created_at");
-    assert_index_exists(&connection, "idx_public_events_created_at");
     assert_index_exists(&connection, "idx_notification_records_created_at");
+    assert_index_exists(
+        &connection,
+        "idx_notification_records_notifier_created_at",
+    );
 }
 
 #[test]
@@ -152,26 +164,26 @@ fn store_write_waits_for_temporary_sqlite_write_lock() {
     let mut blocking_connection = rusqlite::Connection::open(&path).unwrap();
     let tx = blocking_connection.transaction().unwrap();
     tx.execute(
-        "INSERT INTO app_settings (key, payload, updated_at)
-         VALUES ('lock-holder', '{}', '2026-06-16T00:00:00Z')",
+        "INSERT INTO notification_records
+         (id, notifier_id, notifier_type, event_id, event_type, status, created_at)
+         VALUES ('lock-holder', 'builtin-ntfy', 'builtin', 'event-lock-holder', '\"task_failed\"', '\"sent\"', '2026-06-16T00:00:00Z')",
         [],
     )
     .unwrap();
 
     let writer = std::thread::spawn({
         let store = store.clone();
-        move || {
-            store.save_listener_config(&ListenerConfig {
-                codex_listening_enabled: true,
-                ..ListenerConfig::default()
-            })
-        }
+        move || store.insert_notification_record_if_absent(&sample_notification_record(
+            "record-waiting-writer",
+            "builtin-bark",
+            "event-waiting-writer",
+        ))
     });
     std::thread::sleep(Duration::from_millis(200));
     tx.commit().unwrap();
 
-    writer.join().unwrap().unwrap();
-    assert!(store.listener_config().unwrap().codex_listening_enabled);
+    assert!(writer.join().unwrap().unwrap());
+    assert_eq!(store.notification_records(20).unwrap().len(), 2);
 }
 
 #[test]
@@ -820,38 +832,26 @@ fn reset_clears_events_and_sessions() {
 }
 
 #[test]
-fn notification_records_dedupe_by_event_and_channel() {
+fn notification_records_dedupe_by_notifier_and_event() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_records_dedupe"));
-    let record = NotificationRecord {
-        id: "record-1".to_string(),
-        event_id: "event-1".to_string(),
-        event_type: EventType::TaskFailed,
-        channel: NotificationChannel::Ntfy,
-        status: NotificationRecordStatus::Sent,
-        title: Some("任务失败".to_string()),
-        body: Some("项目：demo\n任务失败详情".to_string()),
-        reason: Some("task_failed".to_string()),
-        error_message: None,
-        created_at: chrono::Utc::now(),
-        sent_at: Some(chrono::Utc::now()),
-    };
+    let record = sample_notification_record("record-1", "builtin-ntfy", "event-1");
 
     assert!(store.insert_notification_record_if_absent(&record).unwrap());
     assert!(!store.insert_notification_record_if_absent(&record).unwrap());
 
     let records = store.notification_records(20).unwrap();
     assert_eq!(records.len(), 1);
+    assert_eq!(records[0].notifier_id, "builtin-ntfy");
+    assert_eq!(records[0].notifier_type, NotificationNotifierType::Builtin);
     assert_eq!(records[0].title.as_deref(), Some("任务失败"));
     assert_eq!(records[0].body.as_deref(), Some("项目：demo\n任务失败详情"));
 }
 
 #[test]
-fn notification_records_allow_same_event_on_different_channels() {
+fn notification_records_allow_same_event_on_different_notifiers() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_records_same_event"));
-    let bark_record =
-        sample_notification_record("record-bark", "event-1", NotificationChannel::Bark);
-    let ntfy_record =
-        sample_notification_record("record-ntfy", "event-1", NotificationChannel::Ntfy);
+    let bark_record = sample_notification_record("record-bark", "builtin-bark", "event-1");
+    let ntfy_record = sample_notification_record("record-ntfy", "builtin-ntfy", "event-1");
 
     assert!(store
         .insert_notification_record_if_absent(&bark_record)
@@ -866,8 +866,8 @@ fn notification_records_allow_same_event_on_different_channels() {
 #[test]
 fn notification_records_allow_same_channel_on_different_events() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_records_same_channel"));
-    let first = sample_notification_record("record-1", "event-1", NotificationChannel::Ntfy);
-    let second = sample_notification_record("record-2", "event-2", NotificationChannel::Ntfy);
+    let first = sample_notification_record("record-1", "builtin-ntfy", "event-1");
+    let second = sample_notification_record("record-2", "builtin-ntfy", "event-2");
 
     assert!(store.insert_notification_record_if_absent(&first).unwrap());
     assert!(store.insert_notification_record_if_absent(&second).unwrap());
@@ -878,8 +878,7 @@ fn notification_records_allow_same_channel_on_different_events() {
 #[test]
 fn notification_record_result_can_be_updated_after_reservation() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_record_update_result"));
-    let mut record =
-        sample_notification_record("record-pending", "event-1", NotificationChannel::Ntfy);
+    let mut record = sample_notification_record("record-pending", "builtin-ntfy", "event-1");
     record.status = NotificationRecordStatus::Pending;
     record.sent_at = None;
 
@@ -919,20 +918,19 @@ fn plugin_notification_result_upserts_by_plugin_and_event() {
 }
 
 #[test]
-fn notification_history_records_merge_legacy_and_plugin_results() {
+fn notification_history_records_marks_plugin_id_for_plugin_notifier() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_history_merge"));
-    let legacy =
-        sample_notification_record("legacy-record", "event-legacy", NotificationChannel::Ntfy);
+    let builtin = sample_notification_record("builtin-record", "builtin-ntfy", "event-builtin");
     let plugin = sample_plugin_notification_result("plugin-record", "builtin-ntfy", "event-plugin");
 
-    store.insert_notification_record_if_absent(&legacy).unwrap();
+    store.insert_notification_record_if_absent(&builtin).unwrap();
     store.save_plugin_notification_result(&plugin).unwrap();
 
     let records = store.notification_history_records(20).unwrap();
     assert_eq!(records.len(), 2);
     assert!(records
         .iter()
-        .any(|record| record.channel == "ntfy" && record.plugin_id.is_none()));
+        .any(|record| record.channel == "builtin-ntfy" && record.plugin_id.is_none()));
     assert!(records.iter().any(|record| record.channel == "builtin-ntfy"
         && record.plugin_id.as_deref() == Some("builtin-ntfy")));
 }
@@ -940,8 +938,8 @@ fn notification_history_records_merge_legacy_and_plugin_results() {
 #[test]
 fn notification_records_return_error_on_duplicate_id_for_different_event_and_channel() {
     let store = SqliteStateStore::new(test_sqlite_path("notification_records_duplicate_id"));
-    let first = sample_notification_record("record-1", "event-1", NotificationChannel::Bark);
-    let duplicate_id = sample_notification_record("record-1", "event-2", NotificationChannel::Ntfy);
+    let first = sample_notification_record("record-1", "builtin-bark", "event-1");
+    let duplicate_id = sample_notification_record("record-1", "builtin-ntfy", "event-2");
 
     assert!(store.insert_notification_record_if_absent(&first).unwrap());
 
@@ -990,13 +988,14 @@ fn notification_records_return_error_for_corrupted_stored_values() {
         connection
             .execute(
                 "INSERT INTO notification_records
-                 (id, event_id, event_type, channel, status, reason, error_message, created_at, sent_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7)",
+                 (id, notifier_id, notifier_type, event_id, event_type, status, reason, error_message, created_at, sent_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8)",
                 rusqlite::params![
                     format!("record-{name}"),
+                    "builtin-bark",
+                    "builtin",
                     format!("event-{name}"),
                     event_type,
-                    "bark",
                     status,
                     created_at,
                     sent_at,
@@ -1009,8 +1008,8 @@ fn notification_records_return_error_for_corrupted_stored_values() {
 }
 
 #[test]
-fn notification_records_return_error_for_unknown_channel() {
-    let path = test_sqlite_path("notification_records_unknown_channel");
+fn notification_records_return_error_for_unknown_notifier_type() {
+    let path = test_sqlite_path("notification_records_unknown_notifier_type");
     let store = SqliteStateStore::new(path.clone());
     store.load().unwrap();
 
@@ -1018,13 +1017,14 @@ fn notification_records_return_error_for_unknown_channel() {
     connection
         .execute(
             "INSERT INTO notification_records
-             (id, event_id, event_type, channel, status, reason, error_message, created_at, sent_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, NULL)",
+             (id, notifier_id, notifier_type, event_id, event_type, status, reason, error_message, created_at, sent_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, NULL)",
             rusqlite::params![
-                "record-unknown-channel",
+                "record-unknown-notifier-type",
+                "builtin-bark",
+                "sms",
                 "event-unknown-channel",
                 "\"task_failed\"",
-                "sms",
                 "\"sent\"",
                 "2026-06-12T00:00:00Z",
             ],
@@ -1132,8 +1132,9 @@ fn sqlite_store_matches_core_status_flow() {
 }
 
 #[test]
-fn listener_config_defaults_to_codex_disabled_and_persists() {
-    let path = test_sqlite_path("listener_config_default_persist");
+fn listener_config_persists_to_json_config_file() {
+    let root = test_data_dir("json_listener_config");
+    let path = root.join("niuma.sqlite");
     let store = SqliteStateStore::new(path.clone());
 
     let default_config = store.listener_config().unwrap();
@@ -1145,13 +1146,15 @@ fn listener_config_defaults_to_codex_disabled_and_persists() {
         .unwrap();
     let reloaded = SqliteStateStore::new(path).listener_config().unwrap();
 
+    assert!(root.join("config.json").exists());
     assert!(!default_config.codex_listening_enabled);
     assert!(reloaded.codex_listening_enabled);
 }
 
 #[test]
 fn plugin_enabled_map_defaults_empty_and_persists() {
-    let path = test_sqlite_path("plugin_enabled_map_default_persist");
+    let root = test_data_dir("json_plugin_enabled_map");
+    let path = root.join("niuma.sqlite");
     let store = SqliteStateStore::new(path.clone());
     let mut enabled = BTreeMap::new();
     enabled.insert("builtin-bark".to_string(), true);
@@ -1160,13 +1163,15 @@ fn plugin_enabled_map_defaults_empty_and_persists() {
     store.save_plugin_enabled_map(&enabled).unwrap();
     let reloaded = SqliteStateStore::new(path).plugin_enabled_map().unwrap();
 
+    assert!(root.join("config.json").exists());
     assert!(default_map.is_empty());
     assert_eq!(reloaded.get("builtin-bark"), Some(&true));
 }
 
 #[test]
-fn plugin_config_defaults_empty_persists_and_removes() {
-    let path = test_sqlite_path("plugin_config_persist");
+fn plugin_config_persists_to_plugin_config_json_file() {
+    let root = test_data_dir("json_plugin_config");
+    let path = root.join("niuma.sqlite");
     let store = SqliteStateStore::new(path.clone());
     let mut config = serde_json::Map::new();
     config.insert("device_key".to_string(), serde_json::json!("device-1"));
@@ -1177,6 +1182,8 @@ fn plugin_config_defaults_empty_persists_and_removes() {
         .plugin_config("builtin-bark")
         .unwrap()
         .unwrap();
+
+    assert!(root.join("plugin-configs").join("builtin-bark.json").exists());
     SqliteStateStore::new(path)
         .remove_plugin_config("builtin-bark")
         .unwrap();
@@ -1190,7 +1197,8 @@ fn plugin_config_defaults_empty_persists_and_removes() {
 
 #[test]
 fn language_preference_defaults_to_system_and_persists() {
-    let path = test_sqlite_path("language_preference_default_persist");
+    let root = test_data_dir("json_language_preference");
+    let path = root.join("niuma.sqlite");
     let store = SqliteStateStore::new(path.clone());
 
     let default_preference = store.language_preference().unwrap();
@@ -1211,6 +1219,30 @@ fn language_preference_defaults_to_system_and_persists() {
             crate::platform::locale::SystemLanguage::Ja
         )
     );
+}
+
+#[test]
+fn plugin_runtime_states_are_memory_only() {
+    let path = test_sqlite_path("runtime_states_memory_only");
+    let store = SqliteStateStore::new(&path);
+    store
+        .save_plugin_runtime_state(
+            "external-demo",
+            PluginRuntimeState {
+                status: PluginRuntimeStatus::Running,
+                last_error: Some("boom".to_string()),
+            },
+        )
+        .unwrap();
+
+    let states = store.plugin_runtime_states().unwrap();
+    assert_eq!(
+        states.get("external-demo").map(|state| &state.status),
+        Some(&PluginRuntimeStatus::Running)
+    );
+
+    let reloaded = SqliteStateStore::new(path);
+    assert!(reloaded.plugin_runtime_states().unwrap().is_empty());
 }
 
 #[test]
@@ -1310,6 +1342,27 @@ fn public_recent_events_filters_stale_and_respects_limit() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].session_id, "session-b");
     assert_eq!(events[0].event_type, EventType::InputRequested);
+}
+
+#[test]
+fn public_recent_events_keeps_only_recent_memory_cache() {
+    let store = SqliteStateStore::new(test_sqlite_path("public_recent_memory_cache"));
+    for index in 0..250 {
+        store
+            .append_event(sample_session_event(
+                &format!("dedupe-cache-{index}"),
+                &format!("session-cache-{index}"),
+                EventType::AssistantMessageCompleted,
+                index,
+            ))
+            .unwrap();
+    }
+
+    let events = store.public_recent_events(500).unwrap();
+
+    assert_eq!(events.len(), 200);
+    assert_eq!(events[0].id, "event_dedupe-cache-249");
+    assert_eq!(events[199].id, "event_dedupe-cache-50");
 }
 
 #[test]
@@ -1542,14 +1595,15 @@ fn sample_event(dedupe_key: &str, event_type: EventType) -> NiumaEvent {
 
 fn sample_notification_record(
     id: &str,
+    notifier_id: &str,
     event_id: &str,
-    channel: NotificationChannel,
 ) -> NotificationRecord {
     NotificationRecord {
         id: id.to_string(),
+        notifier_id: notifier_id.to_string(),
+        notifier_type: NotificationNotifierType::Builtin,
         event_id: event_id.to_string(),
         event_type: EventType::TaskFailed,
-        channel,
         status: NotificationRecordStatus::Sent,
         title: Some("任务失败".to_string()),
         body: Some("项目：demo\n任务失败详情".to_string()),
@@ -1631,12 +1685,17 @@ impl EventTestExt for NiumaEvent {
 }
 
 fn test_sqlite_path(name: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "niuma-notifier-{name}-{}.sqlite",
-        std::process::id()
+    test_data_dir(name).join("niuma.sqlite")
+}
+
+fn test_data_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "niuma-notifier-{name}-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap()
     ));
-    let _ = std::fs::remove_file(&path);
-    path
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 fn assert_table_has_columns(connection: &rusqlite::Connection, table: &str, columns: &[&str]) {
@@ -1655,6 +1714,34 @@ fn assert_table_has_columns(connection: &rusqlite::Connection, table: &str, colu
             "{table} should contain column {column}; actual columns: {actual:?}"
         );
     }
+}
+
+fn assert_table_exists(connection: &rusqlite::Connection, table: &str) {
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS (
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+            )",
+            [table],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(exists, "table should exist: {table}");
+}
+
+fn assert_table_missing(connection: &rusqlite::Connection, table: &str) {
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS (
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+            )",
+            [table],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!exists, "table should not exist: {table}");
 }
 
 fn assert_index_exists(connection: &rusqlite::Connection, index: &str) {

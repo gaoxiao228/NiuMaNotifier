@@ -22,11 +22,19 @@ pub enum NotificationRecordStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationNotifierType {
+    Builtin,
+    Plugin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NotificationRecord {
     pub id: String,
+    pub notifier_id: String,
+    pub notifier_type: NotificationNotifierType,
     pub event_id: String,
     pub event_type: EventType,
-    pub channel: NotificationChannel,
     pub status: NotificationRecordStatus,
     pub title: Option<String>,
     pub body: Option<String>,
@@ -75,15 +83,16 @@ pub(crate) fn insert_record_if_absent(
     let changed = connection
         .execute(
             "INSERT INTO notification_records
-             (id, event_id, event_type, channel, status, title, body, reason, error_message, created_at, sent_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT(event_id, channel) DO NOTHING",
+             (id, notifier_id, notifier_type, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(notifier_id, event_id) DO NOTHING",
             params![
                 &record.id,
+                &record.notifier_id,
+                notifier_type_id(&record.notifier_type),
                 &record.event_id,
                 serde_json::to_string(&record.event_type)
                     .map_err(|error| format!("序列化通知事件类型失败：{error}"))?,
-                channel_id(&record.channel),
                 serde_json::to_string(&record.status)
                     .map_err(|error| format!("序列化通知记录状态失败：{error}"))?,
                 &record.title,
@@ -130,12 +139,13 @@ pub(crate) fn upsert_plugin_result(
     connection: &Connection,
     result: &PluginNotificationResult,
 ) -> Result<(), String> {
+    let record = NotificationRecord::from(result.clone());
     connection
         .execute(
-            "INSERT INTO plugin_notification_results
-             (id, plugin_id, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT(plugin_id, event_id) DO UPDATE SET
+            "INSERT INTO notification_records
+             (id, notifier_id, notifier_type, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(notifier_id, event_id) DO UPDATE SET
                status = excluded.status,
                title = excluded.title,
                body = excluded.body,
@@ -144,19 +154,20 @@ pub(crate) fn upsert_plugin_result(
                created_at = excluded.created_at,
                sent_at = excluded.sent_at",
             params![
-                &result.id,
-                &result.plugin_id,
-                &result.event_id,
-                serde_json::to_string(&result.event_type)
+                &record.id,
+                &record.notifier_id,
+                notifier_type_id(&record.notifier_type),
+                &record.event_id,
+                serde_json::to_string(&record.event_type)
                     .map_err(|error| format!("序列化插件通知事件类型失败：{error}"))?,
-                serde_json::to_string(&result.status)
+                serde_json::to_string(&record.status)
                     .map_err(|error| format!("序列化插件通知状态失败：{error}"))?,
-                &result.title,
-                &result.body,
-                &result.reason,
-                &result.error_message,
-                result.created_at.to_rfc3339(),
-                result.sent_at.map(|value| value.to_rfc3339()),
+                &record.title,
+                &record.body,
+                &record.reason,
+                &record.error_message,
+                record.created_at.to_rfc3339(),
+                record.sent_at.map(|value| value.to_rfc3339()),
             ],
         )
         .map_err(|error| format!("保存插件通知结果失败：{error}"))?;
@@ -170,9 +181,9 @@ pub(crate) fn load_plugin_result(
 ) -> Result<Option<PluginNotificationResult>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, plugin_id, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at
-             FROM plugin_notification_results
-             WHERE plugin_id = ?1 AND event_id = ?2",
+            "SELECT id, notifier_id, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at
+             FROM notification_records
+             WHERE notifier_type = 'plugin' AND notifier_id = ?1 AND event_id = ?2",
         )
         .map_err(|error| format!("读取插件通知结果失败：{error}"))?;
     statement
@@ -188,7 +199,7 @@ pub(crate) fn load_records(
     let limit = i64::try_from(limit).unwrap_or(20).clamp(1, 200);
     let mut statement = connection
         .prepare(
-            "SELECT id, event_id, event_type, channel, status, title, body, reason, error_message, created_at, sent_at
+            "SELECT id, notifier_id, notifier_type, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at
              FROM notification_records
              ORDER BY created_at DESC
              LIMIT ?1",
@@ -196,38 +207,40 @@ pub(crate) fn load_records(
         .map_err(|error| format!("读取通知记录失败：{error}"))?;
     let rows = statement
         .query_map([limit], |row| {
-            let event_type_text: String = row.get(2)?;
-            let status_text: String = row.get(4)?;
-            let created_at_text: String = row.get(9)?;
-            let sent_at_text: Option<String> = row.get(10)?;
-            let event_type = serde_json::from_str(&event_type_text)
-                .map_err(|error| from_parse_error(2, error))?;
-            let status =
-                serde_json::from_str(&status_text).map_err(|error| from_parse_error(4, error))?;
-            let channel = parse_channel_id(&row.get::<_, String>(3)?).map_err(|error| {
-                from_parse_error(3, io::Error::new(io::ErrorKind::InvalidData, error))
+            let notifier_type_text: String = row.get(2)?;
+            let event_type_text: String = row.get(4)?;
+            let status_text: String = row.get(5)?;
+            let created_at_text: String = row.get(10)?;
+            let sent_at_text: Option<String> = row.get(11)?;
+            let notifier_type = parse_notifier_type(&notifier_type_text).map_err(|error| {
+                from_parse_error(2, io::Error::new(io::ErrorKind::InvalidData, error))
             })?;
+            let event_type = serde_json::from_str(&event_type_text)
+                .map_err(|error| from_parse_error(4, error))?;
+            let status =
+                serde_json::from_str(&status_text).map_err(|error| from_parse_error(5, error))?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_text)
                 .map(|value| value.with_timezone(&Utc))
-                .map_err(|error| from_parse_error(9, error))?;
+                .map_err(|error| from_parse_error(10, error))?;
             let sent_at = match sent_at_text {
                 Some(text) => Some(
                     DateTime::parse_from_rfc3339(&text)
                         .map(|value| value.with_timezone(&Utc))
-                        .map_err(|error| from_parse_error(10, error))?,
+                        .map_err(|error| from_parse_error(11, error))?,
                 ),
                 None => None,
             };
             Ok(NotificationRecord {
                 id: row.get(0)?,
-                event_id: row.get(1)?,
+                notifier_id: row.get(1)?,
+                notifier_type,
+                event_id: row.get(3)?,
                 event_type,
-                channel,
                 status,
-                title: row.get(5)?,
-                body: row.get(6)?,
-                reason: row.get(7)?,
-                error_message: row.get(8)?,
+                title: row.get(6)?,
+                body: row.get(7)?,
+                reason: row.get(8)?,
+                error_message: row.get(9)?,
                 created_at,
                 sent_at,
             })
@@ -245,41 +258,10 @@ pub(crate) fn load_history_records(
     connection: &Connection,
     limit: usize,
 ) -> Result<Vec<NotificationHistoryRecord>, String> {
-    let limit = limit.clamp(1, 200);
-    let mut records = load_records(connection, limit)?
+    Ok(load_records(connection, limit)?
         .into_iter()
         .map(NotificationHistoryRecord::from)
-        .collect::<Vec<_>>();
-    records.extend(load_plugin_results(connection, limit)?);
-    records.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    records.truncate(limit);
-    Ok(records)
-}
-
-fn load_plugin_results(
-    connection: &Connection,
-    limit: usize,
-) -> Result<Vec<NotificationHistoryRecord>, String> {
-    let limit = i64::try_from(limit).unwrap_or(20).clamp(1, 200);
-    let mut statement = connection
-        .prepare(
-            "SELECT id, plugin_id, event_id, event_type, status, title, body, reason, error_message, created_at, sent_at
-             FROM plugin_notification_results
-             ORDER BY created_at DESC
-             LIMIT ?1",
-        )
-        .map_err(|error| format!("读取插件通知结果失败：{error}"))?;
-    let rows = statement
-        .query_map([limit], |row| {
-            plugin_result_from_row(row).map(NotificationHistoryRecord::from)
-        })
-        .map_err(|error| format!("读取插件通知结果失败：{error}"))?;
-
-    let mut records = Vec::new();
-    for row in rows {
-        records.push(row.map_err(|error| format!("读取插件通知结果行失败：{error}"))?);
-    }
-    Ok(records)
+        .collect())
 }
 
 fn plugin_result_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginNotificationResult> {
@@ -318,12 +300,35 @@ fn plugin_result_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginNot
 
 impl From<NotificationRecord> for NotificationHistoryRecord {
     fn from(record: NotificationRecord) -> Self {
+        let plugin_id = match record.notifier_type {
+            NotificationNotifierType::Builtin => None,
+            NotificationNotifierType::Plugin => Some(record.notifier_id.clone()),
+        };
         Self {
             id: record.id,
             event_id: record.event_id,
             event_type: record.event_type,
-            channel: channel_id(&record.channel).to_string(),
-            plugin_id: None,
+            channel: record.notifier_id,
+            plugin_id,
+            status: record.status,
+            title: record.title,
+            body: record.body,
+            reason: record.reason,
+            error_message: record.error_message,
+            created_at: record.created_at,
+            sent_at: record.sent_at,
+        }
+    }
+}
+
+impl From<PluginNotificationResult> for NotificationRecord {
+    fn from(record: PluginNotificationResult) -> Self {
+        Self {
+            id: record.id,
+            notifier_id: record.plugin_id,
+            notifier_type: NotificationNotifierType::Plugin,
+            event_id: record.event_id,
+            event_type: record.event_type,
             status: record.status,
             title: record.title,
             body: record.body,
@@ -359,6 +364,21 @@ pub fn channel_id(channel: &NotificationChannel) -> &'static str {
     match channel {
         NotificationChannel::Bark => "bark",
         NotificationChannel::Ntfy => "ntfy",
+    }
+}
+
+fn notifier_type_id(value: &NotificationNotifierType) -> &'static str {
+    match value {
+        NotificationNotifierType::Builtin => "builtin",
+        NotificationNotifierType::Plugin => "plugin",
+    }
+}
+
+fn parse_notifier_type(value: &str) -> Result<NotificationNotifierType, String> {
+    match value {
+        "builtin" => Ok(NotificationNotifierType::Builtin),
+        "plugin" => Ok(NotificationNotifierType::Plugin),
+        _ => Err(format!("未知通知器类型：{value}")),
     }
 }
 

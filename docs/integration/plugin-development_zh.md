@@ -196,7 +196,7 @@ NiumaNotifier 启动插件时会注入：
 | `NIUMA_PLUGIN_CONFIG_PATH` | 插件配置文件路径。当前内置 Bark/ntfy 通知插件会由主程序写入该文件；外部插件应优先通过配置 API 获取配置。 |
 | `NIUMA_PLUGIN_DATA_DIR` | 插件数据目录，插件可用于保存本地去重等运行时状态。 |
 | `NIUMA_PARENT_PID` | 主 App 进程 PID。插件可定时检测该进程是否仍存在；如果不存在，应主动退出，避免主 App 闪退后遗留插件进程。 |
-| `NIUMA_STATE_PATH` | 当前实例使用的 SQLite 状态文件路径，仅用于诊断，不应直接写入。 |
+| `NIUMA_DB_PATH` | 当前实例使用的 SQLite 通知历史数据库路径，仅用于诊断，不应直接写入。 |
 
 建议外部插件把 `NIUMA_PARENT_PID` 作为自清理信号使用。该变量缺失或格式错误时，插件应保持兼容并继续运行；只有确认父进程不存在时才主动退出。
 

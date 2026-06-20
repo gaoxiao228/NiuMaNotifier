@@ -1,9 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::listener_config::ListenerConfig;
@@ -20,16 +21,11 @@ use crate::platform::locale::LanguagePreference;
 use crate::plugin::PluginRuntimeState;
 use crate::state::InternalStateEngine;
 
-mod persistence;
-mod public_events;
+mod config_files;
 mod schema;
 mod transitions;
 
-use persistence::{load_json_rows, save_state};
-use public_events::{
-    append_public_event, clear_public_events, load_public_event_by_id, load_public_events,
-    public_event_dedupe_key_exists,
-};
+use config_files::ConfigFileStore;
 use schema::init_schema;
 use transitions::{
     already_applied, apply_attention_transition, is_late_terminal_activity, upsert_session,
@@ -61,6 +57,26 @@ impl Default for StoredState {
 #[derive(Clone, Debug)]
 pub struct SqliteStateStore {
     path: PathBuf,
+    runtime: Arc<Mutex<RuntimeState>>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeState {
+    state: StoredState,
+    public_events: Vec<NiumaEvent>,
+    dedupe_keys: HashSet<String>,
+    plugin_runtime_states: HashMap<String, PluginRuntimeState>,
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self {
+            state: StoredState::default(),
+            public_events: Vec::new(),
+            dedupe_keys: HashSet::new(),
+            plugin_runtime_states: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,24 +103,29 @@ pub struct MainStateInput {
     pub public_events: Vec<NiumaEvent>,
 }
 
-const LISTENER_CONFIG_KEY: &str = "listener_config";
-const LANGUAGE_PREFERENCE_KEY: &str = "language_preference";
-const PLUGIN_ENABLED_MAP_KEY: &str = "plugin_enabled_map";
-const PLUGIN_RUNTIME_STATES_KEY: &str = "plugin_runtime_states";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
+// 运行态只保留最近事件作为调试/API 快照，当前主状态引用的事件会额外保留。
+const MAX_PUBLIC_EVENT_CACHE_SIZE: usize = 200;
 
 impl SqliteStateStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            runtime: Arc::new(Mutex::new(RuntimeState::default())),
+        }
     }
 
     pub fn default_path() -> PathBuf {
-        crate::config::state_path()
+        crate::config::db_path()
+    }
+
+    fn config_files(&self) -> ConfigFileStore {
+        ConfigFileStore::new(&self.path)
     }
 
     pub fn load(&self) -> Result<StoredState, String> {
-        let connection = self.open()?;
-        self.load_with_connection(&connection)
+        let _connection = self.open()?;
+        Ok(self.runtime()?.state.clone())
     }
 
     pub fn append_event(&self, event: NiumaEvent) -> Result<StoredState, String> {
@@ -119,27 +140,26 @@ impl SqliteStateStore {
         &self,
         events: Vec<NiumaEvent>,
     ) -> Result<AppendEventsResult, String> {
-        let mut connection = self.open()?;
-        let tx = connection
-            .transaction()
-            .map_err(|error| format!("开启 SQLite 事务失败：{error}"))?;
-        let mut state = self.load_with_connection(&tx)?;
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
         let mut applied_events = Vec::new();
         for event in events {
-            if self.event_already_applied(&tx, &state, &event)? {
+            if self.event_already_applied(&runtime, &state, &event) {
                 continue;
             }
             if is_late_terminal_activity(&state.sessions, &event) {
                 continue;
             }
-            append_public_event(&tx, &event)?;
+            runtime.dedupe_keys.insert(event.dedupe_key.clone());
+            if is_public_event(&event) {
+                runtime.public_events.push(event.clone());
+            }
             upsert_session(&mut state.sessions, &event);
             apply_attention_transition(&mut state, &event);
             applied_events.push(event);
         }
-        save_state(&tx, &state)?;
-        tx.commit()
-            .map_err(|error| format!("提交 SQLite 事务失败：{error}"))?;
+        runtime.state = state.clone();
+        trim_public_event_cache(&mut runtime);
         Ok(AppendEventsResult {
             state,
             applied_events,
@@ -148,15 +168,15 @@ impl SqliteStateStore {
 
     fn event_already_applied(
         &self,
-        connection: &Connection,
+        runtime: &RuntimeState,
         state: &StoredState,
         event: &NiumaEvent,
-    ) -> Result<bool, String> {
+    ) -> bool {
         if already_applied(state, event) {
-            return Ok(true);
+            return true;
         }
-        // 不同事件源可能生成不同 id，但共享同一 dedupe_key；写入前查库避免双路事件重复广播。
-        public_event_dedupe_key_exists(connection, &event.dedupe_key)
+        // 不同事件源可能生成不同 id，但共享同一 dedupe_key；进程内缓存避免双路事件重复广播。
+        runtime.dedupe_keys.contains(&event.dedupe_key)
     }
 
     pub fn mark_stale_running_sessions(
@@ -174,11 +194,8 @@ impl SqliteStateStore {
         now: chrono::DateTime<Utc>,
         timeout: chrono::Duration,
     ) -> Result<StaleSweepResult, String> {
-        let mut connection = self.open()?;
-        let tx = connection
-            .transaction()
-            .map_err(|error| format!("开启 SQLite 事务失败：{error}"))?;
-        let mut state = self.load_with_connection(&tx)?;
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
         let events = state
             .sessions
             .iter()
@@ -207,17 +224,16 @@ impl SqliteStateStore {
 
         let mut staled_count = 0;
         for event in events {
-            if self.event_already_applied(&tx, &state, &event)? {
+            if self.event_already_applied(&runtime, &state, &event) {
                 continue;
             }
+            runtime.dedupe_keys.insert(event.dedupe_key.clone());
             upsert_session(&mut state.sessions, &event);
             apply_attention_transition(&mut state, &event);
             staled_count += 1;
         }
 
-        save_state(&tx, &state)?;
-        tx.commit()
-            .map_err(|error| format!("提交 SQLite 事务失败：{error}"))?;
+        runtime.state = state.clone();
         Ok(StaleSweepResult {
             state,
             staled_count,
@@ -234,11 +250,16 @@ impl SqliteStateStore {
     }
 
     pub fn main_state_input(&self) -> Result<MainStateInput, String> {
-        let connection = self.open()?;
-        let state = self.load_with_connection(&connection)?;
+        let runtime = self.runtime()?;
+        let state = runtime.state.clone();
         let mut public_events = Vec::new();
         for event_id in main_state_event_ids(&state) {
-            if let Some(event) = load_public_event_by_id(&connection, &event_id)? {
+            if let Some(event) = runtime
+                .public_events
+                .iter()
+                .find(|event| event.id == event_id)
+                .cloned()
+            {
                 public_events.push(event);
             }
         }
@@ -258,13 +279,22 @@ impl SqliteStateStore {
     }
 
     pub fn public_recent_events(&self, limit: usize) -> Result<Vec<NiumaEvent>, String> {
-        let connection = self.open()?;
-        load_public_events(&connection, limit)
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut events = self.runtime()?.public_events.clone();
+        sort_events_newest_first(&mut events);
+        events.truncate(limit);
+        Ok(events)
     }
 
     pub fn public_event_by_id(&self, event_id: &str) -> Result<Option<NiumaEvent>, String> {
-        let connection = self.open()?;
-        load_public_event_by_id(&connection, event_id)
+        Ok(self
+            .runtime()?
+            .public_events
+            .iter()
+            .find(|event| event.id == event_id)
+            .cloned())
     }
 
     pub fn insert_notification_record_if_absent(
@@ -323,139 +353,34 @@ impl SqliteStateStore {
     }
 
     pub fn listener_config(&self) -> Result<ListenerConfig, String> {
-        let connection = self.open()?;
-        let payload = connection
-            .query_row(
-                "SELECT payload FROM app_settings WHERE key = ?1",
-                [LISTENER_CONFIG_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("读取监听配置失败：{error}"))?;
-        match payload {
-            Some(payload) => {
-                serde_json::from_str(&payload).map_err(|error| format!("解析监听配置失败：{error}"))
-            }
-            None => Ok(ListenerConfig::default()),
-        }
+        self.config_files().listener_config()
     }
 
     pub fn save_listener_config(&self, config: &ListenerConfig) -> Result<(), String> {
-        let connection = self.open()?;
-        let payload = serde_json::to_string(config)
-            .map_err(|error| format!("序列化监听配置失败：{error}"))?;
-        connection
-            .execute(
-                "INSERT INTO app_settings (key, payload, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(key) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at",
-                params![LISTENER_CONFIG_KEY, payload, Utc::now().to_rfc3339()],
-            )
-            .map_err(|error| format!("保存监听配置失败：{error}"))?;
-        Ok(())
+        self.config_files().save_listener_config(config)
     }
 
     pub fn language_preference(&self) -> Result<LanguagePreference, String> {
-        let connection = self.open()?;
-        let payload = connection
-            .query_row(
-                "SELECT payload FROM app_settings WHERE key = ?1",
-                [LANGUAGE_PREFERENCE_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("读取语言偏好失败：{error}"))?;
-        let Some(payload) = payload else {
-            return Ok(LanguagePreference::System);
-        };
-        let value = serde_json::from_str::<serde_json::Value>(&payload)
-            .map_err(|error| format!("解析语言偏好失败：{error}"))?;
-        let preference = value
-            .get("preference")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| value.as_str())
-            .ok_or_else(|| "语言偏好格式无效".to_string())?;
-        LanguagePreference::from_storage_id(preference)
-            .ok_or_else(|| format!("未知语言偏好：{preference}"))
+        self.config_files().language_preference()
     }
 
     pub fn save_language_preference(&self, preference: LanguagePreference) -> Result<(), String> {
-        let connection = self.open()?;
-        let payload = serde_json::json!({
-            "preference": preference.storage_id()
-        })
-        .to_string();
-        connection
-            .execute(
-                "INSERT INTO app_settings (key, payload, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(key) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at",
-                params![LANGUAGE_PREFERENCE_KEY, payload, Utc::now().to_rfc3339()],
-            )
-            .map_err(|error| format!("保存语言偏好失败：{error}"))?;
-        Ok(())
+        self.config_files().save_language_preference(preference)
     }
 
     pub fn plugin_enabled_map(&self) -> Result<BTreeMap<String, bool>, String> {
-        let connection = self.open()?;
-        let payload = connection
-            .query_row(
-                "SELECT payload FROM app_settings WHERE key = ?1",
-                [PLUGIN_ENABLED_MAP_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("读取插件启用配置失败：{error}"))?;
-        match payload {
-            Some(payload) => serde_json::from_str(&payload)
-                .map_err(|error| format!("解析插件启用配置失败：{error}")),
-            None => Ok(BTreeMap::new()),
-        }
+        self.config_files().plugin_enabled_map()
     }
 
     pub fn save_plugin_enabled_map(&self, map: &BTreeMap<String, bool>) -> Result<(), String> {
-        let connection = self.open()?;
-        let payload = serde_json::to_string(map)
-            .map_err(|error| format!("序列化插件启用配置失败：{error}"))?;
-        connection
-            .execute(
-                "INSERT INTO app_settings (key, payload, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(key) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at",
-                params![PLUGIN_ENABLED_MAP_KEY, payload, Utc::now().to_rfc3339()],
-            )
-            .map_err(|error| format!("保存插件启用配置失败：{error}"))?;
-        Ok(())
+        self.config_files().save_plugin_enabled_map(map)
     }
 
     pub fn plugin_config(
         &self,
         plugin_id: &str,
     ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
-        let connection = self.open()?;
-        let payload = connection
-            .query_row(
-                "SELECT payload FROM plugin_configs WHERE plugin_id = ?1",
-                [plugin_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("读取插件配置失败：{error}"))?;
-        let Some(payload) = payload else {
-            return Ok(None);
-        };
-        let value = serde_json::from_str::<serde_json::Value>(&payload)
-            .map_err(|error| format!("解析插件配置失败：{error}"))?;
-        let Some(object) = value.as_object() else {
-            return Err(format!("插件配置格式无效：{plugin_id}"));
-        };
-        Ok(Some(object.clone()))
+        self.config_files().plugin_config(plugin_id)
     }
 
     pub fn save_plugin_config(
@@ -463,50 +388,17 @@ impl SqliteStateStore {
         plugin_id: &str,
         config: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), String> {
-        let connection = self.open()?;
-        let payload = serde_json::to_string(config)
-            .map_err(|error| format!("序列化插件配置失败：{error}"))?;
-        connection
-            .execute(
-                "INSERT INTO plugin_configs (plugin_id, payload, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(plugin_id) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at",
-                params![plugin_id, payload, Utc::now().to_rfc3339()],
-            )
-            .map_err(|error| format!("保存插件配置失败：{error}"))?;
-        Ok(())
+        self.config_files().save_plugin_config(plugin_id, config)
     }
 
     pub fn remove_plugin_config(&self, plugin_id: &str) -> Result<(), String> {
-        let connection = self.open()?;
-        connection
-            .execute(
-                "DELETE FROM plugin_configs WHERE plugin_id = ?1",
-                [plugin_id],
-            )
-            .map_err(|error| format!("移除插件配置失败：{error}"))?;
-        Ok(())
+        self.config_files().remove_plugin_config(plugin_id)
     }
 
     pub fn plugin_runtime_states(
         &self,
-    ) -> Result<std::collections::HashMap<String, PluginRuntimeState>, String> {
-        let connection = self.open()?;
-        let payload = connection
-            .query_row(
-                "SELECT payload FROM app_settings WHERE key = ?1",
-                [PLUGIN_RUNTIME_STATES_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("读取插件运行状态失败：{error}"))?;
-        match payload {
-            Some(payload) => serde_json::from_str(&payload)
-                .map_err(|error| format!("解析插件运行状态失败：{error}")),
-            None => Ok(std::collections::HashMap::new()),
-        }
+    ) -> Result<HashMap<String, PluginRuntimeState>, String> {
+        Ok(self.runtime()?.plugin_runtime_states.clone())
     }
 
     pub fn save_plugin_runtime_state(
@@ -514,49 +406,20 @@ impl SqliteStateStore {
         plugin_id: &str,
         runtime_state: PluginRuntimeState,
     ) -> Result<(), String> {
-        let mut states = self.plugin_runtime_states()?;
-        states.insert(plugin_id.to_string(), runtime_state);
-        let connection = self.open()?;
-        let payload = serde_json::to_string(&states)
-            .map_err(|error| format!("序列化插件运行状态失败：{error}"))?;
-        connection
-            .execute(
-                "INSERT INTO app_settings (key, payload, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(key) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at",
-                params![PLUGIN_RUNTIME_STATES_KEY, payload, Utc::now().to_rfc3339()],
-            )
-            .map_err(|error| format!("保存插件运行状态失败：{error}"))?;
+        self.runtime()?
+            .plugin_runtime_states
+            .insert(plugin_id.to_string(), runtime_state);
         Ok(())
     }
 
     pub fn remove_plugin_runtime_state(&self, plugin_id: &str) -> Result<(), String> {
-        let mut states = self.plugin_runtime_states()?;
-        states.remove(plugin_id);
-        let connection = self.open()?;
-        let payload = serde_json::to_string(&states)
-            .map_err(|error| format!("序列化插件运行状态失败：{error}"))?;
-        connection
-            .execute(
-                "INSERT INTO app_settings (key, payload, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(key) DO UPDATE SET
-                    payload = excluded.payload,
-                    updated_at = excluded.updated_at",
-                params![PLUGIN_RUNTIME_STATES_KEY, payload, Utc::now().to_rfc3339()],
-            )
-            .map_err(|error| format!("移除插件运行状态失败：{error}"))?;
+        self.runtime()?.plugin_runtime_states.remove(plugin_id);
         Ok(())
     }
 
     pub fn clear_tool_state(&self, tool: &ToolKind) -> Result<StoredState, String> {
-        let mut connection = self.open()?;
-        let tx = connection
-            .transaction()
-            .map_err(|error| format!("开启 SQLite 事务失败：{error}"))?;
-        let mut state = self.load_with_connection(&tx)?;
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
         let removed_session_ids = state
             .sessions
             .iter()
@@ -578,31 +441,19 @@ impl SqliteStateStore {
             state.latest_activity = Some(LatestActivity::idle());
         }
 
-        save_state(&tx, &state)?;
-        tx.commit()
-            .map_err(|error| format!("提交 SQLite 事务失败：{error}"))?;
+        runtime.state = state.clone();
         Ok(state)
     }
 
     pub fn reset(&self) -> Result<StoredState, String> {
         let state = StoredState::default();
-        let mut connection = self.open()?;
-        let tx = connection
-            .transaction()
-            .map_err(|error| format!("开启 SQLite 事务失败：{error}"))?;
-        save_state(&tx, &state)?;
-        clear_public_events(&tx)?;
-        tx.commit()
-            .map_err(|error| format!("提交 SQLite 事务失败：{error}"))?;
+        *self.runtime()? = RuntimeState::default();
         Ok(state)
     }
 
     pub fn dismiss_active_blocker(&self) -> Result<Option<DismissAttentionResult>, String> {
-        let mut connection = self.open()?;
-        let tx = connection
-            .transaction()
-            .map_err(|error| format!("开启 SQLite 事务失败：{error}"))?;
-        let mut state = self.load_with_connection(&tx)?;
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
         let dismissed_count = state.attention_items.len();
         if dismissed_count == 0 {
             return Ok(None);
@@ -629,9 +480,7 @@ impl SqliteStateStore {
             created_at: now,
         };
         state.attention_items.clear();
-        save_state(&tx, &state)?;
-        tx.commit()
-            .map_err(|error| format!("提交 SQLite 事务失败：{error}"))?;
+        runtime.state = state;
         Ok(Some(DismissAttentionResult {
             dismissed_count,
             event,
@@ -650,29 +499,10 @@ impl SqliteStateStore {
         Ok(connection)
     }
 
-    fn load_with_connection(&self, connection: &Connection) -> Result<StoredState, String> {
-        let sessions =
-            load_json_rows::<NiumaSession>(connection, "sessions", "last_activity_at ASC")?;
-        let attention_items =
-            load_json_rows::<AttentionItem>(connection, "attention_items", "created_at ASC")?;
-        let latest_activity = connection
-            .query_row(
-                "SELECT payload FROM latest_activity WHERE id = 1",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("读取 latest_activity 失败：{error}"))?
-            .map(|payload| serde_json::from_str::<LatestActivity>(&payload))
-            .transpose()
-            .map_err(|error| format!("解析 latest_activity 失败：{error}"))?;
-
-        Ok(StoredState {
-            events: Vec::new(),
-            sessions,
-            attention_items,
-            latest_activity: latest_activity.or_else(|| Some(LatestActivity::idle())),
-        })
+    fn runtime(&self) -> Result<std::sync::MutexGuard<'_, RuntimeState>, String> {
+        self.runtime
+            .lock()
+            .map_err(|_| "运行态内存锁已损坏".to_string())
     }
 }
 
@@ -714,6 +544,39 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     if !values.iter().any(|existing| existing == &value) {
         values.push(value);
     }
+}
+
+fn is_public_event(event: &NiumaEvent) -> bool {
+    !matches!(
+        event.event_type,
+        EventType::SessionActivity | EventType::SessionStaled
+    )
+}
+
+fn sort_events_newest_first(events: &mut [NiumaEvent]) {
+    events.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+}
+
+fn trim_public_event_cache(runtime: &mut RuntimeState) {
+    if runtime.public_events.len() <= MAX_PUBLIC_EVENT_CACHE_SIZE {
+        return;
+    }
+    let active_event_ids = main_state_event_ids(&runtime.state)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    sort_events_newest_first(&mut runtime.public_events);
+    let mut kept = Vec::with_capacity(MAX_PUBLIC_EVENT_CACHE_SIZE);
+    for event in runtime.public_events.drain(..) {
+        if kept.len() < MAX_PUBLIC_EVENT_CACHE_SIZE || active_event_ids.contains(&event.id) {
+            kept.push(event);
+        }
+    }
+    runtime.public_events = kept;
 }
 
 #[cfg(test)]

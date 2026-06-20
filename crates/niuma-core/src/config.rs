@@ -3,16 +3,16 @@ use std::path::PathBuf;
 // 集中管理跨 crate 复用的本机环境变量，避免 API、CLI、桌面端各自复制默认值。
 pub const DEFAULT_LOCAL_API_ADDR: &str = "127.0.0.1:27874";
 
-pub fn state_path() -> PathBuf {
-    state_path_from_env(std::env::var("NIUMA_STATE_PATH").ok().as_deref())
+pub fn db_path() -> PathBuf {
+    db_path_from_env(std::env::var("NIUMA_DB_PATH").ok().as_deref())
 }
 
-pub fn state_path_from_env(value: Option<&str>) -> PathBuf {
-    value.map(PathBuf::from).unwrap_or_else(default_state_path)
+pub fn db_path_from_env(value: Option<&str>) -> PathBuf {
+    value.map(PathBuf::from).unwrap_or_else(default_db_path)
 }
 
-fn default_state_path() -> PathBuf {
-    crate::platform::paths::app_data_dir().join("state.sqlite")
+fn default_db_path() -> PathBuf {
+    crate::platform::paths::app_data_dir().join("niuma.sqlite")
 }
 
 pub fn local_api_addr() -> String {
@@ -59,14 +59,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn state_path_uses_override_or_default_sqlite_path() {
+    fn db_path_uses_niuma_db_path_or_default_sqlite_path() {
         assert_eq!(
-            state_path_from_env(Some("/tmp/custom-state.sqlite")),
-            PathBuf::from("/tmp/custom-state.sqlite")
+            db_path_from_env(Some("/tmp/custom-niuma.sqlite")),
+            PathBuf::from("/tmp/custom-niuma.sqlite")
         );
         assert_eq!(
-            state_path_from_env(None),
-            crate::platform::paths::app_data_dir().join("state.sqlite")
+            db_path_from_env(None),
+            crate::platform::paths::app_data_dir().join("niuma.sqlite")
+        );
+    }
+
+    #[test]
+    fn old_state_path_env_is_not_used_for_database_path() {
+        // 旧 NIUMA_STATE_PATH 已废弃；数据库路径只接受 NIUMA_DB_PATH。
+        assert_eq!(
+            db_path_from_env(None),
+            crate::platform::paths::app_data_dir().join("niuma.sqlite")
         );
     }
 

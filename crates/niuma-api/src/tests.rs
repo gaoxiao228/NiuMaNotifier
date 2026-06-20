@@ -5,7 +5,7 @@ use http_body_util::BodyExt;
 use niuma_core::listener_config::ListenerConfig;
 use niuma_core::models::{EventType, NiumaEvent, ToolKind};
 use niuma_core::notification_store::{
-    NotificationChannel, NotificationRecord, NotificationRecordStatus,
+    NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
 };
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::store::SqliteStateStore;
@@ -932,9 +932,10 @@ async fn notification_records_returns_standard_list_envelope() {
     store
         .insert_notification_record_if_absent(&NotificationRecord {
             id: "record-api-title-body".to_string(),
+            notifier_id: "builtin-ntfy".to_string(),
+            notifier_type: NotificationNotifierType::Builtin,
             event_id: "event-api-title-body".to_string(),
             event_type: EventType::InputRequested,
-            channel: NotificationChannel::Ntfy,
             status: NotificationRecordStatus::Sent,
             title: Some("需要输入".to_string()),
             body: Some("项目：demo\n请选择运行方式".to_string()),
@@ -1492,9 +1493,13 @@ fn sample_event_with_type(
 }
 
 fn test_path(name: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!("niuma-api-{name}-{}.sqlite", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    path
+    let dir = std::env::temp_dir().join(format!(
+        "niuma-api-{name}-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("niuma.sqlite")
 }
 
 fn test_dir(name: &str) -> std::path::PathBuf {

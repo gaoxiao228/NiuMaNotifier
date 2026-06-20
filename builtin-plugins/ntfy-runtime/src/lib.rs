@@ -903,7 +903,7 @@ fn notification_reason(event: &NiumaEvent) -> &'static str {
 }
 
 fn default_ntfy_topic() -> String {
-    let seed = std::env::var("NIUMA_STATE_PATH")
+    let seed = std::env::var("NIUMA_DB_PATH")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| std::env::var("NIUMA_PLUGIN_DATA_DIR").ok())

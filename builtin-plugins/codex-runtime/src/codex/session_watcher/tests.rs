@@ -514,7 +514,7 @@ fn plan_confirmation_task_complete_does_not_clear_waiting_input() {
     );
 
     let temp = tempfile::tempdir().unwrap();
-    let store = SqliteStateStore::new(temp.path().join("state.sqlite"));
+    let store = SqliteStateStore::new(temp.path().join("niuma.sqlite"));
     store
         .save_listener_config(&ListenerConfig {
             codex_listening_enabled: true,
