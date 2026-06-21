@@ -128,6 +128,19 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
                 <dt>${escapeHtml(t.pluginLastError)}</dt>
                 <dd>${escapeHtml(plugin.last_error || t.none)}</dd>
               </dl>
+              <div class="plugin-capabilities" aria-label="${escapeHtml(t.pluginCapabilities)}">
+                <span class="plugin-capabilities-label">${escapeHtml(t.pluginCapabilities)}</span>
+                <span class="plugin-capability-list">
+                  ${plugin.capabilities
+                    .map(
+                      (capability) =>
+                        `<span class="plugin-capability">${escapeHtml(
+                          translatePluginCapability(options.language, capability)
+                        )}</span>`
+                    )
+                    .join('')}
+                </span>
+              </div>
               ${plugin.source === 'external' ? renderPluginActions(plugin, busy, t.removePlugin) : ''}
             </div>
             ${renderPluginConfigForm(
@@ -268,6 +281,27 @@ export function translatePluginKind(language: LanguageCode, kind: string) {
     return language === 'zh-CN' ? '状态指示插件' : 'status indicator'
   }
   return language === 'zh-CN' ? '工具插件' : 'tool'
+}
+
+export function translatePluginCapability(language: LanguageCode, capability: string) {
+  const t = translations[language]
+  // 能力标签仅用于插件管理展示，真实权限仍由后端能力模型和后续鉴权决定。
+  if (capability === 'event_watcher') {
+    return t.pluginCapabilityEventWatcher
+  }
+  if (capability === 'event_consumer') {
+    return t.pluginCapabilityEventConsumer
+  }
+  if (capability === 'approval_handler') {
+    return t.pluginCapabilityApprovalHandler
+  }
+  if (capability === 'notification_test') {
+    return t.pluginCapabilityNotificationTest
+  }
+  if (capability === 'state_consumer') {
+    return t.pluginCapabilityStateConsumer
+  }
+  return capability
 }
 
 function isPluginTransitioning(plugin: PluginManagementItem) {

@@ -7,7 +7,7 @@ NiumaNotifier currently supports three plugin types:
 | Type | `kind` | Main capabilities | Description |
 | --- | --- | --- | --- |
 | Tool watcher plugin | `tool` | `event_watcher` | Watches raw state from tools such as Codex, Claude Code, or Cursor, converts it to unified `NiumaEvent` objects, and reports them to the main app. |
-| Notification plugin | `notification` | `event_consumer`, `notification_test` | Consumes the main app event stream, decides whether to send external notifications such as Bark or ntfy, and writes notification results back to the main app. |
+| Notification plugin | `notification` | `event_consumer`, `notification_test`, optional `approval_handler` | Consumes the main app event stream, decides whether to send external notifications such as Bark or ntfy, and can handle approval decisions only when it declares `approval_handler`. |
 | Status indicator plugin | `status_indicator` | `state_consumer` | Consumes the main state stream for external lights, status panels, desktop pets, or similar displays. |
 
 ## Plugin Boundaries
@@ -177,7 +177,7 @@ Field reference:
 | `args` | No | Startup arguments. Relative path arguments are not rewritten automatically, but the plugin working directory is set to the `plugin.json` directory. |
 | `env` | No | Extra environment variables injected into the plugin process. |
 | `platforms` | No | Supported platforms. Current values are `macos`, `windows`, and `linux`. An empty array means all platforms. |
-| `capabilities` | No | Supported values are `event_watcher`, `event_consumer`, `notification_test`, and `state_consumer`. |
+| `capabilities` | No | Supported values are `event_watcher`, `event_consumer`, `approval_handler`, `notification_test`, and `state_consumer`. |
 | `icon_url` | No | Icon URL or relative asset path. |
 | `config_schema` | No | Plugin configuration field definitions for the UI and configuration API. |
 
@@ -188,6 +188,7 @@ Constraints:
 - `event_watcher` plugins are started and stopped by the tool listener switch.
 - Plugins without `tool_id` are started and stopped by the general plugin enabled state.
 - Plugins declaring `event_watcher`, `event_consumer`, or `state_consumer` are managed by the runtime manager as long-running child processes.
+- `approval_handler` is an extra capability for approval decisions. It must be used together with `event_consumer`; `approval_handler` alone is not a valid runtime mode.
 
 ## Configuration Schema
 
@@ -482,6 +483,44 @@ Recommended notification flow:
 6. After a successful send, update the local dedupe record. Failed sends can be retried according to the plugin policy, but avoid endless retry spam.
 
 Notification plugins do not need to query the recent events list or write the notification history database directly.
+
+## Approval Consumers
+
+Consumers that can handle approvals must declare both `event_consumer` and `approval_handler`. They may show Allow/Deny actions after receiving `approval_requested`. Event consumers without `approval_handler` may notify that an approval is pending, but should not show approval actions or submit decisions.
+
+The event `payload_ref` and `attention_resolve_key` use the `approval:<request_id>` format. Consumers should extract `request_id` from that value.
+
+Submit a decision:
+
+```http
+POST /api/v1/approval-decisions
+Content-Type: application/json
+```
+
+```json
+{
+  "request_id": "codex:s1:t1:Bash:abc123",
+  "decision": "allow",
+  "decided_by": "plugin-id",
+  "decided_source": "notification",
+  "reason": "User allowed from notification"
+}
+```
+
+`accepted=true` means this consumer won the decision. `accepted=false` means another consumer or the desktop UI already handled it first. In that case, mark the local action as handled and do not retry to overwrite it.
+
+Consumers can also recover pending approvals on startup or poll decision state:
+
+```http
+GET /api/v1/approval-requests?status=pending
+GET /api/v1/approval-decisions?request_id=codex:s1:t1:Bash:abc123
+```
+
+Event handling rules:
+
+- On `approval_resolved`: disable local Allow/Deny actions and show the `decided_by` / `decided_source` handler.
+- On `approval_returned_to_codex`: disable local Allow/Deny actions and tell the user to handle the request in Codex.
+- Only `pending` approvals can be decided. Treat `allowed`, `denied`, and `returned_to_codex` as already handled.
 
 ## Status Indicator Main State Consumption
 
@@ -808,6 +847,7 @@ Do not infer main state from plugin ID, raw tool logs, or `event_type`.
 - `command` is executable in the plugin install directory, or the bare command can be found in the system `PATH`.
 - Tool plugins declare `kind = tool`, `tool_id`, and `event_watcher`.
 - Notification plugins declare `kind = notification` and `event_consumer`, and also declare `notification_test` if test notification is needed.
+- Approval-capable consumers declare both `event_consumer` and `approval_handler`; `approval_handler` alone is not a valid runtime mode.
 - Status indicator plugins declare `kind = status_indicator` and `state_consumer`.
 - When a tool plugin reports events, `event.tool` exactly matches the manifest `tool_id`.
 - Status indicator plugins only consume `/api/v1/state/stream` and do not infer main state themselves.

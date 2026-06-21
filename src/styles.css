@@ -946,6 +946,39 @@ select {
   overflow-wrap: anywhere;
 }
 
+.plugin-capabilities {
+  background: #ffffff;
+  border: 1px solid #d6e0ec;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.plugin-capabilities-label {
+  color: #53627a;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.plugin-capability-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-capability {
+  background: #eef4fb;
+  border: 1px solid #d6e0ec;
+  border-radius: 6px;
+  color: #263755;
+  font-size: 12px;
+  line-height: 1.25;
+  padding: 3px 7px;
+  overflow-wrap: anywhere;
+}
+
 /* 事件中心固定标题区域，实时列表和 JSON 详情在各自容器内滚动。 */
 .settings-event-center {
   display: grid;

@@ -167,6 +167,21 @@ renderPluginManagement({
       install_path: null
     },
     {
+      id: 'approval-menu',
+      kind: 'notification',
+      tool_id: null,
+      display_name: 'Approval Menu',
+      version: '0.1.0',
+      source: 'external',
+      capabilities: ['event_consumer', 'approval_handler'],
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: null,
+      config_schema: [],
+      install_path: '/tmp/approval-menu'
+    },
+    {
       id: 'niuma-plugin-demo',
       tool_id: 'demo_tool',
       display_name: 'Demo Tool',
@@ -311,6 +326,15 @@ if (
 
 if (!listElement.innerHTML.includes('运行中') || !listElement.innerHTML.includes('失败')) {
   throw new Error('插件列表应渲染运行状态')
+}
+
+if (
+  !listElement.innerHTML.includes('Approval Menu') ||
+  !listElement.innerHTML.includes('approval-menu · 通知插件') ||
+  !listElement.innerHTML.includes('插件能力') ||
+  !listElement.innerHTML.includes('授权处理')
+) {
+  throw new Error('插件管理应展示 approval_handler 的授权处理能力标签')
 }
 
 if (!listElement.innerHTML.includes('启动中') || !listElement.innerHTML.includes('停止中')) {

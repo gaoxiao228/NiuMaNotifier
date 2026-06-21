@@ -78,6 +78,12 @@ export type Translation = {
   pluginRuntimeStatus: string
   pluginInstallPath: string
   pluginLastError: string
+  pluginCapabilities: string
+  pluginCapabilityEventWatcher: string
+  pluginCapabilityEventConsumer: string
+  pluginCapabilityApprovalHandler: string
+  pluginCapabilityNotificationTest: string
+  pluginCapabilityStateConsumer: string
   pluginStarting: string
   pluginRunning: string
   pluginStopped: string
@@ -207,6 +213,12 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginRuntimeStatus: '运行状态',
     pluginInstallPath: '安装路径',
     pluginLastError: '最近错误',
+    pluginCapabilities: '插件能力',
+    pluginCapabilityEventWatcher: '事件监听',
+    pluginCapabilityEventConsumer: '事件消费',
+    pluginCapabilityApprovalHandler: '授权处理',
+    pluginCapabilityNotificationTest: '通知测试',
+    pluginCapabilityStateConsumer: '状态消费',
     pluginStarting: '启动中',
     pluginRunning: '运行中',
     pluginStopped: '已停止',
@@ -362,6 +374,12 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginRuntimeStatus: '執行狀態',
     pluginInstallPath: '安裝路徑',
     pluginLastError: '最近錯誤',
+    pluginCapabilities: '外掛能力',
+    pluginCapabilityEventWatcher: '事件監聽',
+    pluginCapabilityEventConsumer: '事件消費',
+    pluginCapabilityApprovalHandler: '授權處理',
+    pluginCapabilityNotificationTest: '通知測試',
+    pluginCapabilityStateConsumer: '狀態消費',
     pluginStarting: '啟動中',
     pluginRunning: '執行中',
     pluginStopped: '已停止',
@@ -518,6 +536,12 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginRuntimeStatus: 'Runtime status',
     pluginInstallPath: 'Install path',
     pluginLastError: 'Last error',
+    pluginCapabilities: 'Capabilities',
+    pluginCapabilityEventWatcher: 'Event watcher',
+    pluginCapabilityEventConsumer: 'Event consumer',
+    pluginCapabilityApprovalHandler: 'Approval handling',
+    pluginCapabilityNotificationTest: 'Notification test',
+    pluginCapabilityStateConsumer: 'State consumer',
     pluginStarting: 'Starting',
     pluginRunning: 'Running',
     pluginStopped: 'Stopped',
@@ -674,6 +698,12 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginRuntimeStatus: '実行状態',
     pluginInstallPath: 'インストール先',
     pluginLastError: '最近のエラー',
+    pluginCapabilities: '機能',
+    pluginCapabilityEventWatcher: 'イベント監視',
+    pluginCapabilityEventConsumer: 'イベント消費',
+    pluginCapabilityApprovalHandler: '承認処理',
+    pluginCapabilityNotificationTest: '通知テスト',
+    pluginCapabilityStateConsumer: '状態消費',
     pluginStarting: '起動中',
     pluginRunning: '実行中',
     pluginStopped: '停止中',
@@ -830,6 +860,12 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginRuntimeStatus: '실행 상태',
     pluginInstallPath: '설치 경로',
     pluginLastError: '최근 오류',
+    pluginCapabilities: '플러그인 기능',
+    pluginCapabilityEventWatcher: '이벤트 수신',
+    pluginCapabilityEventConsumer: '이벤트 소비',
+    pluginCapabilityApprovalHandler: '승인 처리',
+    pluginCapabilityNotificationTest: '알림 테스트',
+    pluginCapabilityStateConsumer: '상태 소비',
     pluginStarting: '시작 중',
     pluginRunning: '실행 중',
     pluginStopped: '중지됨',
@@ -986,6 +1022,12 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginRuntimeStatus: 'Laufzeitstatus',
     pluginInstallPath: 'Installationspfad',
     pluginLastError: 'Letzter Fehler',
+    pluginCapabilities: 'Fähigkeiten',
+    pluginCapabilityEventWatcher: 'Ereignisüberwachung',
+    pluginCapabilityEventConsumer: 'Ereigniskonsum',
+    pluginCapabilityApprovalHandler: 'Genehmigungen',
+    pluginCapabilityNotificationTest: 'Benachrichtigungstest',
+    pluginCapabilityStateConsumer: 'Statuskonsum',
     pluginStarting: 'Startet',
     pluginRunning: 'Läuft',
     pluginStopped: 'Gestoppt',

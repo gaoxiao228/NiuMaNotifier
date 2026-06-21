@@ -31,6 +31,7 @@ const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
 pub enum PluginCapability {
     EventWatcher,
     EventConsumer,
+    ApprovalHandler,
     NotificationTest,
     StateConsumer,
 }
@@ -745,6 +746,31 @@ mod tests {
         assert_eq!(manifest.kind, PluginKind::Notification);
         assert_eq!(manifest.tool_id, None);
         assert_eq!(manifest.capabilities, vec![PluginCapability::EventConsumer]);
+    }
+
+    #[test]
+    fn parses_notification_approval_handler_capability() {
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "approval-menu",
+                "kind": "notification",
+                "display_name": "Approval Menu",
+                "version": "0.1.0",
+                "command": "approval-menu",
+                "capabilities": ["event_consumer", "approval_handler"]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.kind, PluginKind::Notification);
+        assert_eq!(manifest.tool_id, None);
+        assert_eq!(
+            manifest.capabilities,
+            vec![
+                PluginCapability::EventConsumer,
+                PluginCapability::ApprovalHandler
+            ]
+        );
     }
 
     #[test]
