@@ -27,9 +27,14 @@ pub(crate) fn status() -> ApiResponse<serde_json::Value> {
 
 pub(crate) fn sample_event() -> ApiResponse<serde_json::Value> {
     ApiResponse::ok(json!({
-        "hook_event_name": "SessionStart",
+        "hook_event_name": "PermissionRequest",
         "session_id": "sample-session",
-        "cwd": "/tmp/niuma-sample"
+        "turn_id": "sample-turn",
+        "cwd": "/tmp/niuma-sample",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "echo niuma-permission-sample"
+        }
     }))
 }
 

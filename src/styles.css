@@ -326,6 +326,37 @@ select {
   overflow-wrap: anywhere;
 }
 
+.request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.approval-action {
+  min-height: 36px;
+  min-width: 76px;
+}
+
+.approval-action.allow {
+  background: #15803d;
+  border-color: #15803d;
+  color: #ffffff;
+}
+
+.approval-action.deny {
+  background: #ffffff;
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.approval-message {
+  color: #53627a;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .status-dot {
   border-radius: 999px;
   display: inline-flex;
@@ -832,6 +863,14 @@ select {
   grid-column: 1;
 }
 
+.plugin-card-side {
+  align-content: start;
+  display: grid;
+  gap: 10px;
+  grid-column: 2;
+  min-width: 0;
+}
+
 .plugin-card-actions {
   display: flex;
   justify-content: flex-end;
@@ -841,6 +880,108 @@ select {
 .plugin-card-info .plugin-card-actions {
   justify-content: flex-start;
   margin-top: 10px;
+}
+
+.plugin-management-actions {
+  border: 1px solid #d6e0ec;
+  border-radius: 7px;
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.plugin-management-action {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #e5edf6;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px;
+}
+
+.plugin-management-action:last-child {
+  border-bottom: 0;
+}
+
+.plugin-management-action-title {
+  color: #17213a;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.plugin-management-action-description,
+.plugin-management-action-result {
+  color: #53627a;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.plugin-management-action-status {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 7px;
+  padding: 3px 8px;
+}
+
+.plugin-management-action-status.neutral {
+  background: #eef2f7;
+  color: #475569;
+}
+
+.plugin-management-action-status.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.plugin-management-action-status.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.plugin-management-action-status.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.plugin-action-button {
+  font-size: 12px;
+  min-height: 30px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.plugin-action-button.primary {
+  background: #17213a;
+  border-color: #17213a;
+  color: #ffffff;
+}
+
+.plugin-action-button.secondary {
+  background: #ffffff;
+  color: #17213a;
+}
+
+.plugin-action-button.danger {
+  background: #ffffff;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+.plugin-action-button.danger:hover:not(:disabled) {
+  background: #fff5f5;
+  border-color: #f87171;
+}
+
+.plugin-management-action-result {
+  background: #f8fafc;
+  margin: 0;
+  padding: 8px 10px;
 }
 
 .plugin-card-actions button {
@@ -859,7 +1000,6 @@ select {
 .plugin-config-form {
   display: grid;
   gap: 10px;
-  grid-column: 2;
 }
 
 .plugin-config-heading {
@@ -1279,6 +1419,7 @@ select {
   }
 
   .plugin-card-info,
+  .plugin-card-side,
   .plugin-config-form,
   .plugin-meta {
     grid-column: 1;
@@ -1313,6 +1454,7 @@ select {
   }
 
   .plugin-config-fields,
+  .plugin-management-action,
   .event-center-row,
   .notification-record-header,
   .notification-record-meta {

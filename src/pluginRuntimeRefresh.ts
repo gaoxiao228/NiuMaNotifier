@@ -11,6 +11,7 @@ export type PluginRuntimeRefreshController = {
 type PluginRuntimeRefreshOptions = {
   intervalMs: number
   refresh: () => Promise<void>
+  isActive?: () => boolean
   timer?: PluginRuntimeRefreshTimer
   onError?: (error: unknown) => void
 }
@@ -26,6 +27,9 @@ export function createPluginRuntimeRefresh(options: PluginRuntimeRefreshOptions)
   let refreshInFlight = false
 
   async function runRefresh() {
+    if (options.isActive && !options.isActive()) {
+      return
+    }
     if (refreshInFlight) {
       return
     }

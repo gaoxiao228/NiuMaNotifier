@@ -8,13 +8,13 @@ It solves a very specific problem: AI coding tools often stop at states such as 
 
 ## Screenshots
 
-### Main Console
+### Main Console(Running)
 
 <p align="left">
   <img src="./snapshot/ScreenShot1.png" alt="NiuMaNotifier main console screenshot" width="500">
 </p>
 
-### Notification Settings
+### Main Console(Waiting for approval)
 
 <p align="left">
   <img src="./snapshot/ScreenShot2.png" alt="NiuMaNotifier notification settings screenshot" width="500">

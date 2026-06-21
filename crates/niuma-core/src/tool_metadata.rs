@@ -41,7 +41,9 @@ mod tests {
     fn returns_codex_notification_icon_url() {
         assert_eq!(
             tool_notification_icon_url(&ToolKind::Codex).as_deref(),
-            Some("https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/codex-color.png")
+            Some(
+                "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/codex-color.png"
+            )
         );
     }
 
@@ -49,7 +51,9 @@ mod tests {
     fn returns_claude_code_notification_icon_url() {
         assert_eq!(
             tool_notification_icon_url(&ToolKind::ClaudeCode).as_deref(),
-            Some("https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Claude_AI_symbol.svg/1280px-Claude_AI_symbol.svg.png")
+            Some(
+                "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Claude_AI_symbol.svg/1280px-Claude_AI_symbol.svg.png"
+            )
         );
     }
 }

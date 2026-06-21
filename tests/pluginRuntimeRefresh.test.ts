@@ -42,9 +42,11 @@ async function flushMicrotasks() {
 }
 
 async function main() {
+  let refreshActive = false
   const controller = createPluginRuntimeRefresh({
     intervalMs: 3_000,
     timer,
+    isActive: () => refreshActive,
     refresh: async () => {
       refreshCalls += 1
       await new Promise<void>((resolve) => pendingRefreshes.push(resolve))
@@ -58,6 +60,13 @@ async function main() {
     throw new Error('插件运行态刷新轮询应使用指定间隔')
   }
 
+  timer.tick()
+
+  if (getRefreshCalls() !== 0) {
+    throw new Error('设置页不可见时不应刷新插件运行态')
+  }
+
+  refreshActive = true
   timer.tick()
   timer.tick()
 

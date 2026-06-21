@@ -556,7 +556,7 @@ fn ignores_plan_item_completed_without_text() {
 }
 
 #[test]
-fn parses_escalated_function_call_as_approval_and_resolves_on_matching_output() {
+fn parses_escalated_function_call_as_watcher_fallback_approval() {
     let mut parser = CodexJsonlParser::default();
     parser
         .parse_line(
@@ -574,7 +574,7 @@ fn parses_escalated_function_call_as_approval_and_resolves_on_matching_output() 
         .unwrap();
 
     assert_eq!(approval.event_type, EventType::ApprovalRequested);
-    assert_eq!(approval.severity, "urgent");
+    assert_eq!(approval.source, "codex-session-file");
     assert_eq!(
         approval.summary,
         "exec_command: 是否允许执行这个无副作用的 echo 命令？"
@@ -582,6 +582,14 @@ fn parses_escalated_function_call_as_approval_and_resolves_on_matching_output() 
     assert_eq!(
         approval.attention_resolve_key.as_deref(),
         Some("codex_permission:session-123:call-approval-1")
+    );
+    assert!(
+        approval
+            .payload_ref
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("codex_watcher_approval:"),
+        "watcher fallback approval 应携带 arbiter 可识别的 payload_ref"
     );
 
     let resolved = parser
@@ -597,7 +605,6 @@ fn parses_escalated_function_call_as_approval_and_resolves_on_matching_output() 
         resolved.attention_resolve_key.as_deref(),
         Some("codex_permission:session-123:call-approval-1")
     );
-    assert_ne!(approval.id, resolved.id);
 }
 
 #[test]

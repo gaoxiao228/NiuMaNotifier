@@ -5,6 +5,7 @@ use niuma_core::config;
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::store::NiumaStore;
 
+mod approval_proxy_watchdog;
 mod handlers;
 mod manual_test;
 mod response;
@@ -44,6 +45,11 @@ pub fn spawn_local_api_with_bus(
                     return;
                 }
             };
+            let mutation_service = niuma_core::state_mutation::StateMutationService::new(
+                store.clone(),
+                runtime_events.clone(),
+            );
+            approval_proxy_watchdog::spawn_approval_proxy_watchdog(store.clone(), mutation_service);
             if let Err(error) = axum::serve(listener, app_with_bus(store, runtime_events)).await {
                 eprintln!("NiumaNotifier Local API serve error: {error}");
             }

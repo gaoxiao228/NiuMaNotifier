@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::codex_hook::read_codex_hook_status;
+use crate::config::codex_home;
 use crate::listener_config::ListenerConfig;
 use crate::models::ToolKind;
 use crate::state_mutation::StateMutationService;
@@ -13,6 +15,7 @@ use crate::store::NiumaStore;
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
 pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
+pub const BUILTIN_CODEX_PLUGIN_ID: &str = "builtin-codex";
 pub const BUILTIN_BARK_PLUGIN_ID: &str = "builtin-bark";
 pub const BUILTIN_NTFY_PLUGIN_ID: &str = "builtin-ntfy";
 
@@ -59,6 +62,36 @@ pub enum PluginRuntimeStatus {
     Stopping,
     Running,
     Failed,
+}
+
+// 管理动作只描述插件管理界面上的受控操作，不等同于插件运行时 capability。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginManagementActionKind {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginManagementActionStatusLevel {
+    Neutral,
+    Ok,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PluginManagementAction {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub kind: PluginManagementActionKind,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_label: Option<String>,
+    pub status_level: PluginManagementActionStatusLevel,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -183,6 +216,8 @@ pub struct PluginManagementItem {
     pub last_error: Option<String>,
     pub icon_url: Option<String>,
     pub capabilities: Vec<PluginCapability>,
+    // 由宿主后端生成，避免外部 manifest 直接声明任意本机操作。
+    pub management_actions: Vec<PluginManagementAction>,
     pub config_schema: Vec<PluginConfigField>,
     pub install_path: Option<String>,
 }
@@ -306,6 +341,7 @@ impl PluginRegistry {
                     last_error: runtime.last_error,
                     icon_url: manifest.icon_url.clone(),
                     capabilities: manifest.capabilities.clone(),
+                    management_actions: management_actions_for_manifest(manifest),
                     config_schema: manifest.config_schema.clone(),
                     install_path: manifest
                         .base_dir
@@ -315,6 +351,49 @@ impl PluginRegistry {
             })
             .collect()
     }
+}
+
+fn management_actions_for_manifest(manifest: &PluginManifest) -> Vec<PluginManagementAction> {
+    if manifest.id != BUILTIN_CODEX_PLUGIN_ID {
+        return Vec::new();
+    }
+    // 插件管理只展示 Niuma 可稳定检测的安装状态；Codex 信任是用户操作提示，不参与状态判断。
+    let (status_label, status_level) = match read_codex_hook_status(&codex_home()) {
+        Ok(status) if status.installed => (
+            "Hook 已安装".to_string(),
+            PluginManagementActionStatusLevel::Ok,
+        ),
+        Ok(_) => (
+            "Hook 未安装".to_string(),
+            PluginManagementActionStatusLevel::Neutral,
+        ),
+        Err(error) => (
+            format!("Hook 状态读取失败：{error}"),
+            PluginManagementActionStatusLevel::Error,
+        ),
+    };
+    vec![
+        PluginManagementAction {
+            id: "codex_hook_install".to_string(),
+            label: "安装/修复 Hook".to_string(),
+            description:
+                "接收 Codex 权限请求并回传允许/拒绝结果。安装后需在 Codex 中执行 /hooks 信任，信任后才能拦截授权请求。"
+                    .to_string(),
+            kind: PluginManagementActionKind::Primary,
+            enabled: true,
+            status_label: Some(status_label),
+            status_level,
+        },
+        PluginManagementAction {
+            id: "codex_hook_uninstall".to_string(),
+            label: "移除 Hook".to_string(),
+            description: "从 Codex 配置中移除 Niuma Hook，不影响插件启用状态。".to_string(),
+            kind: PluginManagementActionKind::Danger,
+            enabled: true,
+            status_label: None,
+            status_level: PluginManagementActionStatusLevel::Neutral,
+        },
+    ]
 }
 
 impl PluginManifest {
@@ -705,6 +784,9 @@ fn paths_refer_to_same_dir(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex_hook::{
+        codex_config_file, codex_hooks_file, install_codex_hook, CodexHookCommand,
+    };
     use crate::listener_config::ListenerConfig;
     use crate::models::ToolId;
     use std::sync::{Mutex, OnceLock};
@@ -855,10 +937,7 @@ mod tests {
         assert_eq!(plugin.id, "builtin-codex");
         assert_eq!(plugin.kind, PluginKind::Tool);
         assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
-        assert_eq!(
-            plugin.icon_url.as_deref(),
-            Some("/assets/codex-icon.png")
-        );
+        assert_eq!(plugin.icon_url.as_deref(), Some("/assets/codex-icon.png"));
     }
 
     #[test]
@@ -1116,6 +1195,77 @@ mod tests {
         assert_eq!(items[1].kind, PluginKind::StatusIndicator);
         assert_eq!(items[1].tool_id, None);
         assert!(!items[1].enabled);
+    }
+
+    #[test]
+    fn builtin_codex_management_item_declares_hook_actions() {
+        let registry = PluginRegistry::with_builtin_plugins();
+
+        let items = registry.management_items(
+            &ListenerConfig::default(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+
+        let codex = items
+            .iter()
+            .find(|plugin| plugin.id == "builtin-codex")
+            .unwrap();
+        let action_ids = codex
+            .management_actions
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(action_ids.contains(&"codex_hook_install"));
+        assert!(action_ids.contains(&"codex_hook_uninstall"));
+
+        let bark = items
+            .iter()
+            .find(|plugin| plugin.id == "builtin-bark")
+            .unwrap();
+        assert!(bark.management_actions.is_empty());
+    }
+
+    #[test]
+    fn builtin_codex_management_item_reports_installed_hook_without_trust_warning() {
+        let _guard = env_lock().lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_codex_home = std::env::var("CODEX_HOME").ok();
+        std::env::set_var("CODEX_HOME", temp.path());
+
+        install_codex_hook(temp.path(), CodexHookCommand::Installed).unwrap();
+        let registry = PluginRegistry::with_builtin_plugins();
+        let items = registry.management_items(
+            &ListenerConfig::default(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+
+        let codex = items
+            .iter()
+            .find(|plugin| plugin.id == "builtin-codex")
+            .unwrap();
+        let install_action = codex
+            .management_actions
+            .iter()
+            .find(|action| action.id == "codex_hook_install")
+            .unwrap();
+
+        assert_eq!(install_action.status_label.as_deref(), Some("Hook 已安装"));
+        assert_eq!(
+            install_action.status_level,
+            PluginManagementActionStatusLevel::Ok
+        );
+        assert!(install_action
+            .description
+            .contains("信任后才能拦截授权请求"));
+        assert!(codex_config_file(temp.path()).exists() || codex_hooks_file(temp.path()).exists());
+
+        if let Some(value) = previous_codex_home {
+            std::env::set_var("CODEX_HOME", value);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
     }
 
     #[test]

@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 const PARENT_PID_ENV: &str = "NIUMA_PARENT_PID";
 const DEFAULT_PLUGIN_ID: &str = "builtin-ntfy";
 const DEFAULT_NTFY_SERVER: &str = "https://ntfy.sh";
-const DEFAULT_NTFY_TOPIC_PREFIX: &str = "niuma-notifier";
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const PARENT_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
@@ -150,9 +149,7 @@ impl NtfyPluginConfig {
             server: non_empty_text(&self.server)
                 .unwrap_or(DEFAULT_NTFY_SERVER)
                 .to_string(),
-            topic: non_empty_text(&self.topic)
-                .map(ToString::to_string)
-                .unwrap_or_else(default_ntfy_topic),
+            topic: non_empty_text(&self.topic).unwrap_or_default().to_string(),
             token: non_empty_text(&self.token).map(ToString::to_string),
         }
     }
@@ -915,24 +912,6 @@ fn notification_reason(event: &NiumaEvent) -> &'static str {
     }
 }
 
-fn default_ntfy_topic() -> String {
-    let seed = std::env::var("NIUMA_DB_PATH")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("NIUMA_PLUGIN_DATA_DIR").ok())
-        .unwrap_or_else(|| DEFAULT_PLUGIN_ID.to_string());
-    format!("{}-{}", DEFAULT_NTFY_TOPIC_PREFIX, stable_hash(&seed))
-}
-
-fn stable_hash(value: &str) -> String {
-    let mut hash: u64 = 14_695_981_039_346_656_037;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(1_099_511_628_211);
-    }
-    format!("{hash:016x}")
-}
-
 fn non_empty_text(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
@@ -1169,6 +1148,28 @@ mod tests {
     }
 
     #[test]
+    fn handle_event_skips_when_ntfy_topic_is_missing() {
+        let temp = TempRuntimeDir::new("missing_topic");
+        temp.write_config(json!({
+            "enabled": true
+        }));
+        let env = temp.env();
+        let sender = RecordingNtfySender::default();
+        let reporter = RecordingNotificationResultReporter::default();
+
+        handle_event(
+            &env,
+            &sender,
+            &reporter,
+            event_with_type("event-missing-topic", EventType::ApprovalRequested),
+        )
+        .unwrap();
+
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(reporter.reports.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn handle_test_event_sends_ntfy_without_dedupe() {
         let temp = TempRuntimeDir::new("test_send");
         temp.write_config(json!({
@@ -1209,6 +1210,29 @@ mod tests {
         let reporter = RecordingNotificationResultReporter::default();
         let request = PluginNotificationTestRequest {
             test_id: "manual-test:builtin-ntfy:invalid".to_string(),
+            plugin_id: "builtin-ntfy".to_string(),
+            title: "测试标题".to_string(),
+            body: "测试正文".to_string(),
+            created_at: Utc::now(),
+        };
+
+        handle_test_event(&env, &sender, &reporter, request).unwrap();
+
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(reporter.reports.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn handle_test_event_skips_when_ntfy_topic_is_missing() {
+        let temp = TempRuntimeDir::new("test_missing_topic");
+        temp.write_config(json!({
+            "enabled": true
+        }));
+        let env = temp.env();
+        let sender = RecordingNtfySender::default();
+        let reporter = RecordingNotificationResultReporter::default();
+        let request = PluginNotificationTestRequest {
+            test_id: "manual-test:builtin-ntfy:missing".to_string(),
             plugin_id: "builtin-ntfy".to_string(),
             title: "测试标题".to_string(),
             body: "测试正文".to_string(),

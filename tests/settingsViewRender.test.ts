@@ -120,7 +120,26 @@ renderPluginManagement({
       last_error: null,
       icon_url: '/assets/codex-icon.png',
       config_schema: [],
-      install_path: null
+      install_path: null,
+      management_actions: [
+        {
+          id: 'codex_hook_install',
+          label: '安装/修复 Hook',
+          description: '接收 Codex 权限请求并回传允许/拒绝结果',
+          kind: 'primary',
+          enabled: true,
+          status_label: '未安装',
+          status_level: 'neutral'
+        },
+        {
+          id: 'codex_hook_uninstall',
+          label: '移除 Hook',
+          description: '从 Codex 配置中移除 Niuma Hook',
+          kind: 'danger',
+          enabled: true,
+          status_level: 'neutral'
+        }
+      ]
     },
     {
       id: 'builtin-bark',
@@ -161,7 +180,7 @@ renderPluginManagement({
           key: 'topic',
           type: 'string',
           label: 'Topic',
-          required: false
+          required: true
         }
       ],
       install_path: null
@@ -264,6 +283,35 @@ renderPluginManagement({
 
 if (!listElement.innerHTML.includes('data-plugin-toggle="builtin-codex"')) {
   throw new Error('插件列表应渲染内置插件开关')
+}
+
+if (
+  !listElement.innerHTML.includes('class="plugin-management-actions"') ||
+  !listElement.innerHTML.includes('data-plugin-action-plugin="builtin-codex"') ||
+  !listElement.innerHTML.includes('data-plugin-action-id="codex_hook_install"') ||
+  !listElement.innerHTML.includes('安装/修复 Hook') ||
+  !listElement.innerHTML.includes('data-plugin-action-id="codex_hook_uninstall"') ||
+  !listElement.innerHTML.includes('移除 Hook') ||
+  !listElement.innerHTML.includes('未安装')
+) {
+  throw new Error('插件管理页应按 management_actions 通用渲染插件管理动作')
+}
+
+const codexCardStart = listElement.innerHTML.indexOf('data-plugin-id="builtin-codex"')
+const nextCardStart = listElement.innerHTML.indexOf('data-plugin-id="builtin-bark"')
+const codexCardHtml = listElement.innerHTML.slice(codexCardStart, nextCardStart)
+const codexSideStart = codexCardHtml.indexOf('class="plugin-card-side"')
+
+if (codexSideStart === -1) {
+  throw new Error('插件管理动作应渲染在插件卡片右侧操作区')
+}
+
+if (!codexCardHtml.slice(codexSideStart).includes('class="plugin-management-actions"')) {
+  throw new Error('插件管理动作应放在右侧操作区内')
+}
+
+if (codexCardHtml.slice(0, codexSideStart).includes('class="plugin-management-actions"')) {
+  throw new Error('插件管理动作不应继续挤在左侧插件信息区')
 }
 
 if (

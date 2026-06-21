@@ -28,8 +28,10 @@ export type ListenerToolsRenderOptions = {
 
 export type RequestDetailRenderOptions = {
   element: HTMLDListElement | null
+  actionsElement?: HTMLElement | null
   state: MainStatePayload | null
   language: LanguageCode
+  approving: boolean
 }
 
 export type StatusSummaryRenderOptions = {
@@ -50,6 +52,18 @@ export type SessionRenderOptions = {
 
 export function isBlockingStatus(status: string) {
   return status === 'waiting_approval' || status === 'waiting_input' || status === 'error'
+}
+
+export function shouldShowManualBlockerAction(state: MainStatePayload | null) {
+  if (!state || !isBlockingStatus(state.status)) {
+    return false
+  }
+  const approval = state.detail?.approval
+  // hook 授权由专用按钮或 Codex 侧处理；只有退回 Codex 后才保留手动清理入口。
+  if (approval && approval.status !== 'returned_to_codex') {
+    return false
+  }
+  return true
 }
 
 export function statusTone(status: string) {
@@ -147,6 +161,7 @@ export function renderRequestDetail(options: RequestDetailRenderOptions) {
   if (!options.state || !isBlockingStatus(options.state.status) || !detail) {
     options.element.hidden = true
     options.element.innerHTML = ''
+    renderApprovalActions(options.actionsElement, options)
     return
   }
 
@@ -165,6 +180,34 @@ export function renderRequestDetail(options: RequestDetailRenderOptions) {
     <dt>${escapeHtml(t.requestTime)}</dt>
     <dd>${escapeHtml(formatLocalTime(options.state.updated_at, options.language))}</dd>
   `
+  renderApprovalActions(options.actionsElement, options)
+}
+
+function renderApprovalActions(
+  element: HTMLElement | null | undefined,
+  options: RequestDetailRenderOptions
+) {
+  if (!element) {
+    return
+  }
+  const t = translations[options.language]
+  const approval = options.state?.detail?.approval
+  if (!approval) {
+    element.hidden = true
+    element.innerHTML = ''
+    return
+  }
+  element.hidden = false
+  if (approval.can_decide) {
+    const disabled = options.approving ? 'disabled' : ''
+    const allowText = options.approving ? t.approvalSubmitting : t.approveApproval
+    element.innerHTML = `
+      <button class="approval-action allow" type="button" data-approval-request-id="${escapeHtml(approval.request_id)}" data-approval-decision="allow" ${disabled}>${escapeHtml(allowText)}</button>
+      <button class="approval-action deny" type="button" data-approval-request-id="${escapeHtml(approval.request_id)}" data-approval-decision="deny" ${disabled}>${escapeHtml(t.denyApproval)}</button>
+    `
+    return
+  }
+  element.innerHTML = `<p class="approval-message">${escapeHtml(approval.message || t.none)}</p>`
 }
 
 export function renderEvents(

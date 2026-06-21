@@ -8,12 +8,14 @@ import {
   getLocalApiUrl,
   refreshMainState,
   removePlugin,
+  runPluginAction,
   setPluginEnabled,
   savePluginConfig,
   saveListenerConfig,
   saveLanguagePreference,
   selectAndImportPluginDir,
   sendTestNotification,
+  submitApprovalDecision,
   type ListenerToolConfig,
   type MainStatePayload,
   type NotificationRecord,
@@ -40,7 +42,8 @@ import {
   isBlockingStatus,
   renderListenerTools,
   renderRequestDetail,
-  renderStatusSummary
+  renderStatusSummary,
+  shouldShowManualBlockerAction
 } from './statusView'
 import {
   renderPluginImportResult,
@@ -60,6 +63,7 @@ import {
   createPluginRuntimeRefresh,
   type PluginRuntimeRefreshController
 } from './pluginRuntimeRefresh'
+import { pluginManagementSnapshotsEqual } from './pluginSnapshot'
 import { formatLocalTime } from './viewUtils'
 import './styles.css'
 
@@ -89,10 +93,12 @@ let listenerBusyToolId: string | null = null
 let plugins: PluginManagementItem[] = []
 let pluginConfigs: Record<string, Record<string, unknown>> = {}
 let pluginBusyId: string | null = null
+let pluginActionBusyKey: string | null = null
 let pluginConfigBusyId: string | null = null
 let pendingPluginTransition: PluginTransitionTarget | null = null
 let pluginImportBusy = false
 let pluginImportResultText = ''
+let pluginActionResultText = ''
 let pluginConfigResultText = ''
 let activeView: 'dashboard' | 'settings' = 'dashboard'
 let activeSettingsPanel: SettingsPanel = 'plugins'
@@ -100,6 +106,7 @@ let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
 let localApiUrlText = ''
 let localSseConnected = false
+let approvingApprovalRequestId: string | null = null
 
 const eventCenterRuntime = createEventCenterRuntime({
   getLocalApiUrl,
@@ -141,6 +148,7 @@ const codexListenerDescriptionEl = document.querySelector<HTMLElement>(
   '#codex-listener-description'
 )
 const requestDetailEl = document.querySelector<HTMLDListElement>('#request-detail')
+const approvalActionsEl = document.querySelector<HTMLElement>('#approval-actions')
 const refreshButton = document.querySelector<HTMLButtonElement>('#refresh')
 const clearBlockerButton = document.querySelector<HTMLButtonElement>('#clear-blocker')
 
@@ -171,7 +179,9 @@ async function refreshPlugins() {
 
 async function refreshPluginRuntimeSnapshot() {
   const data = await getPlugins()
-  applyPluginSnapshot(data.list)
+  if (!applyPluginSnapshot(data.list)) {
+    return
+  }
   renderPluginSettings()
   renderNotificationSettings()
 }
@@ -180,6 +190,7 @@ function startPluginRuntimeRefresh() {
   if (!pluginRuntimeRefresh) {
     pluginRuntimeRefresh = createPluginRuntimeRefresh({
       intervalMs: pluginRuntimeRefreshIntervalMs,
+      isActive: () => activeView === 'settings',
       refresh: refreshPluginRuntimeSnapshot
     })
   }
@@ -188,7 +199,12 @@ function startPluginRuntimeRefresh() {
 }
 
 function applyPluginSnapshot(snapshot: PluginManagementItem[]) {
-  plugins = snapshot.map((plugin) => mergePendingPluginTransition(plugin, pendingPluginTransition))
+  const nextPlugins = snapshot.map((plugin) =>
+    mergePendingPluginTransition(plugin, pendingPluginTransition)
+  )
+  const changed = !pluginManagementSnapshotsEqual(plugins, nextPlugins)
+  plugins = nextPlugins
+  return changed
 }
 
 async function refreshPluginConfigs(snapshot: PluginManagementItem[] = plugins) {
@@ -205,7 +221,7 @@ async function refreshPluginConfigs(snapshot: PluginManagementItem[] = plugins) 
 function renderDashboard() {
   if (latestMainState) {
     updatedEl!.textContent = formatLocalTime(latestMainState.updated_at, currentLanguage)
-    clearBlockerButton!.hidden = !isBlockingStatus(latestMainState.status)
+    clearBlockerButton!.hidden = !shouldShowManualBlockerAction(latestMainState)
     renderStatusSummary({
       element: statusSummaryEl,
       state: latestMainState,
@@ -213,8 +229,10 @@ function renderDashboard() {
     })
     renderRequestDetail({
       element: requestDetailEl,
+      actionsElement: approvalActionsEl,
       state: latestMainState,
-      language: currentLanguage
+      language: currentLanguage,
+      approving: latestMainState.detail?.approval?.request_id === approvingApprovalRequestId
     })
   } else {
     updatedEl!.textContent = '-'
@@ -226,8 +244,10 @@ function renderDashboard() {
     })
     renderRequestDetail({
       element: requestDetailEl,
+      actionsElement: approvalActionsEl,
       state: null,
-      language: currentLanguage
+      language: currentLanguage,
+      approving: false
     })
   }
   renderToolListeners()
@@ -317,9 +337,11 @@ function renderPluginSettings() {
     language: currentLanguage,
     plugins,
     busyPluginId: pluginBusyId,
+    busyActionKey: pluginActionBusyKey,
     busyConfigPluginId: pluginConfigBusyId,
     importBusy: pluginImportBusy,
     resultText: pluginImportResultText,
+    actionResultText: pluginActionResultText,
     configResultText: pluginConfigResultText,
     pluginConfigs
   })
@@ -542,6 +564,27 @@ refreshButton?.addEventListener('click', () => {
 settingsOpenButton?.addEventListener('click', showSettingsView)
 settingsBackButton?.addEventListener('click', showDashboardView)
 
+dashboardViewEl?.addEventListener('click', async (event) => {
+  const target = event.target instanceof HTMLElement ? event.target : null
+  const button = target?.closest<HTMLButtonElement>('[data-approval-decision]')
+  const requestId = button?.dataset.approvalRequestId
+  const decision = button?.dataset.approvalDecision
+  if (!button || !requestId || (decision !== 'allow' && decision !== 'deny')) {
+    return
+  }
+  approvingApprovalRequestId = requestId
+  renderDashboard()
+  try {
+    await submitApprovalDecision(requestId, decision)
+    await refreshDashboard()
+  } catch (error) {
+    updatedEl!.textContent = error instanceof Error ? error.message : String(error)
+  } finally {
+    approvingApprovalRequestId = null
+    renderDashboard()
+  }
+})
+
 settingsViewEl?.addEventListener('click', async (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null
   const t = translations[currentLanguage]
@@ -609,6 +652,26 @@ settingsViewEl?.addEventListener('click', async (event) => {
     }
     return
   }
+  const pluginActionButton = target?.closest<HTMLElement>('[data-plugin-action-id]')
+  const pluginActionPluginId = pluginActionButton?.dataset.pluginActionPlugin
+  const pluginActionId = pluginActionButton?.dataset.pluginActionId
+  if (pluginActionPluginId && pluginActionId) {
+    const actionKey = pluginActionKey(pluginActionPluginId, pluginActionId)
+    pluginActionBusyKey = actionKey
+    pluginActionResultText = ''
+    renderPluginSettings()
+    try {
+      const result = await runPluginAction(pluginActionPluginId, pluginActionId)
+      applyPluginSnapshot(result.plugins)
+      pluginActionResultText = result.message
+    } catch (error) {
+      pluginActionResultText = error instanceof Error ? error.message : String(error)
+    } finally {
+      pluginActionBusyKey = null
+      renderPluginSettings()
+    }
+    return
+  }
   const pluginIdToRemove = target?.dataset.pluginRemove
   if (pluginIdToRemove) {
     if (isPluginTransitioning(plugins.find((plugin) => plugin.id === pluginIdToRemove))) {
@@ -650,6 +713,10 @@ settingsViewEl?.addEventListener('click', async (event) => {
     renderNotificationSettings()
   }
 })
+
+function pluginActionKey(pluginId: string, actionId: string) {
+  return `${pluginId}:${actionId}`
+}
 
 settingsViewEl?.addEventListener('change', async (event) => {
   const toggle = event.target instanceof HTMLInputElement ? event.target : null

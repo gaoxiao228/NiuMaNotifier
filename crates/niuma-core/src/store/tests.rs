@@ -3,13 +3,172 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::listener_config::ListenerConfig;
-use crate::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
+use crate::models::{
+    ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason,
+    EventType, NiumaEvent, SessionStatus, ToolKind,
+};
 use crate::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
     PluginNotificationResult,
 };
 use crate::plugin::{PluginRuntimeState, PluginRuntimeStatus};
 use crate::store::NiumaStore;
+
+#[test]
+fn approval_status_serializes_as_snake_case() {
+    assert_eq!(
+        serde_json::to_value(ApprovalStatus::ReturnedToCodex).unwrap(),
+        serde_json::json!("returned_to_codex")
+    );
+}
+
+#[test]
+fn approval_decision_kind_serializes_as_allow_or_deny() {
+    assert_eq!(
+        serde_json::to_value(ApprovalDecisionKind::Allow).unwrap(),
+        serde_json::json!("allow")
+    );
+    assert_eq!(
+        serde_json::to_value(ApprovalDecisionKind::Deny).unwrap(),
+        serde_json::json!("deny")
+    );
+}
+
+#[test]
+fn deciding_pending_approval_accepts_first_decision() {
+    let store = NiumaStore::new(test_sqlite_path("approval_first_decision"));
+    store
+        .upsert_approval_request(sample_approval_request("approval-1"))
+        .unwrap();
+
+    let result = store
+        .decide_approval(
+            "approval-1",
+            ApprovalDecisionKind::Allow,
+            "desktop",
+            "ui",
+            Some("用户同意".to_string()),
+            Utc.timestamp_opt(1_100, 0).single().unwrap(),
+        )
+        .unwrap();
+
+    assert!(result.accepted);
+    assert_eq!(result.request.status, ApprovalStatus::Allowed);
+    assert_eq!(result.request.decided_by.as_deref(), Some("desktop"));
+    assert_eq!(result.request.decided_source.as_deref(), Some("ui"));
+}
+
+#[test]
+fn later_decision_does_not_override_first_decision() {
+    let store = NiumaStore::new(test_sqlite_path("approval_first_wins"));
+    store
+        .upsert_approval_request(sample_approval_request("approval-1"))
+        .unwrap();
+    store
+        .decide_approval(
+            "approval-1",
+            ApprovalDecisionKind::Allow,
+            "desktop",
+            "ui",
+            None,
+            Utc.timestamp_opt(1_100, 0).single().unwrap(),
+        )
+        .unwrap();
+
+    let result = store
+        .decide_approval(
+            "approval-1",
+            ApprovalDecisionKind::Deny,
+            "builtin-bark",
+            "notification",
+            Some("晚到的拒绝".to_string()),
+            Utc.timestamp_opt(1_101, 0).single().unwrap(),
+        )
+        .unwrap();
+
+    assert!(!result.accepted);
+    assert_eq!(result.request.status, ApprovalStatus::Allowed);
+    assert_eq!(result.request.decided_by.as_deref(), Some("desktop"));
+    assert_eq!(result.request.reason, None);
+}
+
+#[test]
+fn approval_heartbeat_updates_active_pending_request() {
+    let store = NiumaStore::new(test_sqlite_path("approval_heartbeat"));
+    let mut request = sample_approval_request("approval-1");
+    request.proxy_status = ApprovalProxyStatus::Active;
+    request.last_heartbeat_at = Some(Utc.timestamp_opt(100, 0).single().unwrap());
+    store.upsert_approval_request(request).unwrap();
+
+    let result = store
+        .heartbeat_approval_proxy("approval-1", Utc.timestamp_opt(110, 0).single().unwrap())
+        .unwrap();
+
+    assert!(result.accepted);
+    assert_eq!(result.request.proxy_status, ApprovalProxyStatus::Active);
+    assert_eq!(
+        result.request.last_heartbeat_at,
+        Some(Utc.timestamp_opt(110, 0).single().unwrap())
+    );
+}
+
+#[test]
+fn stale_pending_proxy_returns_to_codex() {
+    let store = NiumaStore::new(test_sqlite_path("stale_proxy"));
+    let mut request = sample_approval_request("approval-1");
+    request.proxy_status = ApprovalProxyStatus::Active;
+    request.last_heartbeat_at = Some(Utc.timestamp_opt(100, 0).single().unwrap());
+    store.upsert_approval_request(request).unwrap();
+
+    let results = store
+        .return_stale_approval_proxies_to_codex(
+            Utc.timestamp_opt(109, 0).single().unwrap(),
+            chrono::Duration::seconds(8),
+        )
+        .unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].request.status, ApprovalStatus::ReturnedToCodex);
+    assert_eq!(results[0].request.proxy_status, ApprovalProxyStatus::Lost);
+    assert_eq!(
+        results[0].request.decided_source.as_deref(),
+        Some("proxy_lost")
+    );
+}
+
+#[test]
+fn return_to_codex_keeps_attention_item_waiting_approval() {
+    let store = NiumaStore::new(test_sqlite_path("approval_return_keeps_attention"));
+    store
+        .upsert_approval_request(sample_approval_request("approval-1"))
+        .unwrap();
+    store
+        .append_event(sample_approval_requested_event("approval-1"))
+        .unwrap();
+
+    let result = store
+        .return_approval_to_codex(
+            "approval-1",
+            "hook-helper",
+            "timeout",
+            "10 分钟内未处理，请回到 Codex 中操作",
+            Utc.timestamp_opt(1_600, 0).single().unwrap(),
+        )
+        .unwrap();
+
+    assert!(result.accepted);
+    assert_eq!(result.request.status, ApprovalStatus::ReturnedToCodex);
+    let state = store.load().unwrap();
+    assert_eq!(
+        state.approval_requests[0].status,
+        ApprovalStatus::ReturnedToCodex
+    );
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(
+        state.attention_items[0].status,
+        SessionStatus::WaitingApproval
+    );
+}
 
 #[test]
 fn append_event_updates_session_status() {
@@ -1598,6 +1757,41 @@ fn sample_event(dedupe_key: &str, event_type: EventType) -> NiumaEvent {
     sample_session_event(dedupe_key, "s1", event_type, 1_000)
 }
 
+fn sample_approval_request(id: &str) -> ApprovalRequest {
+    ApprovalRequest {
+        id: id.to_string(),
+        tool: ToolKind::Codex,
+        session_id: "session-approval".to_string(),
+        turn_id: "turn-approval".to_string(),
+        tool_name: "Bash".to_string(),
+        command: Some("cargo test".to_string()),
+        description: Some("运行测试".to_string()),
+        project_path: "/tmp/demo".to_string(),
+        project_name: "demo".to_string(),
+        status: ApprovalStatus::Pending,
+        decided_by: None,
+        decided_source: None,
+        reason: None,
+        created_at: Utc.timestamp_opt(1_000, 0).single().unwrap(),
+        updated_at: Utc.timestamp_opt(1_000, 0).single().unwrap(),
+        proxy_timeout_seconds: 600,
+        proxy_status: ApprovalProxyStatus::Active,
+        last_heartbeat_at: Some(Utc.timestamp_opt(1_000, 0).single().unwrap()),
+        proxy_lost_at: None,
+    }
+}
+
+fn sample_approval_requested_event(request_id: &str) -> NiumaEvent {
+    sample_session_event(
+        &format!("approval-requested-{request_id}"),
+        "session-approval",
+        EventType::ApprovalRequested,
+        1_000,
+    )
+    .with_attention_resolve_key(&format!("approval:{request_id}"))
+    .with_payload_ref(&format!("approval:{request_id}"))
+}
+
 fn sample_notification_record(id: &str, notifier_id: &str, event_id: &str) -> NotificationRecord {
     NotificationRecord {
         id: id.to_string(),
@@ -1676,11 +1870,17 @@ fn sample_tool_event(
 
 trait EventTestExt {
     fn with_attention_resolve_key(self, key: &str) -> Self;
+    fn with_payload_ref(self, payload_ref: &str) -> Self;
 }
 
 impl EventTestExt for NiumaEvent {
     fn with_attention_resolve_key(mut self, key: &str) -> Self {
         self.attention_resolve_key = Some(key.to_string());
+        self
+    }
+
+    fn with_payload_ref(mut self, payload_ref: &str) -> Self {
+        self.payload_ref = Some(payload_ref.to_string());
         self
     }
 }

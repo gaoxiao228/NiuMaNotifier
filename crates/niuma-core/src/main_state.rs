@@ -10,7 +10,8 @@ use crate::event_display::{
     fallback_content_for_status, fallback_error_for_status, status_summary, EventDisplayDetail,
 };
 use crate::models::{
-    AttentionItem, LatestActivity, NiumaEvent, NiumaSession, SessionStatus, ToolKind,
+    ApprovalRequest, ApprovalStatus, AttentionItem, LatestActivity, NiumaEvent, NiumaSession,
+    SessionStatus, ToolKind,
 };
 use crate::runtime_event::RuntimeEventBus;
 use crate::store::NiumaStore;
@@ -57,6 +58,18 @@ pub struct StateDetail {
     pub payload_ref: Option<String>,
     pub completion_reason: Option<String>,
     pub failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<StateApprovalDetail>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StateApprovalDetail {
+    pub request_id: String,
+    pub status: ApprovalStatus,
+    pub can_decide: bool,
+    pub message: Option<String>,
+    pub decided_by: Option<String>,
+    pub decided_source: Option<String>,
 }
 
 #[derive(Clone)]
@@ -104,6 +117,7 @@ impl MainStateService {
                 MainStateStatus::from(&item.status),
                 &state.sessions,
                 &public_events,
+                &state.approval_requests,
             ));
         }
         if let Some(item) = first_error_item(&state.attention_items) {
@@ -112,6 +126,7 @@ impl MainStateService {
                 MainStateStatus::Error,
                 &state.sessions,
                 &public_events,
+                &state.approval_requests,
             ));
         }
         if let Some(activity) = state.latest_activity.as_ref() {
@@ -131,6 +146,7 @@ fn state_from_attention_item(
     status: MainStateStatus,
     sessions: &[NiumaSession],
     public_events: &HashMap<String, NiumaEvent>,
+    approval_requests: &[ApprovalRequest],
 ) -> MainStatePayload {
     let event = public_events.get(&item.event_id);
     let session = sessions
@@ -142,7 +158,7 @@ fn state_from_attention_item(
         status,
         updated_at: Some(item.created_at),
         session,
-        detail: Some(detail_from_attention_item(item, event)),
+        detail: Some(detail_from_attention_item(item, event, approval_requests)),
     }
 }
 
@@ -229,9 +245,21 @@ fn first_error_item(items: &[AttentionItem]) -> Option<&AttentionItem> {
         .find(|item| item.status == SessionStatus::Error)
 }
 
-fn detail_from_attention_item(item: &AttentionItem, event: Option<&NiumaEvent>) -> StateDetail {
+fn detail_from_attention_item(
+    item: &AttentionItem,
+    event: Option<&NiumaEvent>,
+    approval_requests: &[ApprovalRequest],
+) -> StateDetail {
     match event {
-        Some(event) => detail_from_event(event),
+        Some(event) => {
+            let mut detail = detail_from_event(event);
+            detail.approval = approval_detail_for_refs(
+                event.payload_ref.as_deref(),
+                item.attention_resolve_key.as_deref(),
+                approval_requests,
+            );
+            detail
+        }
         None => StateDetail {
             event_id: item.event_id.clone(),
             event_type: event_type_name_for_status(&item.status).to_string(),
@@ -247,6 +275,11 @@ fn detail_from_attention_item(item: &AttentionItem, event: Option<&NiumaEvent>) 
             payload_ref: None,
             completion_reason: None,
             failure_reason: None,
+            approval: approval_detail_for_refs(
+                None,
+                item.attention_resolve_key.as_deref(),
+                approval_requests,
+            ),
         },
     }
 }
@@ -274,12 +307,30 @@ fn activity_detail(activity: &LatestActivity, event: Option<&NiumaEvent>) -> Opt
                 payload_ref: None,
                 completion_reason: None,
                 failure_reason: None,
+                approval: None,
             }),
         })
 }
 
 fn detail_from_event(event: &NiumaEvent) -> StateDetail {
     display_detail_from_event(event).into()
+}
+
+fn approval_detail_for_refs(
+    payload_ref: Option<&str>,
+    attention_resolve_key: Option<&str>,
+    requests: &[ApprovalRequest],
+) -> Option<StateApprovalDetail> {
+    let request_id = approval_request_id_from_ref(payload_ref)
+        .or_else(|| approval_request_id_from_ref(attention_resolve_key))?;
+    requests
+        .iter()
+        .find(|request| request.id == request_id)
+        .map(StateApprovalDetail::from)
+}
+
+fn approval_request_id_from_ref(value: Option<&str>) -> Option<&str> {
+    value?.strip_prefix("approval:")
 }
 
 fn idle_payload() -> MainStatePayload {
@@ -308,6 +359,30 @@ impl From<EventDisplayDetail> for StateDetail {
             payload_ref: detail.payload_ref,
             completion_reason: detail.completion_reason,
             failure_reason: detail.failure_reason,
+            approval: None,
+        }
+    }
+}
+
+impl From<&ApprovalRequest> for StateApprovalDetail {
+    fn from(request: &ApprovalRequest) -> Self {
+        let (can_decide, message) = match request.status {
+            ApprovalStatus::Pending => (true, None),
+            ApprovalStatus::Allowed => (false, Some("已同意，等待 Codex 继续".to_string())),
+            ApprovalStatus::Denied => (false, Some("已拒绝，等待 Codex 继续".to_string())),
+            ApprovalStatus::ReturnedToCodex => (
+                false,
+                Some("Niuma 已停止代处理，请回到 Codex 中同意或拒绝".to_string()),
+            ),
+        };
+
+        Self {
+            request_id: request.id.clone(),
+            status: request.status.clone(),
+            can_decide,
+            message,
+            decided_by: request.decided_by.clone(),
+            decided_source: request.decided_source.clone(),
         }
     }
 }
@@ -318,7 +393,10 @@ mod tests {
 
     use crate::listener_config::ListenerConfig;
     use crate::main_state::{MainStateService, MainStateStatus};
-    use crate::models::{CompletionReason, EventType, FailureReason, NiumaEvent, ToolKind};
+    use crate::models::{
+        ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason, EventType,
+        FailureReason, NiumaEvent, ToolKind,
+    };
     use crate::store::NiumaStore;
 
     #[test]
@@ -344,6 +422,81 @@ mod tests {
         assert_eq!(detail.event_id, "approval-1");
         assert_eq!(detail.content.as_deref(), Some("Bash: cargo test"));
         assert_eq!(detail.summary, "Bash: cargo test");
+    }
+
+    #[test]
+    fn waiting_approval_exposes_pending_approval_actions() {
+        let store = NiumaStore::new(test_sqlite_path("pending_approval_actions"));
+        enable_codex_listener(&store);
+        store
+            .upsert_approval_request(sample_approval_request(
+                "approval-1",
+                ApprovalStatus::Pending,
+            ))
+            .unwrap();
+        let mut event = sample_event(
+            "approval-event-1",
+            EventType::ApprovalRequested,
+            "Bash: cargo test",
+            1_000,
+        );
+        event.payload_ref = Some("approval:approval-1".to_string());
+        event.attention_resolve_key = Some("approval:approval-1".to_string());
+        store.append_event(event).unwrap();
+
+        let state = MainStateService::new(store)
+            .current_state(at(2_000))
+            .unwrap();
+
+        assert_eq!(state.status, MainStateStatus::WaitingApproval);
+        let approval = state.detail.unwrap().approval.unwrap();
+        assert_eq!(approval.request_id, "approval-1");
+        assert_eq!(approval.status, ApprovalStatus::Pending);
+        assert!(approval.can_decide);
+        assert!(approval.message.is_none());
+    }
+
+    #[test]
+    fn returned_to_codex_keeps_waiting_approval_without_actions() {
+        let store = NiumaStore::new(test_sqlite_path("returned_approval_actions"));
+        enable_codex_listener(&store);
+        store
+            .upsert_approval_request(sample_approval_request(
+                "approval-1",
+                ApprovalStatus::Pending,
+            ))
+            .unwrap();
+        let mut event = sample_event(
+            "approval-event-1",
+            EventType::ApprovalRequested,
+            "Bash: cargo test",
+            1_000,
+        );
+        event.payload_ref = Some("approval:approval-1".to_string());
+        event.attention_resolve_key = Some("approval:approval-1".to_string());
+        store.append_event(event).unwrap();
+        store
+            .return_approval_to_codex(
+                "approval-1",
+                "hook-helper",
+                "timeout",
+                "10 分钟内未处理，请回到 Codex 中操作",
+                at(1_600),
+            )
+            .unwrap();
+
+        let state = MainStateService::new(store)
+            .current_state(at(1_601))
+            .unwrap();
+
+        assert_eq!(state.status, MainStateStatus::WaitingApproval);
+        let approval = state.detail.unwrap().approval.unwrap();
+        assert_eq!(approval.status, ApprovalStatus::ReturnedToCodex);
+        assert!(!approval.can_decide);
+        assert_eq!(
+            approval.message.as_deref(),
+            Some("Niuma 已停止代处理，请回到 Codex 中同意或拒绝")
+        );
     }
 
     #[test]
@@ -492,6 +645,30 @@ mod tests {
             failure_reason: None,
             payload_ref: None,
             created_at: at(timestamp),
+        }
+    }
+
+    fn sample_approval_request(id: &str, status: ApprovalStatus) -> ApprovalRequest {
+        ApprovalRequest {
+            id: id.to_string(),
+            tool: ToolKind::Codex,
+            session_id: "s1".to_string(),
+            turn_id: "turn-1".to_string(),
+            tool_name: "Bash".to_string(),
+            command: Some("cargo test".to_string()),
+            description: Some("运行测试".to_string()),
+            project_path: "/tmp/demo".to_string(),
+            project_name: "demo".to_string(),
+            status,
+            decided_by: None,
+            decided_source: None,
+            reason: None,
+            created_at: at(1_000),
+            updated_at: at(1_000),
+            proxy_timeout_seconds: 600,
+            proxy_status: ApprovalProxyStatus::Active,
+            last_heartbeat_at: Some(at(1_000)),
+            proxy_lost_at: None,
         }
     }
 

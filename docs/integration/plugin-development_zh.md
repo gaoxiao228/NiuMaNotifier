@@ -393,6 +393,8 @@ Content-Type: application/json
 | `session_started` | 会话开始，状态为 `running`。 |
 | `session_idled` | 会话空闲，状态为 `idle`。 |
 | `approval_requested` | 等待授权，状态为 `waiting_approval`。 |
+| `approval_resolved` | 授权已由某个消费者同意或拒绝，状态恢复为 `running`。 |
+| `approval_returned_to_codex` | Niuma 代处理窗口结束，仍保持 `waiting_approval`，用户需要回到 Codex 操作。 |
 | `input_requested` | 等待输入，状态为 `waiting_input`。 |
 | `task_failed` | 任务失败，状态为 `error`。 |
 | `assistant_message_completed` | 助手回复完成，状态为 `completed`。 |
@@ -488,7 +490,43 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 
 具备授权处理能力的消费者必须同时声明 `event_consumer` 和 `approval_handler`。这类消费者可以在收到 `approval_requested` 后展示“同意/拒绝”。没有 `approval_handler` 的事件消费者可以通知用户有授权等待处理，但不应展示授权操作，也不应提交授权决策。
 
-事件的 `payload_ref` 和 `attention_resolve_key` 会使用 `approval:<request_id>` 格式，消费者应从中取出 `request_id`。
+授权处理插件可以继续使用 `kind = notification`。`notification_test` 不是必需能力，只有插件需要支持主界面“测试通知”按钮时才声明。
+
+授权处理插件 manifest 示例：
+
+```json
+{
+  "id": "niuma-plugin-approval-demo",
+  "kind": "notification",
+  "display_name": "Approval Demo",
+  "version": "0.1.0",
+  "command": "node",
+  "args": ["./bin/approval-demo.mjs"],
+  "env": {},
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_consumer", "approval_handler"]
+}
+```
+
+`approval_requested` 事件示例：
+
+```text
+event: event
+id: event-approval-1
+data: {"id":"event-approval-1","dedupe_key":"approval:codex:s1:t1:Bash:abc123","source":"codex-hook","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"attention_resolve_key":"approval:codex:s1:t1:Bash:abc123","payload_ref":"approval:codex:s1:t1:Bash:abc123","created_at":"2026-06-18T12:00:00Z"}
+```
+
+事件的 `payload_ref` 和 `attention_resolve_key` 会使用 `approval:<request_id>` 格式。消费者应优先从 `payload_ref` 解析；如果它为空，再从 `attention_resolve_key` 解析。没有 `approval:` 前缀的事件不能当作授权请求处理。
+
+解析规则示例：
+
+```js
+function approvalRequestId(event) {
+  // payload_ref 优先；没有时再使用 attention_resolve_key 兜底。
+  const value = event.payload_ref || event.attention_resolve_key || ''
+  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+}
+```
 
 提交决策：
 
@@ -501,13 +539,71 @@ Content-Type: application/json
 {
   "request_id": "codex:s1:t1:Bash:abc123",
   "decision": "allow",
-  "decided_by": "plugin-id",
-  "decided_source": "notification",
+  "decided_by": "niuma-plugin-approval-demo",
+  "decided_source": "plugin",
   "reason": "用户在通知中同意"
 }
 ```
 
-返回 `accepted=true` 表示当前消费者赢得本次决策；返回 `accepted=false` 表示已有其他消费者或桌面 UI 先处理，消费者应把本地按钮置为已处理状态，不要重试覆盖。
+字段约定：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `request_id` | 是 | 从 `approval:<request_id>` 中解析出的授权请求 ID。 |
+| `decision` | 是 | `allow` 或 `deny`。 |
+| `decided_by` | 是 | 推荐使用环境变量 `NIUMA_PLUGIN_ID`。 |
+| `decided_source` | 是 | 推荐使用稳定来源标识，例如 `plugin`、`notification`、`menu_bar`、`webhook`、`mobile`。 |
+| `reason` | 否 | 用户可读原因，便于其他消费者展示处理来源。 |
+
+成功并赢得决策时：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "accepted": true,
+    "status": "allowed",
+    "decision": "allow",
+    "decided_by": "niuma-plugin-approval-demo",
+    "decided_source": "plugin",
+    "reason": "用户在通知中同意",
+    "proxy_status": "active"
+  }
+}
+```
+
+已有其他消费者先处理时：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "accepted": false,
+    "status": "denied",
+    "decision": "deny",
+    "decided_by": "dashboard",
+    "decided_source": "ui",
+    "reason": "用户在主界面拒绝",
+    "proxy_status": "active"
+  }
+}
+```
+
+业务失败示例：
+
+```json
+{
+  "code": 200001,
+  "message": "request_id 不能为空",
+  "data": null
+}
+```
+
+接口进入业务处理后通常返回 HTTP 200，插件必须检查外层 `code`。`code = 0` 才表示业务成功；`accepted=true` 表示当前消费者赢得本次决策；`accepted=false` 表示已有其他消费者或桌面 UI 先处理，消费者应把本地按钮置为已处理状态，不要重试覆盖。
 
 消费者也可以轮询或启动时恢复待处理授权：
 
@@ -516,11 +612,145 @@ GET /api/v1/approval-requests?status=pending
 GET /api/v1/approval-decisions?request_id=codex:s1:t1:Bash:abc123
 ```
 
+待处理列表返回示例：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "id": "codex:s1:t1:Bash:abc123",
+        "tool": "codex",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "tool_name": "Bash",
+        "command": "cargo test",
+        "description": "是否允许执行 cargo test？",
+        "project_path": "/repo",
+        "project_name": "repo",
+        "status": "pending",
+        "decided_by": null,
+        "decided_source": null,
+        "reason": null,
+        "proxy_status": "active"
+      }
+    ]
+  }
+}
+```
+
+查询单个授权决策返回示例：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "status": "allowed",
+    "decision": "allow",
+    "decided_by": "niuma-plugin-approval-demo",
+    "decided_source": "plugin",
+    "reason": "用户在通知中同意",
+    "proxy_status": "active"
+  }
+}
+```
+
+`GET /api/v1/approval-decisions` 只用于查询状态，不包含 `accepted` 字段；只有 `POST /api/v1/approval-decisions` 的提交结果会返回 `accepted`。
+
+恢复推荐流程：
+
+1. 启动后读取 `NIUMA_LOCAL_API_URL` 和 `NIUMA_PLUGIN_ID`。
+2. 建立 `/api/v1/events/stream` SSE 连接。
+3. 调用 `GET /api/v1/approval-requests?status=pending` 做一次补偿恢复。
+4. 对 SSE 事件和 pending 列表中的 `request_id` 做本地去重。
+5. 展示待处理授权。
+6. 收到 `approval_resolved` 后移除或禁用本地按钮。
+7. 收到 `approval_returned_to_codex` 后禁用按钮并提示回 Codex 操作。
+8. 提交决策后根据 `accepted` 判断是否赢得决策。
+
 处理事件规则：
 
 - 收到 `approval_resolved`：禁用本地同意/拒绝，显示已由 `decided_by` / `decided_source` 处理。
 - 收到 `approval_returned_to_codex`：禁用本地同意/拒绝，提示用户回到 Codex 中操作。
 - 只有 `pending` 授权可以提交决策；`allowed`、`denied`、`returned_to_codex` 都视为已处理。
+
+最小 Node.js 消费者示例：
+
+```js
+const apiUrl = process.env.NIUMA_LOCAL_API_URL
+const pluginId = process.env.NIUMA_PLUGIN_ID
+
+if (!apiUrl || !pluginId) {
+  throw new Error('NIUMA_LOCAL_API_URL 和 NIUMA_PLUGIN_ID 必须存在')
+}
+
+function approvalRequestId(event) {
+  // 授权事件通过 approval:<request_id> 暴露可提交决策的请求 ID。
+  const value = event.payload_ref || event.attention_resolve_key || ''
+  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+}
+
+async function decide(requestId, decision) {
+  // 当前 v1 通过本机 Local API 提交决策，业务成功必须检查外层 code。
+  const response = await fetch(`${apiUrl}/api/v1/approval-decisions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      request_id: requestId,
+      decision,
+      decided_by: pluginId,
+      decided_source: 'plugin',
+      reason: `用户在 ${pluginId} 中选择 ${decision}`
+    })
+  })
+  const body = await response.json()
+  if (body.code !== 0) {
+    throw new Error(body.message)
+  }
+  return body.data
+}
+
+async function connect() {
+  // 事件消费者通过 SSE 接收授权申请、已处理、回到 Codex 等事件。
+  const response = await fetch(`${apiUrl}/api/v1/events/stream`, {
+    headers: { Accept: 'text/event-stream' }
+  })
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() || ''
+    for (const frame of frames) {
+      if (frame.startsWith(':')) continue
+      const eventName = frame.match(/^event: (.+)$/m)?.[1]
+      const data = frame.match(/^data: (.+)$/m)?.[1]
+      if (eventName !== 'event' || !data) continue
+      const event = JSON.parse(data)
+      if (event.event_type !== 'approval_requested') continue
+      const requestId = approvalRequestId(event)
+      if (!requestId) continue
+      console.log(`[approval] ${event.project_name}: ${event.summary}`)
+      console.log(`调用 decide("${requestId}", "allow") 或 decide("${requestId}", "deny")`)
+    }
+  }
+}
+
+connect().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})
+```
+
+当前 v1 没有插件 token 鉴权，主程序不会把 `decided_by` 当成安全身份认证。`approval_handler` 是插件开发契约和能力展示依据，不是服务端强安全边界。插件仍应只连接本机可信 Local API。
 
 ## 状态指示插件主状态消费
 

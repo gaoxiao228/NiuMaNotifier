@@ -393,6 +393,8 @@ Supported `event_type` values:
 | `session_started` | Session started. State becomes `running`. |
 | `session_idled` | Session idle. State becomes `idle`. |
 | `approval_requested` | Waiting for approval. State becomes `waiting_approval`. |
+| `approval_resolved` | Approval was allowed or denied by a consumer. State returns to `running`. |
+| `approval_returned_to_codex` | Niuma's proxy window ended. State remains `waiting_approval`, and the user must handle it in Codex. |
 | `input_requested` | Waiting for input. State becomes `waiting_input`. |
 | `task_failed` | Task failed. State becomes `error`. |
 | `assistant_message_completed` | Assistant message completed. State becomes `completed`. |
@@ -488,7 +490,43 @@ Notification plugins do not need to query the recent events list or write the no
 
 Consumers that can handle approvals must declare both `event_consumer` and `approval_handler`. They may show Allow/Deny actions after receiving `approval_requested`. Event consumers without `approval_handler` may notify that an approval is pending, but should not show approval actions or submit decisions.
 
-The event `payload_ref` and `attention_resolve_key` use the `approval:<request_id>` format. Consumers should extract `request_id` from that value.
+Approval handling plugins can continue to use `kind = notification`. `notification_test` is not required; declare it only when the plugin needs to support the app's test-notification button.
+
+Approval handling plugin manifest example:
+
+```json
+{
+  "id": "niuma-plugin-approval-demo",
+  "kind": "notification",
+  "display_name": "Approval Demo",
+  "version": "0.1.0",
+  "command": "node",
+  "args": ["./bin/approval-demo.mjs"],
+  "env": {},
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": ["event_consumer", "approval_handler"]
+}
+```
+
+`approval_requested` event example:
+
+```text
+event: event
+id: event-approval-1
+data: {"id":"event-approval-1","dedupe_key":"approval:codex:s1:t1:Bash:abc123","source":"codex-hook","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"attention_resolve_key":"approval:codex:s1:t1:Bash:abc123","payload_ref":"approval:codex:s1:t1:Bash:abc123","created_at":"2026-06-18T12:00:00Z"}
+```
+
+The event `payload_ref` and `attention_resolve_key` use the `approval:<request_id>` format. Consumers should parse `payload_ref` first; if it is empty, parse `attention_resolve_key`. Events without the `approval:` prefix must not be treated as approval requests.
+
+Parsing example:
+
+```js
+function approvalRequestId(event) {
+  // Prefer payload_ref and fall back to attention_resolve_key.
+  const value = event.payload_ref || event.attention_resolve_key || ''
+  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+}
+```
 
 Submit a decision:
 
@@ -501,13 +539,71 @@ Content-Type: application/json
 {
   "request_id": "codex:s1:t1:Bash:abc123",
   "decision": "allow",
-  "decided_by": "plugin-id",
-  "decided_source": "notification",
+  "decided_by": "niuma-plugin-approval-demo",
+  "decided_source": "plugin",
   "reason": "User allowed from notification"
 }
 ```
 
-`accepted=true` means this consumer won the decision. `accepted=false` means another consumer or the desktop UI already handled it first. In that case, mark the local action as handled and do not retry to overwrite it.
+Field rules:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `request_id` | Yes | Approval request ID parsed from `approval:<request_id>`. |
+| `decision` | Yes | `allow` or `deny`. |
+| `decided_by` | Yes | Recommended value is the `NIUMA_PLUGIN_ID` environment variable. |
+| `decided_source` | Yes | Recommended stable source labels include `plugin`, `notification`, `menu_bar`, `webhook`, or `mobile`. |
+| `reason` | No | Human-readable reason that other consumers can display. |
+
+Successful response when this consumer wins the decision:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "accepted": true,
+    "status": "allowed",
+    "decision": "allow",
+    "decided_by": "niuma-plugin-approval-demo",
+    "decided_source": "plugin",
+    "reason": "User allowed from notification",
+    "proxy_status": "active"
+  }
+}
+```
+
+Successful response when another consumer handled it first:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "accepted": false,
+    "status": "denied",
+    "decision": "deny",
+    "decided_by": "dashboard",
+    "decided_source": "ui",
+    "reason": "User denied from the desktop UI",
+    "proxy_status": "active"
+  }
+}
+```
+
+Business failure example:
+
+```json
+{
+  "code": 200001,
+  "message": "request_id cannot be empty",
+  "data": null
+}
+```
+
+After a request reaches business logic, the API usually returns HTTP 200. Plugins must check the top-level `code`. `code = 0` means the business operation succeeded. `accepted=true` means this consumer won the decision. `accepted=false` means another consumer or the desktop UI already handled it first. In that case, mark the local action as handled and do not retry to overwrite it.
 
 Consumers can also recover pending approvals on startup or poll decision state:
 
@@ -516,11 +612,145 @@ GET /api/v1/approval-requests?status=pending
 GET /api/v1/approval-decisions?request_id=codex:s1:t1:Bash:abc123
 ```
 
+Pending list response example:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "id": "codex:s1:t1:Bash:abc123",
+        "tool": "codex",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "tool_name": "Bash",
+        "command": "cargo test",
+        "description": "Allow running cargo test?",
+        "project_path": "/repo",
+        "project_name": "repo",
+        "status": "pending",
+        "decided_by": null,
+        "decided_source": null,
+        "reason": null,
+        "proxy_status": "active"
+      }
+    ]
+  }
+}
+```
+
+Single decision query response example:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "status": "allowed",
+    "decision": "allow",
+    "decided_by": "niuma-plugin-approval-demo",
+    "decided_source": "plugin",
+    "reason": "User allowed from notification",
+    "proxy_status": "active"
+  }
+}
+```
+
+`GET /api/v1/approval-decisions` is for state lookup only and does not include `accepted`. Only the submit result from `POST /api/v1/approval-decisions` includes `accepted`.
+
+Recommended recovery flow:
+
+1. Read `NIUMA_LOCAL_API_URL` and `NIUMA_PLUGIN_ID` on startup.
+2. Connect to `/api/v1/events/stream`.
+3. Call `GET /api/v1/approval-requests?status=pending` once as startup compensation.
+4. Locally dedupe `request_id` values from SSE events and the pending list.
+5. Present pending approval actions.
+6. On `approval_resolved`, remove or disable the local action.
+7. On `approval_returned_to_codex`, disable the action and tell the user to handle it in Codex.
+8. After submitting a decision, use `accepted` to decide whether this consumer won the decision.
+
 Event handling rules:
 
 - On `approval_resolved`: disable local Allow/Deny actions and show the `decided_by` / `decided_source` handler.
 - On `approval_returned_to_codex`: disable local Allow/Deny actions and tell the user to handle the request in Codex.
 - Only `pending` approvals can be decided. Treat `allowed`, `denied`, and `returned_to_codex` as already handled.
+
+Minimal Node.js consumer example:
+
+```js
+const apiUrl = process.env.NIUMA_LOCAL_API_URL
+const pluginId = process.env.NIUMA_PLUGIN_ID
+
+if (!apiUrl || !pluginId) {
+  throw new Error('NIUMA_LOCAL_API_URL and NIUMA_PLUGIN_ID are required')
+}
+
+function approvalRequestId(event) {
+  // Approval events expose the request ID through approval:<request_id>.
+  const value = event.payload_ref || event.attention_resolve_key || ''
+  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+}
+
+async function decide(requestId, decision) {
+  // In v1, decisions are submitted through the local Local API; always check code.
+  const response = await fetch(`${apiUrl}/api/v1/approval-decisions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      request_id: requestId,
+      decision,
+      decided_by: pluginId,
+      decided_source: 'plugin',
+      reason: `User selected ${decision} in ${pluginId}`
+    })
+  })
+  const body = await response.json()
+  if (body.code !== 0) {
+    throw new Error(body.message)
+  }
+  return body.data
+}
+
+async function connect() {
+  // Event consumers receive approval requested/resolved/returned events over SSE.
+  const response = await fetch(`${apiUrl}/api/v1/events/stream`, {
+    headers: { Accept: 'text/event-stream' }
+  })
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() || ''
+    for (const frame of frames) {
+      if (frame.startsWith(':')) continue
+      const eventName = frame.match(/^event: (.+)$/m)?.[1]
+      const data = frame.match(/^data: (.+)$/m)?.[1]
+      if (eventName !== 'event' || !data) continue
+      const event = JSON.parse(data)
+      if (event.event_type !== 'approval_requested') continue
+      const requestId = approvalRequestId(event)
+      if (!requestId) continue
+      console.log(`[approval] ${event.project_name}: ${event.summary}`)
+      console.log(`Call decide("${requestId}", "allow") or decide("${requestId}", "deny")`)
+    }
+  }
+}
+
+connect().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})
+```
+
+NiumaNotifier v1 does not use plugin tokens for API authentication, and the app does not treat `decided_by` as a verified security identity. `approval_handler` is a plugin development contract and capability display marker, not a server-enforced security boundary. Plugins should still connect only to the trusted local Local API.
 
 ## Status Indicator Main State Consumption
 

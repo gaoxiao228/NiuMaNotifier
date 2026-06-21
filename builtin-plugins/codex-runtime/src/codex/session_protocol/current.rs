@@ -98,6 +98,7 @@ impl CodexJsonlParser {
         let mut content_override = None;
         let mut completion_reason = None;
         let mut failure_reason = None;
+        let mut watcher_approval_fallback = false;
         let event_type = match row.row_type.as_str() {
             "event_msg" => match kind {
                 "task_started" => {
@@ -164,11 +165,18 @@ impl CodexJsonlParser {
                     } else if let Some(approval) =
                         escalated_function_call(&row.payload, &session_id)
                     {
-                        if let Some(call_id) = approval.call_id.as_deref() {
+                        let EscalatedFunctionCall {
+                            call_id,
+                            resolve_key,
+                            summary: approval_summary,
+                        } = approval;
+                        if let Some(call_id) = call_id.as_deref() {
                             self.pending_approval_call_ids.insert(call_id.to_string());
                         }
-                        attention_resolve_key = approval.resolve_key;
-                        summary = Some(approval.summary);
+                        watcher_approval_fallback = true;
+                        attention_resolve_key = resolve_key;
+                        summary = Some(approval_summary.clone());
+                        content_override = Some(approval_summary);
                         EventType::ApprovalRequested
                     } else if is_response_item_activity(kind) {
                         EventType::SessionActivity
@@ -234,13 +242,20 @@ impl CodexJsonlParser {
             project_name,
             event_type: event_type.clone(),
             severity: severity_for_event_type(&event_type).to_string(),
-            summary: summary_text,
+            summary: summary_text.clone(),
             content,
             error_message,
             attention_resolve_key,
             completion_reason,
             failure_reason,
-            payload_ref: Some(fallback_path.to_string()),
+            payload_ref: if watcher_approval_fallback {
+                Some(format!(
+                    "codex_watcher_approval:{}",
+                    stable_hash(&summary_text)
+                ))
+            } else {
+                Some(fallback_path.to_string())
+            },
             created_at: timestamp,
         }))
     }
@@ -325,15 +340,15 @@ fn message_content_text(content: &serde_json::Value) -> Option<&str> {
     }
 }
 
+struct UserInputFunctionCall {
+    summary: String,
+    content: String,
+}
+
 struct EscalatedFunctionCall {
     call_id: Option<String>,
     resolve_key: Option<String>,
     summary: String,
-}
-
-struct UserInputFunctionCall {
-    summary: String,
-    content: String,
 }
 
 fn plan_item_completed(payload: &serde_json::Value) -> Option<UserInputFunctionCall> {

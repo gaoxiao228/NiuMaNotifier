@@ -72,6 +72,10 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
         state.attention_items.clear();
         return;
     }
+    if matches!(event.event_type, EventType::ApprovalReturnedToCodex) {
+        restore_session_attention_status(state, &event.session_id);
+        return;
+    }
 
     let status = status_from_event(&event.event_type);
     match status {
@@ -153,6 +157,8 @@ fn status_from_event(event_type: &EventType) -> SessionStatus {
         EventType::SessionStarted => SessionStatus::Running,
         EventType::SessionIdled => SessionStatus::Idle,
         EventType::ApprovalRequested => SessionStatus::WaitingApproval,
+        EventType::ApprovalReturnedToCodex => SessionStatus::WaitingApproval,
+        EventType::ApprovalResolved => SessionStatus::Running,
         EventType::InputRequested => SessionStatus::WaitingInput,
         EventType::TaskFailed => SessionStatus::Error,
         EventType::AssistantMessageCompleted => SessionStatus::Completed,

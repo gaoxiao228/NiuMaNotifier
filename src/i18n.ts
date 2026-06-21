@@ -97,6 +97,9 @@ export type Translation = {
   clearBlockerConfirm: string
   clearBlockerConfirmAgain: string
   clearBlockerClearing: string
+  approveApproval: string
+  denyApproval: string
+  approvalSubmitting: string
   currentRequest: string
   project: string
   path: string
@@ -233,6 +236,9 @@ export const translations: Record<LanguageCode, Translation> = {
       '这只会清除 NiumaNotifier 中当前所有待处理提醒，不会在 AI 工具中批准、拒绝或输入内容。',
     clearBlockerConfirmAgain: '再次点击确认',
     clearBlockerClearing: '处理中...',
+    approveApproval: '同意',
+    denyApproval: '拒绝',
+    approvalSubmitting: '提交中...',
     currentRequest: '当前请求',
     project: '项目',
     path: '路径',
@@ -394,6 +400,9 @@ export const translations: Record<LanguageCode, Translation> = {
       '這只會清除 NiumaNotifier 中目前所有待處理提醒，不會在 AI 工具中批准、拒絕或輸入內容。',
     clearBlockerConfirmAgain: '再次點擊確認',
     clearBlockerClearing: '處理中...',
+    approveApproval: '同意',
+    denyApproval: '拒絕',
+    approvalSubmitting: '提交中...',
     currentRequest: '目前請求',
     project: '專案',
     path: '路徑',
@@ -556,6 +565,9 @@ export const translations: Record<LanguageCode, Translation> = {
       'This only clears all current attention reminders in NiumaNotifier. It does not approve, deny, or enter anything in the AI tool.',
     clearBlockerConfirmAgain: 'Click again to confirm',
     clearBlockerClearing: 'Marking handled...',
+    approveApproval: 'Allow',
+    denyApproval: 'Deny',
+    approvalSubmitting: 'Submitting...',
     currentRequest: 'Current request',
     project: 'Project',
     path: 'Path',
@@ -718,6 +730,9 @@ export const translations: Record<LanguageCode, Translation> = {
       'これは NiumaNotifier の現在の未処理リマインダーをすべて消すだけです。AI ツールで承認、拒否、入力は行いません。',
     clearBlockerConfirmAgain: 'もう一度クリックして確認',
     clearBlockerClearing: '処理済みにしています...',
+    approveApproval: '承認',
+    denyApproval: '拒否',
+    approvalSubmitting: '送信中...',
     currentRequest: '現在のリクエスト',
     project: 'プロジェクト',
     path: 'パス',
@@ -880,6 +895,9 @@ export const translations: Record<LanguageCode, Translation> = {
       '이 작업은 NiumaNotifier의 현재 처리 필요 알림만 모두 지웁니다. AI 도구에서 승인, 거부 또는 입력을 수행하지 않습니다.',
     clearBlockerConfirmAgain: '다시 클릭해 확인',
     clearBlockerClearing: '처리 중...',
+    approveApproval: '승인',
+    denyApproval: '거부',
+    approvalSubmitting: '제출 중...',
     currentRequest: '현재 요청',
     project: '프로젝트',
     path: '경로',
@@ -1042,6 +1060,9 @@ export const translations: Record<LanguageCode, Translation> = {
       'Dies entfernt nur alle aktuellen Hinweise in NiumaNotifier. Im KI-Tool wird nichts genehmigt, abgelehnt oder eingegeben.',
     clearBlockerConfirmAgain: 'Zum Bestätigen erneut klicken',
     clearBlockerClearing: 'Wird erledigt markiert...',
+    approveApproval: 'Erlauben',
+    denyApproval: 'Ablehnen',
+    approvalSubmitting: 'Wird gesendet...',
     currentRequest: 'Aktuelle Anfrage',
     project: 'Projekt',
     path: 'Pfad',

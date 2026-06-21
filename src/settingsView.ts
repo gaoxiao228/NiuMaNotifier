@@ -15,9 +15,11 @@ export type PluginManagementRenderOptions = {
   language: LanguageCode
   plugins: PluginManagementItem[]
   busyPluginId: string | null
+  busyActionKey?: string | null
   busyConfigPluginId: string | null
   importBusy: boolean
   resultText: string
+  actionResultText?: string
   configResultText: string
   pluginConfigs: Record<string, Record<string, unknown>>
 }
@@ -143,18 +145,77 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
               </div>
               ${plugin.source === 'external' ? renderPluginActions(plugin, busy, t.removePlugin) : ''}
             </div>
-            ${renderPluginConfigForm(
-              plugin,
-              options.pluginConfigs[plugin.id] ?? {},
-              options.busyConfigPluginId === plugin.id,
-              options.configResultText,
-              t
-            )}
+            <div class="plugin-card-side">
+              ${renderPluginManagementActions(
+                plugin,
+                options.busyActionKey ?? null,
+                options.actionResultText ?? ''
+              )}
+              ${renderPluginConfigForm(
+                plugin,
+                options.pluginConfigs[plugin.id] ?? {},
+                options.busyConfigPluginId === plugin.id,
+                options.configResultText,
+                t
+              )}
+            </div>
           </div>
         </article>
       `
     })
     .join('')
+}
+
+function renderPluginManagementActions(
+  plugin: PluginManagementItem,
+  busyActionKey: string | null,
+  actionResultText: string
+) {
+  const actions = plugin.management_actions ?? []
+  if (actions.length === 0) {
+    return ''
+  }
+  return `
+    <div class="plugin-management-actions">
+      ${actions
+        .map((action) => {
+          const actionKey = pluginActionKey(plugin.id, action.id)
+          const busy = busyActionKey === actionKey
+          return `
+            <div class="plugin-management-action">
+              <div>
+                <p class="plugin-management-action-title">${escapeHtml(action.label)}</p>
+                <p class="plugin-management-action-description">${escapeHtml(action.description)}</p>
+                ${
+                  action.status_label
+                    ? `<span class="plugin-management-action-status ${escapeHtml(
+                        action.status_level
+                      )}">${escapeHtml(action.status_label)}</span>`
+                    : ''
+                }
+              </div>
+              <button
+                type="button"
+                class="plugin-action-button ${escapeHtml(action.kind)}"
+                data-plugin-action-plugin="${escapeHtml(plugin.id)}"
+                data-plugin-action-id="${escapeHtml(action.id)}"
+                ${busy || !action.enabled ? 'disabled' : ''}
+              >${escapeHtml(action.label)}</button>
+            </div>
+          `
+        })
+        .join('')}
+      ${
+        actionResultText
+          ? `<p class="plugin-management-action-result">${escapeHtml(actionResultText)}</p>`
+          : ''
+      }
+    </div>
+  `
+}
+
+function pluginActionKey(pluginId: string, actionId: string) {
+  return `${pluginId}:${actionId}`
 }
 
 function renderPluginActions(plugin: PluginManagementItem, busy: boolean, removeText: string) {

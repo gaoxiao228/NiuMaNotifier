@@ -25,6 +25,7 @@ export function renderDashboardShell() {
             <div id="status-summary" class="status-summary"></div>
             <button id="clear-blocker" class="secondary-action" type="button" hidden></button>
             <dl id="request-detail" class="request-detail" hidden></dl>
+            <div id="approval-actions" class="request-actions" hidden></div>
           </div>
         </section>
         <aside class="side-panel">

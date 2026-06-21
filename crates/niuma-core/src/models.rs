@@ -102,6 +102,76 @@ impl AttentionItem {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    Pending,
+    Allowed,
+    Denied,
+    ReturnedToCodex,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalProxyStatus {
+    None,
+    Active,
+    Lost,
+}
+
+fn default_approval_proxy_status() -> ApprovalProxyStatus {
+    ApprovalProxyStatus::None
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecisionKind {
+    Allow,
+    Deny,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub id: String,
+    pub tool: ToolKind,
+    pub session_id: String,
+    pub turn_id: String,
+    pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub project_path: String,
+    pub project_name: String,
+    pub status: ApprovalStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub proxy_timeout_seconds: u64,
+    #[serde(default = "default_approval_proxy_status")]
+    pub proxy_status: ApprovalProxyStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_lost_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalDecision {
+    pub request_id: String,
+    pub decision: ApprovalDecisionKind,
+    pub decided_by: String,
+    pub decided_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub decided_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LatestActivity {
     pub event_id: Option<String>,
     pub session_id: Option<String>,
@@ -135,6 +205,8 @@ pub enum EventType {
     SessionStarted,
     SessionIdled,
     ApprovalRequested,
+    ApprovalResolved,
+    ApprovalReturnedToCodex,
     InputRequested,
     TaskFailed,
     AssistantMessageCompleted,

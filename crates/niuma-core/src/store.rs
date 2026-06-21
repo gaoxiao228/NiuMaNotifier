@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::listener_config::ListenerConfig;
 use crate::models::{
-    AttentionItem, EventType, InternalStateSnapshot, LatestActivity, NiumaEvent, NiumaSession,
-    SessionStatus, ToolKind,
+    ApprovalDecisionKind, ApprovalRequest, AttentionItem, EventType, InternalStateSnapshot,
+    LatestActivity, NiumaEvent, NiumaSession, SessionStatus, ToolKind,
 };
 use crate::notification_store::{
     insert_record_if_absent, load_history_records, load_plugin_result, load_records,
@@ -41,6 +41,8 @@ pub struct StoredState {
     pub attention_items: Vec<AttentionItem>,
     #[serde(default)]
     pub latest_activity: Option<LatestActivity>,
+    #[serde(default)]
+    pub approval_requests: Vec<ApprovalRequest>,
 }
 
 impl Default for StoredState {
@@ -50,6 +52,7 @@ impl Default for StoredState {
             sessions: Vec::new(),
             attention_items: Vec::new(),
             latest_activity: Some(LatestActivity::idle()),
+            approval_requests: Vec::new(),
         }
     }
 }
@@ -297,6 +300,103 @@ impl NiumaStore {
             .cloned())
     }
 
+    pub fn approval_request(&self, request_id: &str) -> Result<Option<ApprovalRequest>, String> {
+        Ok(self
+            .runtime()?
+            .state
+            .approval_requests
+            .iter()
+            .find(|request| request.id == request_id)
+            .cloned())
+    }
+
+    pub fn approval_requests(&self) -> Result<Vec<ApprovalRequest>, String> {
+        Ok(self.runtime()?.state.approval_requests.clone())
+    }
+
+    pub fn upsert_approval_request(&self, request: ApprovalRequest) -> Result<StoredState, String> {
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
+        crate::approval::upsert_request(&mut state.approval_requests, request);
+        runtime.state = state.clone();
+        Ok(state)
+    }
+
+    pub fn decide_approval(
+        &self,
+        request_id: &str,
+        decision: ApprovalDecisionKind,
+        decided_by: &str,
+        decided_source: &str,
+        reason: Option<String>,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<crate::approval::ApprovalMutationResult, String> {
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
+        let result = crate::approval::decide(
+            &mut state.approval_requests,
+            request_id,
+            decision,
+            decided_by,
+            decided_source,
+            reason,
+            now,
+        )?;
+        runtime.state = state;
+        Ok(result)
+    }
+
+    pub fn return_approval_to_codex(
+        &self,
+        request_id: &str,
+        returned_by: &str,
+        returned_source: &str,
+        reason: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<crate::approval::ApprovalMutationResult, String> {
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
+        let result = crate::approval::return_to_codex(
+            &mut state.approval_requests,
+            request_id,
+            returned_by,
+            returned_source,
+            reason,
+            now,
+        )?;
+        runtime.state = state;
+        Ok(result)
+    }
+
+    pub fn heartbeat_approval_proxy(
+        &self,
+        request_id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<crate::approval::ApprovalMutationResult, String> {
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
+        let result =
+            crate::approval::heartbeat_proxy(&mut state.approval_requests, request_id, now)?;
+        runtime.state = state;
+        Ok(result)
+    }
+
+    pub fn return_stale_approval_proxies_to_codex(
+        &self,
+        now: chrono::DateTime<Utc>,
+        stale_after: chrono::Duration,
+    ) -> Result<Vec<crate::approval::ApprovalMutationResult>, String> {
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
+        let results = crate::approval::return_stale_proxies_to_codex(
+            &mut state.approval_requests,
+            now,
+            stale_after,
+        );
+        runtime.state = state;
+        Ok(results)
+    }
+
     pub fn insert_notification_record_if_absent(
         &self,
         record: &NotificationRecord,
@@ -426,6 +526,9 @@ impl NiumaStore {
             .collect::<std::collections::HashSet<_>>();
 
         state.sessions.retain(|session| &session.tool != tool);
+        state
+            .approval_requests
+            .retain(|request| &request.tool != tool);
         state
             .attention_items
             .retain(|item| !removed_session_ids.contains(&item.session_id));

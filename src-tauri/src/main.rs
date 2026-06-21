@@ -194,6 +194,7 @@ fn main() {
             commands::get_plugins,
             commands::remove_plugin,
             commands::set_plugin_enabled,
+            commands::run_plugin_action,
             commands::get_plugin_config,
             commands::save_plugin_config,
             commands::select_and_import_plugin_dir,

@@ -1,5 +1,6 @@
 use axum::routing::{get, post};
 use axum::Router;
+use niuma_core::approval_arbitration::ApprovalArbiter;
 use niuma_core::plugin::default_user_plugin_dir;
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::state_mutation::StateMutationService;
@@ -8,10 +9,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::handlers::{
-    dismiss_blocker, get_events, get_listener_config, get_main_state, get_notification_records,
-    get_plugin_config, get_plugins, get_sessions, import_plugin, post_event, post_plugin_events,
-    post_plugin_notification_result, post_plugin_notification_test_result, remove_plugin,
-    reset_state, save_listener_config, save_plugin_config, set_plugin_enabled,
+    dismiss_blocker, get_approval_decision, get_approval_requests, get_events, get_listener_config,
+    get_main_state, get_notification_records, get_plugin_config, get_plugins, get_sessions,
+    import_plugin, post_approval_decision, post_approval_heartbeat, post_approval_request,
+    post_approval_return_to_codex, post_event, post_plugin_events, post_plugin_notification_result,
+    post_plugin_notification_test_result, remove_plugin, reset_state, run_plugin_action,
+    save_listener_config, save_plugin_config, set_plugin_enabled,
 };
 use crate::manual_test::manual_test_scenario;
 use crate::response::{preflight, route_not_found};
@@ -32,6 +35,7 @@ pub fn app_with_bus_and_plugin_dir(
     plugin_dir: PathBuf,
 ) -> Router {
     let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
+    let approval_arbiter = Arc::new(Mutex::new(ApprovalArbiter::default()));
     Router::new()
         .route("/api/v1/main-state", get(get_main_state).options(preflight))
         .route(
@@ -45,6 +49,26 @@ pub fn app_with_bus_and_plugin_dir(
         .route(
             "/api/v1/plugin-events",
             post(post_plugin_events).options(preflight),
+        )
+        .route(
+            "/api/v1/approval-requests",
+            get(get_approval_requests)
+                .post(post_approval_request)
+                .options(preflight),
+        )
+        .route(
+            "/api/v1/approval-decisions",
+            get(get_approval_decision)
+                .post(post_approval_decision)
+                .options(preflight),
+        )
+        .route(
+            "/api/v1/approval-requests/return",
+            post(post_approval_return_to_codex).options(preflight),
+        )
+        .route(
+            "/api/v1/approval-requests/heartbeat",
+            post(post_approval_heartbeat).options(preflight),
         )
         .route(
             "/api/v1/plugins/notification-results",
@@ -66,6 +90,10 @@ pub fn app_with_bus_and_plugin_dir(
         .route(
             "/api/v1/plugins/enabled",
             post(set_plugin_enabled).options(preflight),
+        )
+        .route(
+            "/api/v1/plugins/actions",
+            post(run_plugin_action).options(preflight),
         )
         .route(
             "/api/v1/plugins/config",
@@ -101,6 +129,7 @@ pub fn app_with_bus_and_plugin_dir(
             store,
             runtime_events,
             mutation_service,
+            approval_arbiter,
             plugin_dir,
             main_state_broadcaster: Arc::new(Mutex::new(MainStateBroadcaster::default())),
         })

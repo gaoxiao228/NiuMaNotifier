@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 
-use crate::hook_payload::{HookPayloadParser, HookToolHint};
-use crate::models::{CompletionReason, EventType, ToolKind};
+use crate::hook_payload::{codex_permission_request_from_payload, HookPayloadParser, HookToolHint};
+use crate::models::{EventType, ToolKind};
 
 #[test]
 fn niuma_event_deserializes_without_optional_reason_fields() {
@@ -27,7 +27,7 @@ fn niuma_event_deserializes_without_optional_reason_fields() {
 }
 
 #[test]
-fn parses_codex_session_start() {
+fn ignores_codex_session_start() {
     let payload = r#"{
         "hook_event_name": "SessionStart",
         "session_id": "s1",
@@ -39,14 +39,9 @@ fn parses_codex_session_start() {
         HookToolHint::Codex,
         Utc.timestamp_opt(1_000, 0).single().unwrap(),
     )
-    .unwrap()
     .unwrap();
 
-    assert_eq!(event.tool, ToolKind::Codex);
-    assert_eq!(event.session_id, "s1");
-    assert_eq!(event.project_name, "NiuMaNotifier");
-    assert_eq!(event.event_type, EventType::SessionStarted);
-    assert_eq!(event.summary, "Codex session started");
+    assert!(event.is_none());
 }
 
 #[test]
@@ -75,7 +70,27 @@ fn parses_codex_permission_request_command() {
 }
 
 #[test]
-fn parses_codex_stop_as_completed() {
+fn codex_permission_request_id_is_stable_for_same_tool_input() {
+    let payload = r#"{
+        "hook_event_name": "PermissionRequest",
+        "session_id": "s1",
+        "turn_id": "t1",
+        "cwd": "/Users/me/Code/NiuMaNotifier",
+        "tool_name": "Bash",
+        "tool_input": { "command": "cargo test" }
+    }"#;
+
+    let first = codex_permission_request_from_payload(payload.as_bytes()).unwrap();
+    let second = codex_permission_request_from_payload(payload.as_bytes()).unwrap();
+
+    assert_eq!(first.id, second.id);
+    assert!(first.id.starts_with("codex:s1:t1:Bash:"));
+    assert_eq!(first.command.as_deref(), Some("cargo test"));
+    assert_eq!(first.project_name, "NiuMaNotifier");
+}
+
+#[test]
+fn ignores_codex_stop() {
     let payload = r#"{
         "hook_event_name": "Stop",
         "session_id": "s1",
@@ -89,13 +104,9 @@ fn parses_codex_stop_as_completed() {
         HookToolHint::Codex,
         Utc.timestamp_opt(1_000, 0).single().unwrap(),
     )
-    .unwrap()
     .unwrap();
 
-    assert_eq!(event.event_type, EventType::AssistantMessageCompleted);
-    assert_eq!(event.completion_reason, Some(CompletionReason::Normal));
-    assert_eq!(event.failure_reason, None);
-    assert_eq!(event.summary, "已完成");
+    assert!(event.is_none());
 }
 
 #[test]

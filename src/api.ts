@@ -45,6 +45,26 @@ export type MainStateDetail = {
   payload_ref: string | null
   completion_reason: string | null
   failure_reason: string | null
+  approval?: StateApprovalDetail | null
+}
+
+export type StateApprovalDetail = {
+  request_id: string
+  status: string
+  can_decide: boolean
+  message: string | null
+  decided_by: string | null
+  decided_source: string | null
+}
+
+export type ApprovalDecisionResult = {
+  request_id: string
+  accepted: boolean
+  status: string
+  decision: string | null
+  decided_by: string | null
+  decided_source: string | null
+  reason: string | null
 }
 
 export type NiumaSession = {
@@ -106,8 +126,19 @@ export type PluginManagementItem = {
   runtime_status: PluginRuntimeStatus
   last_error: string | null
   icon_url: string | null
+  management_actions?: PluginManagementAction[]
   config_schema: PluginConfigField[]
   install_path: string | null
+}
+
+export type PluginManagementAction = {
+  id: string
+  label: string
+  description: string
+  kind: 'primary' | 'secondary' | 'danger'
+  enabled: boolean
+  status_label?: string | null
+  status_level: 'neutral' | 'ok' | 'warning' | 'error'
 }
 
 export type PluginsPayload = {
@@ -142,6 +173,14 @@ export type PluginConfigPayload = {
 
 export type PluginConfigSaveResult = PluginConfigPayload & {
   saved: boolean
+}
+
+export type PluginActionResult = {
+  plugin_id: string
+  action_id: string
+  message: string
+  status?: Record<string, unknown>
+  plugins: PluginManagementItem[]
 }
 
 export type TestNotificationResult = {
@@ -245,6 +284,24 @@ export async function dismissActiveBlocker() {
   }
 }
 
+export async function submitApprovalDecision(
+  requestId: string,
+  decision: 'allow' | 'deny',
+  reason?: string
+) {
+  return await requestLocalApi<ApprovalDecisionResult>('/api/v1/approval-decisions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      request_id: requestId,
+      decision,
+      decided_by: 'desktop',
+      decided_source: 'ui',
+      reason
+    })
+  })
+}
+
 export async function getListenerConfig() {
   try {
     const response = await invoke<ApiResponse<ListenerConfigPayload>>('get_listener_config')
@@ -338,6 +395,25 @@ export async function setPluginEnabled(pluginId: string, enabled: boolean) {
     const response = await invoke<ApiResponse<PluginEnabledResult>>('set_plugin_enabled', {
       pluginId,
       enabled
+    })
+    if (response.code !== 0) {
+      throw new Error(response.message)
+    }
+    return response.data
+  }
+}
+
+export async function runPluginAction(pluginId: string, actionId: string) {
+  try {
+    return await requestLocalApi<PluginActionResult>('/api/v1/plugins/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plugin_id: pluginId, action_id: actionId })
+    })
+  } catch {
+    const response = await invoke<ApiResponse<PluginActionResult>>('run_plugin_action', {
+      pluginId,
+      actionId
     })
     if (response.code !== 0) {
       throw new Error(response.message)

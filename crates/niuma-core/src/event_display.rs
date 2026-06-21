@@ -69,8 +69,12 @@ pub(crate) fn fallback_error_for_status(
 
 pub(crate) fn status_for_event_type(event_type: &EventType) -> SessionStatus {
     match event_type {
-        EventType::SessionStarted | EventType::SessionActivity => SessionStatus::Running,
-        EventType::ApprovalRequested => SessionStatus::WaitingApproval,
+        EventType::SessionStarted | EventType::SessionActivity | EventType::ApprovalResolved => {
+            SessionStatus::Running
+        }
+        EventType::ApprovalRequested | EventType::ApprovalReturnedToCodex => {
+            SessionStatus::WaitingApproval
+        }
         EventType::InputRequested => SessionStatus::WaitingInput,
         EventType::TaskFailed => SessionStatus::Error,
         EventType::AssistantMessageCompleted | EventType::ManualDismissed => {
@@ -86,6 +90,8 @@ pub(crate) fn event_type_name(event_type: &EventType) -> &'static str {
         EventType::SessionStarted => "session_started",
         EventType::SessionIdled => "session_idled",
         EventType::ApprovalRequested => "approval_requested",
+        EventType::ApprovalResolved => "approval_resolved",
+        EventType::ApprovalReturnedToCodex => "approval_returned_to_codex",
         EventType::InputRequested => "input_requested",
         EventType::TaskFailed => "task_failed",
         EventType::AssistantMessageCompleted => "assistant_message_completed",

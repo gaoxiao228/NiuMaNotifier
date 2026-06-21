@@ -1,5 +1,9 @@
 use chrono::Utc;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
+use niuma_core::codex_hook::{
+    install_codex_hook, uninstall_codex_hook, CodexHookCommand, CodexHookStatus,
+};
+use niuma_core::config::codex_home;
 use niuma_core::dashboard::DashboardService;
 use niuma_core::main_state::MainStateService;
 use niuma_core::models::ToolId;
@@ -10,7 +14,7 @@ use niuma_core::plugin::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
     remove_external_plugin, resolve_plugin_config, save_plugin_enabled_state,
     validate_plugin_config, PluginCapability, PluginKind, PluginManagementItem, PluginManifest,
-    PluginRegistry, PluginRuntimeStatus, PluginSource, ToolPluginInfo,
+    PluginRegistry, PluginRuntimeStatus, PluginSource, ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{
     PluginNotificationTestRequest, RuntimeEventBus, StateChangeReason,
@@ -180,8 +184,90 @@ pub(crate) fn set_plugin_enabled(
 }
 
 #[tauri::command]
+pub(crate) fn run_plugin_action(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    plugin_id: String,
+    action_id: String,
+) -> ApiResponse<serde_json::Value> {
+    run_plugin_action_by_id(&runtime_state.store, &plugin_id, &action_id)
+}
+
+#[tauri::command]
 pub(crate) fn get_plugin_config(plugin_id: String) -> ApiResponse<serde_json::Value> {
     get_plugin_config_by_id(&plugin_id)
+}
+
+fn run_plugin_action_by_id(
+    store: &NiumaStore,
+    plugin_id: &str,
+    action_id: &str,
+) -> ApiResponse<serde_json::Value> {
+    let registry = current_plugin_registry();
+    let Some(plugin) = registry.plugin_by_id(plugin_id) else {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("未知插件：{plugin_id}"),
+        );
+    };
+    if plugin.id != BUILTIN_CODEX_PLUGIN_ID {
+        return ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            format!("插件 {plugin_id} 不支持管理动作"),
+        );
+    }
+    // 桌面端 fallback 与 Local API 使用同一组受控动作，避免插件自定义命令直连系统配置。
+    let action_result = match action_id {
+        "codex_hook_install" => {
+            install_codex_hook(&codex_home(), codex_hook_command_mode()).map(|status| {
+                (
+                    "Hook 已安装，请在 Codex 中执行 /hooks 信任 Niuma Hook",
+                    status,
+                )
+            })
+        }
+        "codex_hook_uninstall" => {
+            uninstall_codex_hook(&codex_home()).map(|status| ("Hook 已移除", status))
+        }
+        _ => Err(format!("未知插件动作：{plugin_id} / {action_id}")),
+    };
+    let (message, status) = match action_result {
+        Ok(result) => result,
+        Err(error) if action_id != "codex_hook_install" && action_id != "codex_hook_uninstall" => {
+            return ApiResponse::fail(ApiErrorCode::BusinessValidation, error);
+        }
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    match plugin_management_items_from_store(store) {
+        Ok(plugins) => ApiResponse::ok(json!({
+            "plugin_id": plugin_id,
+            "action_id": action_id,
+            "message": message,
+            "status": codex_hook_status_json(status),
+            "plugins": plugins
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+    }
+}
+
+fn codex_hook_status_json(status: CodexHookStatus) -> serde_json::Value {
+    json!(status)
+}
+
+fn codex_hook_command_mode() -> CodexHookCommand {
+    if niuma_core::platform::executable::command_on_path("niuma") {
+        CodexHookCommand::Installed
+    } else {
+        CodexHookCommand::Dev {
+            manifest_path: repo_manifest_path(),
+        }
+    }
+}
+
+fn repo_manifest_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("Cargo.toml")
 }
 
 #[tauri::command]
