@@ -1452,6 +1452,48 @@ async fn plugin_remove_deletes_external_plugin_and_disables_tool() {
 }
 
 #[tokio::test]
+async fn plugin_remove_session_provider_does_not_disable_tool_listener() {
+    let plugin_dir = test_dir("plugin_remove_session_provider_destination");
+    let installed_dir = plugin_dir.join("demo-session-provider");
+    std::fs::create_dir_all(&installed_dir).unwrap();
+    write_session_provider_plugin(&installed_dir, "demo-session-provider", "demo_tool");
+    let store = NiumaStore::new(test_path("plugin_remove_session_provider"));
+    store
+        .save_listener_config(
+            &ListenerConfig::default()
+                .with_tool_enabled(&ToolKind::Custom("demo_tool".to_string()), true),
+        )
+        .unwrap();
+    let router =
+        app_with_bus_and_plugin_dir(store.clone(), RuntimeEventBus::new(), plugin_dir.clone());
+
+    let body = serde_json::json!({
+        "plugin_id": "demo-session-provider"
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/remove")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["removed"], true);
+    assert!(!installed_dir.exists());
+    // session provider 有 tool_id，但没有 event_watcher，删除时不能复用工具监听开关。
+    assert!(store
+        .listener_config()
+        .unwrap()
+        .is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())));
+}
+
+#[tokio::test]
 async fn plugin_remove_rejects_builtin_plugin_id() {
     let router = app_with_bus_and_plugin_dir(
         NiumaStore::new(test_path("plugin_remove_builtin")),
@@ -2187,6 +2229,26 @@ fn write_demo_plugin(dir: &std::path::Path, id: &str) {
                 "args": ["./bin/demo.mjs"],
                 "platforms": ["macos", "windows", "linux"],
                 "capabilities": ["event_watcher"]
+            }}"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_session_provider_plugin(dir: &std::path::Path, id: &str, tool_id: &str) {
+    std::fs::write(
+        dir.join("plugin.json"),
+        format!(
+            r#"{{
+                "id": "{id}",
+                "kind": "tool",
+                "tool_id": "{tool_id}",
+                "display_name": "Session Provider",
+                "version": "0.1.0",
+                "command": "node",
+                "args": ["./bin/session.mjs"],
+                "platforms": ["macos", "windows", "linux"],
+                "capabilities": ["tool_session_list_provider", "tool_session_detail_provider"]
             }}"#
         ),
     )

@@ -18,9 +18,10 @@ use niuma_core::models::{
 };
 use niuma_core::notification_store::{NotificationRecordStatus, PluginNotificationResult};
 use niuma_core::plugin::{
-    import_external_plugin_dir, plugin_uses_listener_config, remove_external_plugin,
-    resolve_plugin_config, save_plugin_enabled_state, validate_plugin_config, PluginKind,
-    PluginManifest, PluginRegistry, PluginSource, ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
+    import_external_plugin_dir, listener_config_after_plugin_removed, plugin_uses_listener_config,
+    remove_external_plugin, resolve_plugin_config, save_plugin_enabled_state,
+    validate_plugin_config, PluginKind, PluginManifest, PluginRegistry, PluginSource,
+    ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
 };
 use niuma_core::runtime_event::StateChangeReason;
 use serde::{Deserialize, Serialize};
@@ -1345,22 +1346,15 @@ pub(crate) async fn remove_plugin(State(state): State<AppState>, body: Bytes) ->
         );
     }
 
-    let config = match plugin.tool_id.clone() {
-        Some(tool) => match state
-            .mutation_service
-            .set_tool_listening_enabled(tool, false)
-        {
-            Ok(result) => result.config,
-            Err(error) => {
-                return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
-            }
-        },
-        None => match state.store.listener_config() {
-            Ok(config) => config,
-            Err(error) => {
-                return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
-            }
-        },
+    let config = match listener_config_after_plugin_removed(
+        &state.store,
+        &state.mutation_service,
+        &plugin,
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
+        }
     };
     if let Err(error) = state.store.remove_plugin_runtime_state(&plugin.id) {
         return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));

@@ -12,10 +12,10 @@ use niuma_core::platform::locale::{
 };
 use niuma_core::plugin::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
-    plugin_uses_listener_config, remove_external_plugin, resolve_plugin_config,
-    save_plugin_enabled_state, validate_plugin_config, PluginCapability, PluginKind,
-    PluginManagementItem, PluginManifest, PluginRegistry, PluginRuntimeStatus, PluginSource,
-    ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
+    listener_config_after_plugin_removed, plugin_uses_listener_config, remove_external_plugin,
+    resolve_plugin_config, save_plugin_enabled_state, validate_plugin_config, PluginCapability,
+    PluginKind, PluginManagementItem, PluginManifest, PluginRegistry, PluginRuntimeStatus,
+    PluginSource, ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{
     PluginNotificationTestRequest, RuntimeEventBus, StateChangeReason,
@@ -581,15 +581,9 @@ fn remove_plugin_by_id(
             format!("不能移除内置插件：{plugin_id}"),
         );
     }
-    let config = match plugin.tool_id.clone() {
-        Some(tool) => match service.set_tool_listening_enabled(tool, false) {
-            Ok(result) => result.config,
-            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
-        },
-        None => match store.listener_config() {
-            Ok(config) => config,
-            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
-        },
+    let config = match listener_config_after_plugin_removed(store, service, &plugin) {
+        Ok(config) => config,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
     };
     if let Err(error) = store.remove_plugin_runtime_state(plugin_id) {
         return ApiResponse::fail(ApiErrorCode::System, error);

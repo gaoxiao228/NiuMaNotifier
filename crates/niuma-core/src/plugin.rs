@@ -706,6 +706,24 @@ pub fn save_plugin_enabled_state(
     store.save_plugin_enabled_map(&enabled_map)
 }
 
+pub fn listener_config_after_plugin_removed(
+    store: &NiumaStore,
+    service: &StateMutationService,
+    manifest: &PluginManifest,
+) -> Result<ListenerConfig, String> {
+    if plugin_uses_listener_config(manifest) {
+        let tool = manifest
+            .tool_id
+            .clone()
+            .ok_or_else(|| format!("工具监听插件缺少 tool_id：{}", manifest.id))?;
+        return service
+            .set_tool_listening_enabled(tool, false)
+            .map(|result| result.config);
+    }
+    // session provider 虽然有 tool_id，但不归工具监听开关管理，删除时只读取当前配置。
+    store.listener_config()
+}
+
 fn current_platform_id() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -1536,6 +1554,72 @@ mod tests {
 
         // 内置 provider 默认可用，不应被 event_watcher 的 Codex listener 开关牵连。
         assert!(provider.enabled);
+    }
+
+    #[test]
+    fn plugin_remove_session_provider_listener_config_keeps_tool_enabled() {
+        let store = NiumaStore::new(test_sqlite_path("remove_session_provider_listener_config"));
+        store
+            .save_listener_config(
+                &ListenerConfig::default()
+                    .with_tool_enabled(&ToolKind::Custom("demo_tool".to_string()), true),
+            )
+            .unwrap();
+        let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "demo-session-provider",
+                "kind": "tool",
+                "tool_id": "demo_tool",
+                "display_name": "Session Provider",
+                "version": "0.1.0",
+                "command": "node",
+                "capabilities": ["tool_session_list_provider", "tool_session_detail_provider"]
+            }"#,
+        )
+        .unwrap();
+
+        let config = listener_config_after_plugin_removed(&store, &service, &manifest).unwrap();
+
+        // session provider 的 tool_id 只用于会话数据归属，不应触发工具监听关闭。
+        assert!(config.is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())));
+        assert!(store
+            .listener_config()
+            .unwrap()
+            .is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())));
+    }
+
+    #[test]
+    fn plugin_remove_event_watcher_listener_config_disables_tool() {
+        let store = NiumaStore::new(test_sqlite_path("remove_event_watcher_listener_config"));
+        store
+            .save_listener_config(
+                &ListenerConfig::default()
+                    .with_tool_enabled(&ToolKind::Custom("demo_tool".to_string()), true),
+            )
+            .unwrap();
+        let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "demo-event-watcher",
+                "kind": "tool",
+                "tool_id": "demo_tool",
+                "display_name": "Event Watcher",
+                "version": "0.1.0",
+                "command": "node",
+                "capabilities": ["event_watcher"]
+            }"#,
+        )
+        .unwrap();
+
+        let config = listener_config_after_plugin_removed(&store, &service, &manifest).unwrap();
+
+        // event_watcher 才代表工具监听开关，删除时继续沿用原先的关闭逻辑。
+        assert!(!config.is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())));
+        assert!(!store
+            .listener_config()
+            .unwrap()
+            .is_tool_enabled(&ToolKind::Custom("demo_tool".to_string())));
     }
 
     #[test]
