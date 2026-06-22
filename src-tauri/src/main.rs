@@ -175,9 +175,14 @@ fn main() {
             let is_quitting = Arc::clone(&is_quitting);
             move |window, event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
-                    if !is_quitting.load(Ordering::SeqCst) {
+                    if tray::should_hide_window_on_close(
+                        window.label(),
+                        is_quitting.load(Ordering::SeqCst),
+                    ) {
                         api.prevent_close();
                         tray::hide_main_window(window);
+                    } else if window.label() == "event-center" {
+                        tray::sync_event_center_menu_visibility(&window.app_handle(), false);
                     }
                 }
             }

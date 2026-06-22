@@ -678,6 +678,10 @@ pub fn policy_for_exit_request(is_quitting: bool) -> BackgroundPolicy {
     }
 }
 
+pub fn should_hide_window_on_close(label: &str, is_quitting: bool) -> bool {
+    label == MAIN_WINDOW_LABEL && !is_quitting
+}
+
 pub fn enable_macos_default_menu() -> bool {
     true
 }
@@ -696,8 +700,9 @@ mod tests {
 
     use crate::tray::{
         current_status_from_store, event_center_label, language_preference_from_menu_id,
-        policy_for_exit_request, policy_for_main_visibility, tray_labels, tray_status_label,
-        BackgroundPolicy, TrayLocale, LANGUAGE_EN_MENU_ID, LANGUAGE_SYSTEM_MENU_ID,
+        policy_for_exit_request, policy_for_main_visibility, should_hide_window_on_close,
+        tray_labels, tray_status_label, BackgroundPolicy, TrayLocale, LANGUAGE_EN_MENU_ID,
+        LANGUAGE_SYSTEM_MENU_ID,
     };
 
     #[test]
@@ -811,6 +816,13 @@ mod tests {
             policy_for_exit_request(true),
             BackgroundPolicy::QuitApplication
         );
+    }
+
+    #[test]
+    fn only_main_window_hides_on_close() {
+        assert!(should_hide_window_on_close("main", false));
+        assert!(!should_hide_window_on_close("event-center", false));
+        assert!(!should_hide_window_on_close("main", true));
     }
 
     #[test]
