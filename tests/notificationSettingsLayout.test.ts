@@ -1,7 +1,6 @@
 import {
   formatNotificationTestResult,
-  renderNotificationPage,
-  renderNotificationResult
+  renderNotificationPage
 } from '../src/notificationView'
 
 class FakeElement {
@@ -61,9 +60,23 @@ renderNotificationPage({
       icon_url: null,
       config_schema: [],
       install_path: '/tmp/webhook-plugin'
+    },
+    {
+      id: 'approval-menu',
+      kind: 'notification',
+      tool_id: null,
+      display_name: 'Approval Menu',
+      version: '0.1.0',
+      source: 'external',
+      capabilities: ['event_consumer', 'approval_handler'],
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: null,
+      config_schema: [],
+      install_path: '/tmp/approval-menu'
     }
   ],
-  resultText: '',
   busyPluginId: null
 })
 
@@ -99,28 +112,12 @@ if (formElement.innerHTML.includes('data-action="save"')) {
   throw new Error('通知设置表单不应再渲染保存按钮')
 }
 
-if (formElement.innerHTML.includes('data-action="test"')) {
-  throw new Error('测试通知按钮应放到通知设置标题旁边，不应在表单底部')
+if (formElement.innerHTML.includes('data-notification-plugin-test')) {
+  throw new Error('主界面通知插件摘要不应渲染测试通知按钮，测试入口应放在插件管理页')
 }
 
-class FakeResultElement {
-  textContent = ''
-}
-
-class FakeFormWithResult {
-  resultElement = new FakeResultElement()
-
-  querySelector(selector: string) {
-    return selector === '.notification-result' ? this.resultElement : null
-  }
-}
-
-const formWithResult = new FakeFormWithResult()
-
-renderNotificationResult(formWithResult as unknown as HTMLElement, 'zh-CN', '已自动保存')
-
-if (formWithResult.resultElement.textContent !== '最近结果: 已自动保存') {
-  throw new Error('自动保存应只更新最近结果文本')
+if (formElement.innerHTML.includes('notification-result')) {
+  throw new Error('首页通知插件区域不应显示最近结果')
 }
 
 const mixedResult = formatNotificationTestResult('zh-CN', ['builtin-ntfy'], [

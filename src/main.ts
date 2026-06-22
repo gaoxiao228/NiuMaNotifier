@@ -35,7 +35,6 @@ import { renderDashboardShell } from './dashboardLayout'
 import {
   formatNotificationTestResult,
   renderNotificationHistoryOnly,
-  renderNotificationResult,
   renderNotificationPage as renderNotificationPageView
 } from './notificationView'
 import {
@@ -95,6 +94,8 @@ let pluginConfigs: Record<string, Record<string, unknown>> = {}
 let pluginBusyId: string | null = null
 let pluginActionBusyKey: string | null = null
 let pluginConfigBusyId: string | null = null
+let notificationTestBusyPluginId: string | null = null
+let notificationTestResultPluginId: string | null = null
 let pendingPluginTransition: PluginTransitionTarget | null = null
 let pluginImportBusy = false
 let pluginImportResultText = ''
@@ -140,7 +141,6 @@ const localSseUrlLabelEl = document.querySelector<HTMLElement>('#local-sse-url-l
 const localSseUrlEl = document.querySelector<HTMLElement>('#local-sse-url')
 const notificationSettingsTitleEl = document.querySelector<HTMLElement>('#notification-settings-title')
 const notificationFormEl = document.querySelector<HTMLElement>('#notification-form')
-const notificationTestButton = document.querySelector<HTMLButtonElement>('#notification-test')
 const statusSummaryEl = document.querySelector<HTMLElement>('#status-summary')
 const updatedEl = document.querySelector<HTMLElement>('#updated')
 const toolListenerListEl = document.querySelector<HTMLElement>('#tool-listener-list')
@@ -343,6 +343,9 @@ function renderPluginSettings() {
     resultText: pluginImportResultText,
     actionResultText: pluginActionResultText,
     configResultText: pluginConfigResultText,
+    notificationTestBusyPluginId,
+    notificationTestResultPluginId,
+    notificationTestResultText: notificationResultText,
     pluginConfigs
   })
   const importButton = document.querySelector<HTMLButtonElement>('#plugin-import')
@@ -430,22 +433,12 @@ function renderNotificationPage() {
     settingsTitleElement: notificationSettingsTitleEl,
     language: currentLanguage,
     notificationPlugins: notificationPlugins(),
-    resultText: notificationResultText,
     busyPluginId: pluginBusyId
   })
 }
 
 function notificationPlugins() {
   return plugins.filter((plugin) => plugin.kind === 'notification')
-}
-
-function enabledNotificationTestPlugins() {
-  return plugins.filter(
-    (plugin) =>
-      plugin.kind === 'notification' &&
-      plugin.enabled &&
-      plugin.capabilities.includes('notification_test')
-  )
 }
 
 function renderNotificationSettings() {
@@ -517,9 +510,6 @@ function applyLanguage() {
   }
   if (refreshButton) {
     refreshButton.textContent = t.refresh
-  }
-  if (notificationTestButton) {
-    notificationTestButton.textContent = t.testSend
   }
   clearBlockerButton!.textContent = clearBlockerNeedsConfirm
     ? t.clearBlockerConfirmAgain
@@ -622,6 +612,49 @@ settingsViewEl?.addEventListener('click', async (event) => {
       eventCenterToggleId,
       expanded
     )
+    return
+  }
+  const notificationTestButton = target?.closest<HTMLButtonElement>(
+    '[data-plugin-notification-test]'
+  )
+  const notificationTestPluginId = notificationTestButton?.dataset.pluginNotificationTest
+  if (notificationTestPluginId) {
+    if (pluginBusyId || notificationTestBusyPluginId) {
+      return
+    }
+    const t = translations[currentLanguage]
+    notificationTestBusyPluginId = notificationTestPluginId
+    notificationTestResultPluginId = notificationTestPluginId
+    notificationResultText = t.sending
+    renderPluginSettings()
+    try {
+      await refreshPlugins()
+      const plugin = plugins.find((item) => item.id === notificationTestPluginId)
+      if (
+        !plugin ||
+        plugin.kind !== 'notification' ||
+        !plugin.capabilities.includes('notification_test')
+      ) {
+        notificationResultText = t.noChannelsEnabled
+        return
+      }
+      // 测试通知属于单个插件的能力，入口放在插件管理卡片中。
+      await sendTestNotification(notificationTestPluginId)
+      notificationResultText = formatNotificationTestResult(currentLanguage, [
+        notificationTestPluginId
+      ], [])
+    } catch (error) {
+      notificationResultText = formatNotificationTestResult(currentLanguage, [], [
+        {
+          pluginId: notificationTestPluginId,
+          message: error instanceof Error ? error.message : String(error)
+        }
+      ])
+    } finally {
+      notificationTestBusyPluginId = null
+      renderPluginSettings()
+      renderNotificationSettings()
+    }
     return
   }
   const pluginConfigSaveId = target?.dataset.pluginConfigSave
@@ -860,11 +893,6 @@ toolListenerListEl?.addEventListener('change', async (event) => {
   }
 })
 
-function updateNotificationResult(text: string) {
-  notificationResultText = text
-  renderNotificationResult(notificationFormEl, currentLanguage, notificationResultText)
-}
-
 notificationFormEl?.addEventListener('change', async (event) => {
   const toggle = event.target instanceof HTMLInputElement ? event.target : null
   const pluginId = toggle?.dataset.notificationPluginToggle
@@ -906,54 +934,12 @@ notificationFormEl?.addEventListener('change', async (event) => {
   } catch (error) {
     pendingPluginTransition = null
     plugins = previousPlugins
-    updateNotificationResult(error instanceof Error ? error.message : String(error))
+    updatedEl!.textContent = error instanceof Error ? error.message : String(error)
   } finally {
     pendingPluginTransition = null
     pluginBusyId = null
     renderNotificationSettings()
     renderPluginSettings()
-  }
-})
-
-notificationTestButton?.addEventListener('click', async () => {
-  const t = translations[currentLanguage]
-  if (pluginBusyId) {
-    return
-  }
-  notificationTestButton.disabled = true
-  updateNotificationResult(t.sending)
-  try {
-    await refreshPlugins()
-    const enabledPlugins = enabledNotificationTestPlugins()
-    pluginBusyId = enabledPlugins[0]?.id ?? null
-    renderNotificationSettings()
-    if (enabledPlugins.length === 0) {
-      updateNotificationResult(t.noChannelsEnabled)
-      return
-    }
-    const sentPluginIds: string[] = []
-    const failedPlugins: { pluginId: string; message: string }[] = []
-    for (const item of enabledPlugins) {
-      pluginBusyId = item.id
-      renderNotificationSettings()
-      try {
-        await sendTestNotification(item.id)
-        sentPluginIds.push(item.id)
-      } catch (error) {
-        // 手动测试应尽量覆盖所有启用插件，单个插件失败不能阻断后续插件。
-        failedPlugins.push({
-          pluginId: item.id,
-          message: error instanceof Error ? error.message : String(error)
-        })
-      }
-    }
-    updateNotificationResult(formatNotificationTestResult(currentLanguage, sentPluginIds, failedPlugins))
-  } catch (error) {
-    updateNotificationResult(error instanceof Error ? error.message : String(error))
-  } finally {
-    pluginBusyId = null
-    renderNotificationSettings()
-    notificationTestButton.disabled = false
   }
 })
 

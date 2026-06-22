@@ -358,42 +358,40 @@ fn management_actions_for_manifest(manifest: &PluginManifest) -> Vec<PluginManag
         return Vec::new();
     }
     // 插件管理只展示 Niuma 可稳定检测的安装状态；Codex 信任是用户操作提示，不参与状态判断。
-    let (status_label, status_level) = match read_codex_hook_status(&codex_home()) {
-        Ok(status) if status.installed => (
-            "Hook 已安装".to_string(),
-            PluginManagementActionStatusLevel::Ok,
-        ),
-        Ok(_) => (
-            "Hook 未安装".to_string(),
-            PluginManagementActionStatusLevel::Neutral,
-        ),
-        Err(error) => (
-            format!("Hook 状态读取失败：{error}"),
-            PluginManagementActionStatusLevel::Error,
-        ),
-    };
-    vec![
-        PluginManagementAction {
-            id: "codex_hook_install".to_string(),
-            label: "安装/修复 Hook".to_string(),
-            description:
-                "接收 Codex 权限请求并回传允许/拒绝结果。安装后需在 Codex 中执行 /hooks 信任，信任后才能拦截授权请求。"
-                    .to_string(),
-            kind: PluginManagementActionKind::Primary,
-            enabled: true,
-            status_label: Some(status_label),
-            status_level,
-        },
-        PluginManagementAction {
+    let action = match read_codex_hook_status(&codex_home()) {
+        Ok(status) if status.installed => PluginManagementAction {
             id: "codex_hook_uninstall".to_string(),
             label: "移除 Hook".to_string(),
             description: "从 Codex 配置中移除 Niuma Hook，不影响插件启用状态。".to_string(),
             kind: PluginManagementActionKind::Danger,
             enabled: true,
-            status_label: None,
+            status_label: Some("Hook 已安装".to_string()),
+            status_level: PluginManagementActionStatusLevel::Ok,
+        },
+        Ok(_) => PluginManagementAction {
+            id: "codex_hook_install".to_string(),
+            label: "安装 Hook".to_string(),
+            description:
+                "接收 Codex 权限请求并回传允许/拒绝结果。安装后需在 Codex 中执行 /hooks 信任，信任后才能拦截授权请求。"
+                    .to_string(),
+            kind: PluginManagementActionKind::Primary,
+            enabled: true,
+            status_label: Some("Hook 未安装".to_string()),
             status_level: PluginManagementActionStatusLevel::Neutral,
         },
-    ]
+        Err(error) => PluginManagementAction {
+            id: "codex_hook_install".to_string(),
+            label: "安装 Hook".to_string(),
+            description:
+                "接收 Codex 权限请求并回传允许/拒绝结果。安装后需在 Codex 中执行 /hooks 信任，信任后才能拦截授权请求。"
+                    .to_string(),
+            kind: PluginManagementActionKind::Primary,
+            enabled: true,
+            status_label: Some(format!("Hook 状态读取失败：{error}")),
+            status_level: PluginManagementActionStatusLevel::Error,
+        },
+    };
+    vec![action]
 }
 
 impl PluginManifest {
@@ -1198,7 +1196,11 @@ mod tests {
     }
 
     #[test]
-    fn builtin_codex_management_item_declares_hook_actions() {
+    fn builtin_codex_management_item_declares_install_hook_action_when_uninstalled() {
+        let _guard = env_lock().lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_codex_home = std::env::var("CODEX_HOME").ok();
+        std::env::set_var("CODEX_HOME", temp.path());
         let registry = PluginRegistry::with_builtin_plugins();
 
         let items = registry.management_items(
@@ -1216,18 +1218,24 @@ mod tests {
             .iter()
             .map(|action| action.id.as_str())
             .collect::<Vec<_>>();
-        assert!(action_ids.contains(&"codex_hook_install"));
-        assert!(action_ids.contains(&"codex_hook_uninstall"));
+        assert_eq!(action_ids, vec!["codex_hook_install"]);
+        assert_eq!(codex.management_actions[0].label, "安装 Hook");
+        assert_eq!(
+            codex.management_actions[0].status_label.as_deref(),
+            Some("Hook 未安装")
+        );
 
         let bark = items
             .iter()
             .find(|plugin| plugin.id == "builtin-bark")
             .unwrap();
         assert!(bark.management_actions.is_empty());
+
+        restore_codex_home(previous_codex_home);
     }
 
     #[test]
-    fn builtin_codex_management_item_reports_installed_hook_without_trust_warning() {
+    fn builtin_codex_management_item_declares_remove_hook_action_when_installed() {
         let _guard = env_lock().lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let previous_codex_home = std::env::var("CODEX_HOME").ok();
@@ -1245,27 +1253,20 @@ mod tests {
             .iter()
             .find(|plugin| plugin.id == "builtin-codex")
             .unwrap();
-        let install_action = codex
-            .management_actions
-            .iter()
-            .find(|action| action.id == "codex_hook_install")
-            .unwrap();
+        assert_eq!(codex.management_actions.len(), 1);
+        let remove_action = &codex.management_actions[0];
 
-        assert_eq!(install_action.status_label.as_deref(), Some("Hook 已安装"));
+        assert_eq!(remove_action.id, "codex_hook_uninstall");
+        assert_eq!(remove_action.label, "移除 Hook");
+        assert_eq!(remove_action.status_label.as_deref(), Some("Hook 已安装"));
         assert_eq!(
-            install_action.status_level,
+            remove_action.status_level,
             PluginManagementActionStatusLevel::Ok
         );
-        assert!(install_action
-            .description
-            .contains("信任后才能拦截授权请求"));
+        assert!(remove_action.description.contains("不影响插件启用状态"));
         assert!(codex_config_file(temp.path()).exists() || codex_hooks_file(temp.path()).exists());
 
-        if let Some(value) = previous_codex_home {
-            std::env::set_var("CODEX_HOME", value);
-        } else {
-            std::env::remove_var("CODEX_HOME");
-        }
+        restore_codex_home(previous_codex_home);
     }
 
     #[test]
@@ -1420,6 +1421,14 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn restore_codex_home(previous_codex_home: Option<String>) {
+        if let Some(value) = previous_codex_home {
+            std::env::set_var("CODEX_HOME", value);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
     }
 
     fn builtin_codex_plugin_manifest_path() -> PathBuf {

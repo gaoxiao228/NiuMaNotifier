@@ -58,8 +58,8 @@ if (!html.includes('id="notification-settings-card"')) {
   throw new Error('通知设置应作为右侧独立面板存在')
 }
 
-if (!html.includes('id="notification-test"')) {
-  throw new Error('测试通知按钮应放在通知设置标题旁边')
+if (html.includes('id="notification-test"')) {
+  throw new Error('主界面通知面板标题旁不应继续渲染全局测试通知按钮')
 }
 
 if (html.includes('id="notification-manage"')) {

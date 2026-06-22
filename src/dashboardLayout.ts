@@ -50,10 +50,6 @@ export function renderDashboardShell() {
           <section id="notification-settings-card" class="side-card notification-card">
             <div class="notification-settings-heading">
               <h2 id="notification-settings-title"></h2>
-              <div class="notification-actions">
-                <!-- 通知插件在主界面只保留测试入口，配置管理统一放到设置页。 -->
-                <button id="notification-test" type="button" data-action="test"></button>
-              </div>
             </div>
             <div id="notification-form" class="notification-form"></div>
           </section>

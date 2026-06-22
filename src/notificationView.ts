@@ -17,7 +17,6 @@ export type NotificationPageRenderOptions = {
   settingsTitleElement: HTMLElement | null
   language: LanguageCode
   notificationPlugins: PluginManagementItem[]
-  resultText: string
   busyPluginId: string | null
 }
 
@@ -47,23 +46,7 @@ export function renderNotificationPage(options: NotificationPageRenderOptions) {
     <div class="notification-plugin-list">
       ${pluginList}
     </div>
-    <p class="notification-result">${escapeHtml(t.lastResult)}: ${escapeHtml(
-      options.resultText || t.none
-    )}</p>
   `
-}
-
-export function renderNotificationResult(
-  formElement: HTMLElement | null,
-  language: LanguageCode,
-  resultText: string
-) {
-  const resultElement = formElement?.querySelector<HTMLElement>('.notification-result')
-  if (!resultElement) {
-    return
-  }
-  const t = translations[language]
-  resultElement.textContent = `${t.lastResult}: ${resultText || t.none}`
 }
 
 export function formatNotificationTestResult(

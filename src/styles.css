@@ -558,13 +558,6 @@ select {
   margin: 0;
 }
 
-.notification-actions button {
-  font-size: 12px;
-  min-height: 32px;
-  padding: 5px 10px;
-  white-space: nowrap;
-}
-
 .notification-form,
 .notification-plugin-list {
   display: grid;
@@ -686,13 +679,6 @@ select {
 .notification-record-status.skipped {
   background: #e8eef7;
   color: #475569;
-}
-
-.notification-result {
-  color: #53627a;
-  font-size: 12px;
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
 }
 
 .settings-view {
@@ -982,6 +968,20 @@ select {
   background: #f8fafc;
   margin: 0;
   padding: 8px 10px;
+}
+
+.plugin-notification-test-action {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plugin-notification-test-result {
+  color: #53627a;
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .plugin-card-actions button {

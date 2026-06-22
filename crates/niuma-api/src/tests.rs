@@ -13,6 +13,7 @@ use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, Run
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
 use serde_json::Value;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -945,8 +946,12 @@ async fn listener_config_defaults_to_enabled_and_saves_disabled() {
     assert_eq!(get_value["data"]["tools"][0]["enabled"], false);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn plugins_list_returns_builtin_plugin_status() {
+    let _guard = env_lock().lock().unwrap();
+    let codex_home = test_dir("plugins_list_codex_home");
+    let previous_codex_home = std::env::var("CODEX_HOME").ok();
+    std::env::set_var("CODEX_HOME", &codex_home);
     let store = NiumaStore::new(test_path("plugins_list"));
     store
         .save_plugin_runtime_state(
@@ -1012,6 +1017,17 @@ async fn plugins_list_returns_builtin_plugin_status() {
         .unwrap()
         .iter()
         .any(|action| action["id"] == "codex_hook_install"));
+    assert!(codex["management_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action["label"] == "安装 Hook"));
+    assert!(!codex["management_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action["id"] == "codex_hook_uninstall"));
+    restore_codex_home(previous_codex_home);
 }
 
 #[tokio::test]
@@ -2043,6 +2059,19 @@ fn test_dir(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn restore_codex_home(previous_codex_home: Option<String>) {
+    if let Some(value) = previous_codex_home {
+        std::env::set_var("CODEX_HOME", value);
+    } else {
+        std::env::remove_var("CODEX_HOME");
+    }
 }
 
 fn write_demo_plugin(dir: &std::path::Path, id: &str) {

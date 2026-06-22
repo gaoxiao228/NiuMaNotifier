@@ -21,6 +21,9 @@ export type PluginManagementRenderOptions = {
   resultText: string
   actionResultText?: string
   configResultText: string
+  notificationTestBusyPluginId?: string | null
+  notificationTestResultPluginId?: string | null
+  notificationTestResultText?: string
   pluginConfigs: Record<string, Record<string, unknown>>
 }
 
@@ -158,6 +161,14 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
                 options.configResultText,
                 t
               )}
+              ${renderPluginNotificationTestAction(
+                plugin,
+                options.notificationTestBusyPluginId === plugin.id,
+                options.notificationTestResultPluginId === plugin.id
+                  ? options.notificationTestResultText ?? ''
+                  : '',
+                t
+              )}
             </div>
           </div>
         </article>
@@ -208,6 +219,33 @@ function renderPluginManagementActions(
       ${
         actionResultText
           ? `<p class="plugin-management-action-result">${escapeHtml(actionResultText)}</p>`
+          : ''
+      }
+    </div>
+  `
+}
+
+function renderPluginNotificationTestAction(
+  plugin: PluginManagementItem,
+  busy: boolean,
+  resultText: string,
+  t: (typeof translations)[LanguageCode]
+) {
+  if (plugin.kind !== 'notification' || !plugin.capabilities.includes('notification_test')) {
+    return ''
+  }
+  const runnable = plugin.enabled && (plugin.runtime_status === 'running' || plugin.runtime_status === 'starting')
+  return `
+    <div class="plugin-notification-test-action">
+      <button
+        type="button"
+        class="plugin-action-button secondary"
+        data-plugin-notification-test="${escapeHtml(plugin.id)}"
+        ${busy || !runnable ? 'disabled' : ''}
+      >${escapeHtml(busy ? t.sending : t.testSend)}</button>
+      ${
+        resultText
+          ? `<p class="plugin-notification-test-result">${escapeHtml(t.lastResult)}: ${escapeHtml(resultText)}</p>`
           : ''
       }
     </div>

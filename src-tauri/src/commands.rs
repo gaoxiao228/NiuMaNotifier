@@ -292,7 +292,11 @@ pub(crate) fn send_test_notification(
     runtime_state: tauri::State<'_, AppRuntimeState>,
     plugin_id: String,
 ) -> ApiResponse<serde_json::Value> {
-    request_plugin_test_notification(&runtime_state.runtime_events, &plugin_id)
+    request_plugin_test_notification(
+        &runtime_state.store,
+        &runtime_state.runtime_events,
+        &plugin_id,
+    )
 }
 
 #[tauri::command]
@@ -374,6 +378,7 @@ fn plugin_management_items_from_store(
 }
 
 fn request_plugin_test_notification(
+    store: &NiumaStore,
     runtime_events: &RuntimeEventBus,
     plugin_id: &str,
 ) -> ApiResponse<serde_json::Value> {
@@ -381,7 +386,6 @@ fn request_plugin_test_notification(
     if plugin_id.is_empty() {
         return ApiResponse::fail(ApiErrorCode::BusinessValidation, "plugin_id 不能为空");
     }
-    let store = default_store();
     let registry = current_plugin_registry();
     let Some(plugin) = registry.plugin_by_id(plugin_id).cloned() else {
         return ApiResponse::fail(
@@ -404,7 +408,7 @@ fn request_plugin_test_notification(
             format!("通知插件 {plugin_id} 不支持测试通知"),
         );
     }
-    if let Err(error) = validate_notification_test_plugin(&store, &plugin) {
+    if let Err(error) = validate_notification_test_plugin(store, &plugin) {
         return error;
     }
 
@@ -424,7 +428,7 @@ fn request_plugin_test_notification(
     };
     runtime_events.publish_plugin_notification_test(request);
 
-    match wait_for_plugin_notification_test_result(&store, plugin_id, &test_id) {
+    match wait_for_plugin_notification_test_result(store, plugin_id, &test_id) {
         Ok(result) => match result.status {
             niuma_core::notification_store::NotificationRecordStatus::Sent => {
                 ApiResponse::ok(json!({
@@ -781,6 +785,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(codex.runtime_status, PluginRuntimeStatus::Running);
+    }
+
+    #[test]
+    fn notification_test_validation_reads_shared_runtime_state() {
+        let store = NiumaStore::new(test_sqlite_path("notification_test_runtime_state"));
+        let mut enabled_map = BTreeMap::new();
+        enabled_map.insert("builtin-bark".to_string(), true);
+        store.save_plugin_enabled_map(&enabled_map).unwrap();
+        let mut config = serde_json::Map::new();
+        config.insert(
+            "device_key".to_string(),
+            serde_json::Value::String("device-key".to_string()),
+        );
+        store.save_plugin_config("builtin-bark", &config).unwrap();
+        store
+            .save_plugin_runtime_state(
+                "builtin-bark",
+                niuma_core::plugin::PluginRuntimeState::running(),
+            )
+            .unwrap();
+        let plugin = current_plugin_registry()
+            .plugin_by_id("builtin-bark")
+            .cloned()
+            .unwrap();
+
+        let result = validate_notification_test_plugin(&store, &plugin);
+
+        assert!(result.is_ok());
     }
 
     fn test_sqlite_path(name: &str) -> PathBuf {

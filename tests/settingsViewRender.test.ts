@@ -124,19 +124,11 @@ renderPluginManagement({
       management_actions: [
         {
           id: 'codex_hook_install',
-          label: '安装/修复 Hook',
+          label: '安装 Hook',
           description: '接收 Codex 权限请求并回传允许/拒绝结果',
           kind: 'primary',
           enabled: true,
           status_label: '未安装',
-          status_level: 'neutral'
-        },
-        {
-          id: 'codex_hook_uninstall',
-          label: '移除 Hook',
-          description: '从 Codex 配置中移除 Niuma Hook',
-          kind: 'danger',
-          enabled: true,
           status_level: 'neutral'
         }
       ]
@@ -289,12 +281,14 @@ if (
   !listElement.innerHTML.includes('class="plugin-management-actions"') ||
   !listElement.innerHTML.includes('data-plugin-action-plugin="builtin-codex"') ||
   !listElement.innerHTML.includes('data-plugin-action-id="codex_hook_install"') ||
-  !listElement.innerHTML.includes('安装/修复 Hook') ||
-  !listElement.innerHTML.includes('data-plugin-action-id="codex_hook_uninstall"') ||
-  !listElement.innerHTML.includes('移除 Hook') ||
+  !listElement.innerHTML.includes('安装 Hook') ||
   !listElement.innerHTML.includes('未安装')
 ) {
   throw new Error('插件管理页应按 management_actions 通用渲染插件管理动作')
+}
+
+if (listElement.innerHTML.includes('data-plugin-action-id="codex_hook_uninstall"')) {
+  throw new Error('同一 Hook 状态下插件管理页不应同时渲染安装和移除动作')
 }
 
 const codexCardStart = listElement.innerHTML.indexOf('data-plugin-id="builtin-codex"')
@@ -321,6 +315,17 @@ if (
   listElement.innerHTML.includes('data-plugin-toggle="builtin-ntfy"  disabled')
 ) {
   throw new Error('notification 插件应渲染可用开关')
+}
+
+if (
+  !listElement.innerHTML.includes('data-plugin-notification-test="builtin-bark"') ||
+  !listElement.innerHTML.includes('data-plugin-notification-test="builtin-ntfy"')
+) {
+  throw new Error('插件管理页应为支持 notification_test 的通知插件渲染测试通知按钮')
+}
+
+if (listElement.innerHTML.includes('data-plugin-notification-test="approval-menu"')) {
+  throw new Error('不支持 notification_test 的通知插件不应在插件管理页渲染测试通知按钮')
 }
 
 if (
