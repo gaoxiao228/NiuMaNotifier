@@ -151,7 +151,7 @@ fn state_from_attention_item(
     let event = public_events.get(&item.event_id);
     let session = runtime_states
         .iter()
-        .find(|state| state.session_id == item.session_id)
+        .find(|state| state.tool == item.tool && state.session_id == item.session_id)
         .map(StateSession::from);
     MainStatePayload {
         version: 0,
@@ -186,12 +186,14 @@ fn state_from_latest_activity(
         .as_deref()
         .and_then(|event_id| public_events.get(event_id));
     let session = activity
-        .session_id
-        .as_deref()
-        .and_then(|session_id| {
+        .tool
+        .as_ref()
+        .zip(activity.session_id.as_deref())
+        // latest activity 来源于具体事件，必须用 tool + session_id 找回同一个运行态。
+        .and_then(|(tool, session_id)| {
             runtime_states
                 .iter()
-                .find(|state| state.session_id == session_id)
+                .find(|state| &state.tool == tool && state.session_id == session_id)
         })
         .map(StateSession::from);
     MainStatePayload {
@@ -630,6 +632,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn attention_main_state_uses_matching_tool_for_same_session_id() {
+        let store = NiumaStore::new(test_sqlite_path("main_state_attention_same_session_tool"));
+        enable_codex_listener(&store);
+        store
+            .append_event(sample_event(
+                "codex-running-same-session",
+                EventType::SessionStarted,
+                "Codex started",
+                1_000,
+            ))
+            .unwrap();
+        store
+            .append_event(sample_tool_event(
+                ToolKind::ClaudeCode,
+                "claude-approval-same-session",
+                EventType::ApprovalRequested,
+                "ClaudeCode waits for approval",
+                2_000,
+            ))
+            .unwrap();
+
+        let state = MainStateService::new(store)
+            .current_state(at(2_100))
+            .unwrap();
+
+        // attention 回查运行态时必须同时匹配 tool 和 session_id，避免拿到先写入的 Codex session。
+        assert_eq!(state.status, MainStateStatus::WaitingApproval);
+        assert_eq!(state.session.unwrap().tool, ToolKind::ClaudeCode);
+    }
+
+    #[test]
+    fn latest_activity_main_state_uses_matching_tool_for_same_session_id() {
+        let store = NiumaStore::new(test_sqlite_path("main_state_latest_same_session_tool"));
+        enable_codex_listener(&store);
+        store
+            .append_event(sample_event(
+                "codex-running-same-session",
+                EventType::SessionStarted,
+                "Codex started",
+                1_000,
+            ))
+            .unwrap();
+        store
+            .append_event(sample_tool_event(
+                ToolKind::ClaudeCode,
+                "claude-completed-same-session",
+                EventType::AssistantMessageCompleted,
+                "ClaudeCode completed",
+                2_000,
+            ))
+            .unwrap();
+
+        let state = MainStateService::new(store)
+            .current_state(at(2_010))
+            .unwrap();
+
+        // latest activity 也要携带 tool，否则同 session_id 下会展示成另一个工具的 session。
+        assert_eq!(state.status, MainStateStatus::Completed);
+        assert_eq!(state.session.unwrap().tool, ToolKind::ClaudeCode);
+    }
+
     fn sample_event(id: &str, event_type: EventType, summary: &str, timestamp: i64) -> NiumaEvent {
         NiumaEvent {
             id: id.to_string(),
@@ -650,6 +714,18 @@ mod tests {
             payload_ref: None,
             created_at: at(timestamp),
         }
+    }
+
+    fn sample_tool_event(
+        tool: ToolKind,
+        id: &str,
+        event_type: EventType,
+        summary: &str,
+        timestamp: i64,
+    ) -> NiumaEvent {
+        let mut event = sample_event(id, event_type, summary, timestamp);
+        event.tool = tool;
+        event
     }
 
     fn sample_approval_request(id: &str, status: ApprovalStatus) -> ApprovalRequest {

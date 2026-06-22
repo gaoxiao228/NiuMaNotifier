@@ -204,28 +204,38 @@ impl NiumaStore {
             .iter()
             .filter(|session| session.status == RuntimeStateStatus::Running)
             .filter(|session| now - session.last_activity_at >= timeout)
-            .map(|session| NiumaEvent {
-                id: format!(
-                    "event_stale_{}_{}",
-                    session.session_id,
-                    now.timestamp_millis()
-                ),
-                dedupe_key: format!("stale:{}:{}", session.session_id, now.timestamp()),
-                source: "codex-session-stale-sweeper".to_string(),
-                tool: session.tool.clone(),
-                session_id: session.session_id.clone(),
-                project_path: session.project_path.clone(),
-                project_name: session.project_name.clone(),
-                event_type: EventType::SessionStaled,
-                severity: "info".to_string(),
-                summary: "Codex session became stale".to_string(),
-                content: None,
-                error_message: None,
-                attention_resolve_key: None,
-                completion_reason: None,
-                failure_reason: None,
-                payload_ref: None,
-                created_at: now,
+            .map(|session| {
+                let tool_key = session.tool.as_str();
+                NiumaEvent {
+                    // 同一 session_id 可同时存在于多个工具，stale 事件也必须带 tool 防止去重冲突。
+                    id: format!(
+                        "event_stale_{}_{}_{}",
+                        tool_key,
+                        session.session_id,
+                        now.timestamp_millis()
+                    ),
+                    dedupe_key: format!(
+                        "stale:{}:{}:{}",
+                        tool_key,
+                        session.session_id,
+                        now.timestamp()
+                    ),
+                    source: "codex-session-stale-sweeper".to_string(),
+                    tool: session.tool.clone(),
+                    session_id: session.session_id.clone(),
+                    project_path: session.project_path.clone(),
+                    project_name: session.project_name.clone(),
+                    event_type: EventType::SessionStaled,
+                    severity: "info".to_string(),
+                    summary: "Codex session became stale".to_string(),
+                    content: None,
+                    error_message: None,
+                    attention_resolve_key: None,
+                    completion_reason: None,
+                    failure_reason: None,
+                    payload_ref: None,
+                    created_at: now,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -522,25 +532,16 @@ impl NiumaStore {
     pub fn clear_tool_state(&self, tool: &ToolKind) -> Result<StoredState, String> {
         let mut runtime = self.runtime()?;
         let mut state = runtime.state.clone();
-        let removed_session_ids = state
-            .runtime_states
-            .iter()
-            .filter(|session| &session.tool == tool)
-            .map(|session| session.session_id.clone())
-            .collect::<std::collections::HashSet<_>>();
-
         state.runtime_states.retain(|session| &session.tool != tool);
         state
             .approval_requests
             .retain(|request| &request.tool != tool);
-        state
-            .attention_items
-            .retain(|item| !removed_session_ids.contains(&item.session_id));
+        state.attention_items.retain(|item| &item.tool != tool);
         if state
             .latest_activity
             .as_ref()
-            .and_then(|activity| activity.session_id.as_deref())
-            .map(|session_id| removed_session_ids.contains(session_id))
+            .and_then(|activity| activity.tool.as_ref())
+            .map(|activity_tool| activity_tool == tool)
             .unwrap_or(false)
         {
             state.latest_activity = Some(LatestActivity::idle());

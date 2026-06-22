@@ -558,6 +558,50 @@ fn running_from_same_session_clears_all_attention_items_for_that_session() {
 }
 
 #[test]
+fn running_from_other_tool_same_session_does_not_clear_attention() {
+    let store = NiumaStore::new(test_sqlite_path(
+        "running_other_tool_same_session_keeps_attention",
+    ));
+    store
+        .append_event(sample_session_event(
+            "dedupe-codex-approval-same",
+            "shared-session",
+            EventType::ApprovalRequested,
+            1_000,
+        ))
+        .unwrap();
+
+    let state = store
+        .append_event(sample_tool_event(
+            ToolKind::ClaudeCode,
+            "dedupe-claude-running-same",
+            "shared-session",
+            EventType::SessionStarted,
+            2_000,
+        ))
+        .unwrap();
+
+    // 相同 session_id 只在同一工具内代表同一个运行态，跨工具事件不能清掉 Codex 的关注项。
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(state.attention_items[0].tool, ToolKind::Codex);
+    assert_eq!(
+        state.attention_items[0].status,
+        RuntimeStateStatus::WaitingApproval
+    );
+    assert_eq!(
+        state
+            .runtime_states
+            .iter()
+            .find(
+                |session| session.tool == ToolKind::Codex && session.session_id == "shared-session"
+            )
+            .unwrap()
+            .status,
+        RuntimeStateStatus::WaitingApproval
+    );
+}
+
+#[test]
 fn activity_from_same_session_clears_waiting_input() {
     let store = NiumaStore::new(test_sqlite_path("activity_clears_waiting_input"));
     store
@@ -583,6 +627,42 @@ fn activity_from_same_session_clears_waiting_input() {
     assert_eq!(state.runtime_states[0].status, RuntimeStateStatus::Running);
     assert_eq!(snapshot.status, RuntimeStateStatus::Running);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-a"));
+}
+
+#[test]
+fn resolved_activity_from_other_tool_same_session_keeps_unkeyed_approval() {
+    let store = NiumaStore::new(test_sqlite_path(
+        "resolved_other_tool_same_session_keeps_approval",
+    ));
+    store
+        .append_event(sample_session_event(
+            "dedupe-codex-unkeyed-approval",
+            "shared-session",
+            EventType::ApprovalRequested,
+            1_000,
+        ))
+        .unwrap();
+
+    let state = store
+        .append_event(
+            sample_tool_event(
+                ToolKind::ClaudeCode,
+                "dedupe-claude-resolved-same",
+                "shared-session",
+                EventType::SessionActivity,
+                2_000,
+            )
+            .with_attention_resolve_key("claude_permission:shared-session:call-1"),
+        )
+        .unwrap();
+
+    // ClaudeCode 的恢复事件不能按 session_id 误清理 Codex 的未带 key 审批项。
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(state.attention_items[0].tool, ToolKind::Codex);
+    assert_eq!(
+        state.attention_items[0].status,
+        RuntimeStateStatus::WaitingApproval
+    );
 }
 
 #[test]
@@ -809,6 +889,40 @@ fn stale_does_not_hide_attention_from_other_sessions() {
 }
 
 #[test]
+fn stale_from_other_tool_same_session_does_not_hide_attention() {
+    let store = NiumaStore::new(test_sqlite_path(
+        "stale_other_tool_same_session_keeps_attention",
+    ));
+    store
+        .append_event(sample_session_event(
+            "dedupe-codex-input-same",
+            "shared-session",
+            EventType::InputRequested,
+            1_000,
+        ))
+        .unwrap();
+    store
+        .append_event(sample_tool_event(
+            ToolKind::ClaudeCode,
+            "dedupe-claude-stale-same",
+            "shared-session",
+            EventType::SessionStaled,
+            2_000,
+        ))
+        .unwrap();
+
+    let state = store.load().unwrap();
+
+    // stale 清理范围必须限定到同一 tool + session_id，不能隐藏另一个工具的阻塞项。
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(state.attention_items[0].tool, ToolKind::Codex);
+    assert_eq!(
+        store.internal_status_snapshot().unwrap().status,
+        RuntimeStateStatus::WaitingInput
+    );
+}
+
+#[test]
 fn mark_stale_running_sessions_only_stales_old_running_sessions() {
     let store = NiumaStore::new(test_sqlite_path("mark_stale_running_sessions"));
     store
@@ -868,6 +982,48 @@ fn mark_stale_running_sessions_only_stales_old_running_sessions() {
             .status,
         RuntimeStateStatus::Completed
     );
+}
+
+#[test]
+fn mark_stale_running_sessions_stales_same_session_id_for_each_tool() {
+    let store = NiumaStore::new(test_sqlite_path("mark_stale_same_session_each_tool"));
+    store
+        .append_event(sample_session_event(
+            "dedupe-codex-running-shared",
+            "shared-session",
+            EventType::SessionStarted,
+            1_000,
+        ))
+        .unwrap();
+    store
+        .append_event(sample_tool_event(
+            ToolKind::ClaudeCode,
+            "dedupe-claude-running-shared",
+            "shared-session",
+            EventType::SessionStarted,
+            1_000,
+        ))
+        .unwrap();
+
+    let now = Utc.timestamp_opt(2_000, 0).single().unwrap();
+    let result = store
+        .mark_stale_running_sessions_with_result(now, chrono::Duration::minutes(10))
+        .unwrap();
+
+    // stale 事件的 id/dedupe_key 必须带 tool，否则第二个同 session_id 运行态会被去重跳过。
+    assert_eq!(result.staled_count, 2);
+    for tool in [ToolKind::Codex, ToolKind::ClaudeCode] {
+        assert_eq!(
+            result
+                .state
+                .runtime_states
+                .iter()
+                .find(|session| session.tool == tool && session.session_id == "shared-session")
+                .unwrap()
+                .status,
+            RuntimeStateStatus::Stale
+        );
+    }
 }
 
 #[test]
@@ -1462,6 +1618,43 @@ fn clear_tool_state_removes_only_codex_aggregation() {
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("claude-session")
+    );
+}
+
+#[test]
+fn clear_tool_state_keeps_other_tool_with_same_session_id() {
+    let store = NiumaStore::new(test_sqlite_path(
+        "clear_tool_state_same_session_keeps_other_tool",
+    ));
+    store
+        .append_event(sample_session_event(
+            "dedupe-codex-approval-shared-clear",
+            "shared-session",
+            EventType::ApprovalRequested,
+            1_000,
+        ))
+        .unwrap();
+    store
+        .append_event(sample_tool_event(
+            ToolKind::ClaudeCode,
+            "dedupe-claude-input-shared-clear",
+            "shared-session",
+            EventType::InputRequested,
+            2_000,
+        ))
+        .unwrap();
+
+    let state = store.clear_tool_state(&ToolKind::Codex).unwrap();
+
+    // 清理指定工具时要按 tool 区分运行态身份，保留另一个工具同 session_id 的关注项。
+    assert_eq!(state.runtime_states.len(), 1);
+    assert_eq!(state.runtime_states[0].tool, ToolKind::ClaudeCode);
+    assert_eq!(state.runtime_states[0].session_id, "shared-session");
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(state.attention_items[0].tool, ToolKind::ClaudeCode);
+    assert_eq!(
+        store.internal_status_snapshot().unwrap().status,
+        RuntimeStateStatus::WaitingInput
     );
 }
 

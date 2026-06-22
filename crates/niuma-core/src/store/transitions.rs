@@ -1,5 +1,6 @@
 use crate::models::{
     AttentionItem, EventType, LatestActivity, NiumaEvent, RuntimeStateItem, RuntimeStateStatus,
+    ToolKind,
 };
 use crate::store::StoredState;
 
@@ -76,7 +77,7 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
         return;
     }
     if matches!(event.event_type, EventType::ApprovalReturnedToCodex) {
-        restore_session_attention_status(state, &event.session_id);
+        restore_session_attention_status(state, &event.tool, &event.session_id);
         return;
     }
 
@@ -91,45 +92,64 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
         }
         RuntimeStateStatus::Running | RuntimeStateStatus::Completed => {
             if let Some(resolve_key) = event.attention_resolve_key.as_deref() {
-                // 授权恢复事件只移除对应审批；保留同 session 的等待输入和错误。
+                // 授权恢复事件只移除同一运行态身份下的对应审批，保留其他工具的同名 session。
                 state.attention_items.retain(|item| {
-                    item.attention_resolve_key.as_deref() != Some(resolve_key)
-                        && !is_unkeyed_approval_for_session(item, &event.session_id)
+                    !attention_item_matches_event(item, event)
+                        || (item.attention_resolve_key.as_deref() != Some(resolve_key)
+                            && !is_unkeyed_approval_for_session(
+                                item,
+                                &event.tool,
+                                &event.session_id,
+                            ))
                 });
             } else {
-                state
-                    .attention_items
-                    .retain(|item| item.session_id != event.session_id || is_keyed_approval(item));
+                state.attention_items.retain(|item| {
+                    !attention_item_matches_event(item, event) || is_keyed_approval(item)
+                });
             }
-            restore_session_attention_status(state, &event.session_id);
+            restore_session_attention_status(state, &event.tool, &event.session_id);
             state.latest_activity = Some(LatestActivity::from_event(event, status));
         }
         RuntimeStateStatus::Stale => {
-            // stale 是内部清理态：移除当前 session 的残留关注项，并只在命中当前活动时回到 idle。
+            // stale 是内部清理态：移除当前运行态身份的残留关注项，并只在命中当前活动时回到 idle。
             state
                 .attention_items
-                .retain(|item| item.session_id != event.session_id);
+                .retain(|item| !attention_item_matches_event(item, event));
             if state
                 .latest_activity
                 .as_ref()
-                .and_then(|activity| activity.session_id.as_deref())
-                == Some(event.session_id.as_str())
+                .map(|activity| latest_activity_matches_event(activity, event))
+                .unwrap_or(false)
             {
                 state.latest_activity = Some(LatestActivity::idle());
             }
         }
         RuntimeStateStatus::Idle => {
-            // 手动测试的 idle 表示当前 session 已无活动，需要清掉它自己的阻塞项。
+            // 手动测试的 idle 表示当前运行态身份已无活动，需要清掉它自己的阻塞项。
             state
                 .attention_items
-                .retain(|item| item.session_id != event.session_id);
+                .retain(|item| !attention_item_matches_event(item, event));
             state.latest_activity = Some(LatestActivity::idle());
         }
     }
 }
 
-fn is_unkeyed_approval_for_session(item: &AttentionItem, session_id: &str) -> bool {
-    item.session_id == session_id
+fn attention_item_matches_event(item: &AttentionItem, event: &NiumaEvent) -> bool {
+    item.tool == event.tool && item.session_id == event.session_id
+}
+
+fn latest_activity_matches_event(activity: &LatestActivity, event: &NiumaEvent) -> bool {
+    activity.tool.as_ref() == Some(&event.tool)
+        && activity.session_id.as_deref() == Some(event.session_id.as_str())
+}
+
+fn is_unkeyed_approval_for_session(
+    item: &AttentionItem,
+    tool: &ToolKind,
+    session_id: &str,
+) -> bool {
+    &item.tool == tool
+        && item.session_id == session_id
         && item.status == RuntimeStateStatus::WaitingApproval
         && item.attention_resolve_key.is_none()
 }
@@ -138,11 +158,11 @@ fn is_keyed_approval(item: &AttentionItem) -> bool {
     item.status == RuntimeStateStatus::WaitingApproval && item.attention_resolve_key.is_some()
 }
 
-fn restore_session_attention_status(state: &mut StoredState, session_id: &str) {
+fn restore_session_attention_status(state: &mut StoredState, tool: &ToolKind, session_id: &str) {
     let Some(attention_status) = state
         .attention_items
         .iter()
-        .find(|item| item.session_id == session_id)
+        .find(|item| &item.tool == tool && item.session_id == session_id)
         .map(|item| item.status.clone())
     else {
         return;
@@ -150,7 +170,7 @@ fn restore_session_attention_status(state: &mut StoredState, session_id: &str) {
     if let Some(session) = state
         .runtime_states
         .iter_mut()
-        .find(|session| session.session_id == session_id)
+        .find(|session| &session.tool == tool && session.session_id == session_id)
     {
         // 运行态列表应反映仍未解决的阻塞项，避免最新普通活动把等待批准显示成运行中。
         session.status = attention_status;

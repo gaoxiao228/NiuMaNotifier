@@ -79,6 +79,7 @@ pub struct RuntimeStateItem {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AttentionItem {
     pub event_id: String,
+    pub tool: ToolKind,
     pub session_id: String,
     pub status: RuntimeStateStatus,
     pub summary: String,
@@ -92,6 +93,7 @@ impl AttentionItem {
     pub fn from_event(event: &NiumaEvent, status: RuntimeStateStatus) -> Self {
         Self {
             event_id: event.id.clone(),
+            tool: event.tool.clone(),
             session_id: event.session_id.clone(),
             status,
             summary: event.summary.clone(),
@@ -174,6 +176,9 @@ pub struct ApprovalDecision {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LatestActivity {
     pub event_id: Option<String>,
+    // idle 没有归属工具；真实运行态事件必须携带工具，避免同 session_id 跨工具串扰。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolKind>,
     pub session_id: Option<String>,
     pub status: RuntimeStateStatus,
     pub updated_at: Option<DateTime<Utc>>,
@@ -183,6 +188,7 @@ impl LatestActivity {
     pub fn idle() -> Self {
         Self {
             event_id: None,
+            tool: None,
             session_id: None,
             status: RuntimeStateStatus::Idle,
             updated_at: None,
@@ -192,6 +198,7 @@ impl LatestActivity {
     pub fn from_event(event: &NiumaEvent, status: RuntimeStateStatus) -> Self {
         Self {
             event_id: Some(event.id.clone()),
+            tool: Some(event.tool.clone()),
             session_id: Some(event.session_id.clone()),
             status,
             updated_at: Some(event.created_at),
