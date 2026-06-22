@@ -14,12 +14,14 @@ use niuma_core::store::NiumaStore;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 const MAIN_WINDOW_LABEL: &str = "main";
+const EVENT_CENTER_WINDOW_LABEL: &str = "event-center";
 const LANGUAGE_CHANGED_EVENT: &str = "niuma-language-changed";
 const TRAY_ID: &str = "main-tray";
 const SHOW_MENU_ID: &str = "tray-show-window";
+const EVENT_CENTER_MENU_ID: &str = "tray-show-event-center";
 const STATUS_MENU_ID: &str = "tray-current-status";
 const LANGUAGE_MENU_ID: &str = "tray-language";
 const LANGUAGE_SYSTEM_MENU_ID: &str = "tray-language-system";
@@ -46,6 +48,10 @@ pub enum TrayLocale {
     Ja,
     Ko,
     De,
+}
+
+struct EventCenterTrayMenuItem<R: Runtime> {
+    item: CheckMenuItem<R>,
 }
 
 impl TrayLocale {
@@ -77,6 +83,14 @@ pub fn register_tray<R: Runtime>(
     let status = current_status_from_store(&store, Utc::now());
     let labels = tray_labels(&status, locale);
     let show_item = MenuItem::with_id(app, SHOW_MENU_ID, labels.show_window, true, None::<&str>)?;
+    let event_center_item = CheckMenuItem::with_id(
+        app,
+        EVENT_CENTER_MENU_ID,
+        labels.event_center,
+        true,
+        false,
+        None::<&str>,
+    )?;
     let status_item =
         MenuItem::with_id(app, STATUS_MENU_ID, labels.menu_status, false, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -94,6 +108,7 @@ pub fn register_tray<R: Runtime>(
         app,
         &[
             &show_item,
+            &event_center_item,
             &status_item,
             &separator,
             &language_menu,
@@ -104,11 +119,15 @@ pub fn register_tray<R: Runtime>(
     let icon = tray_icon_for_status(status)?;
     let menu_items = TrayMenuItems {
         show_item: show_item.clone(),
+        event_center_item: event_center_item.clone(),
         status_item: status_item.clone(),
         language_menu: language_menu.clone(),
         quit_item: quit_item.clone(),
         language_items: language_items.clone(),
     };
+    let _ = app.manage(EventCenterTrayMenuItem {
+        item: event_center_item.clone(),
+    });
 
     let menu_event_store = store.clone();
     let tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -121,6 +140,10 @@ pub fn register_tray<R: Runtime>(
             let menu_items = menu_items.clone();
             move |app, event| match event.id().as_ref() {
                 SHOW_MENU_ID => show_main_window(app),
+                EVENT_CENTER_MENU_ID => {
+                    let visible = toggle_event_center_window(app);
+                    let _ = menu_items.event_center_item.set_checked(visible);
+                }
                 QUIT_MENU_ID => {
                     is_quitting.store(true, Ordering::SeqCst);
                     app.exit(0);
@@ -175,6 +198,44 @@ pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+pub fn toggle_event_center_window<R: Runtime>(app: &AppHandle<R>) -> bool {
+    if let Some(window) = app.get_webview_window(EVENT_CENTER_WINDOW_LABEL) {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.close();
+            return false;
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+        return true;
+    }
+
+    match WebviewWindowBuilder::new(
+        app,
+        EVENT_CENTER_WINDOW_LABEL,
+        WebviewUrl::App("event-center.html".into()),
+    )
+    .title("NiumaNotifier Event Center")
+    .inner_size(820.0, 560.0)
+    .min_inner_size(640.0, 420.0)
+    .build()
+    {
+        Ok(window) => {
+            let _ = window.set_focus();
+            true
+        }
+        Err(error) => {
+            eprintln!("NiumaNotifier event center window failed: {error}");
+            false
+        }
+    }
+}
+
+pub fn sync_event_center_menu_visibility<R: Runtime>(app: &AppHandle<R>, visible: bool) {
+    if let Some(item) = app.try_state::<EventCenterTrayMenuItem<R>>() {
+        let _ = item.item.set_checked(visible);
     }
 }
 
@@ -248,6 +309,7 @@ fn refresh_tray_labels<R: Runtime>(
     let _ = tray.set_title(Some(labels.title));
     let _ = tray.set_tooltip(Some(labels.tooltip.clone()));
     let _ = menu_items.show_item.set_text(labels.show_window);
+    let _ = menu_items.event_center_item.set_text(labels.event_center);
     let _ = menu_items.status_item.set_text(labels.menu_status.clone());
     let _ = menu_items.language_menu.set_text(labels.language);
     let _ = menu_items.quit_item.set_text(labels.quit);
@@ -282,6 +344,7 @@ struct TrayLabels {
     menu_status: String,
     tooltip: String,
     show_window: &'static str,
+    event_center: &'static str,
     language: &'static str,
     quit: &'static str,
 }
@@ -293,6 +356,7 @@ fn tray_labels(status: &SessionStatus, locale: TrayLocale) -> TrayLabels {
         menu_status: format!("{}{}", current_status_prefix(locale), title),
         tooltip: format!("NiumaNotifier - {}{}", current_status_prefix(locale), title),
         show_window: show_window_label(locale),
+        event_center: event_center_label(locale),
         language: language_menu_label(locale),
         quit: quit_label(locale),
     }
@@ -379,6 +443,17 @@ fn show_window_label(locale: TrayLocale) -> &'static str {
     }
 }
 
+pub fn event_center_label(locale: TrayLocale) -> &'static str {
+    match locale {
+        TrayLocale::ZhCn => "显示事件中心",
+        TrayLocale::ZhTw => "顯示事件中心",
+        TrayLocale::En => "Show Event Center",
+        TrayLocale::Ja => "イベントセンターを表示",
+        TrayLocale::Ko => "이벤트 센터 표시",
+        TrayLocale::De => "Ereigniszentrum anzeigen",
+    }
+}
+
 fn quit_label(locale: TrayLocale) -> &'static str {
     match locale {
         TrayLocale::ZhCn => "退出 NiumaNotifier",
@@ -392,6 +467,7 @@ fn quit_label(locale: TrayLocale) -> &'static str {
 
 struct TrayMenuItems<R: Runtime> {
     show_item: MenuItem<R>,
+    event_center_item: CheckMenuItem<R>,
     status_item: MenuItem<R>,
     language_menu: Submenu<R>,
     quit_item: MenuItem<R>,
@@ -412,6 +488,7 @@ impl<R: Runtime> Clone for TrayMenuItems<R> {
     fn clone(&self) -> Self {
         Self {
             show_item: self.show_item.clone(),
+            event_center_item: self.event_center_item.clone(),
             status_item: self.status_item.clone(),
             language_menu: self.language_menu.clone(),
             quit_item: self.quit_item.clone(),
@@ -618,9 +695,9 @@ mod tests {
     use niuma_core::store::NiumaStore;
 
     use crate::tray::{
-        current_status_from_store, language_preference_from_menu_id, policy_for_exit_request,
-        policy_for_main_visibility, tray_labels, tray_status_label, BackgroundPolicy, TrayLocale,
-        LANGUAGE_EN_MENU_ID, LANGUAGE_SYSTEM_MENU_ID,
+        current_status_from_store, event_center_label, language_preference_from_menu_id,
+        policy_for_exit_request, policy_for_main_visibility, tray_labels, tray_status_label,
+        BackgroundPolicy, TrayLocale, LANGUAGE_EN_MENU_ID, LANGUAGE_SYSTEM_MENU_ID,
     };
 
     #[test]
@@ -634,6 +711,7 @@ mod tests {
         assert_eq!(labels.menu_status, "当前状态：运行中");
         assert_eq!(labels.tooltip, "NiumaNotifier - 当前状态：运行中");
         assert_eq!(labels.show_window, "显示 NiumaNotifier");
+        assert_eq!(labels.event_center, "显示事件中心");
         assert_eq!(labels.language, "语言");
         assert_eq!(labels.quit, "退出 NiumaNotifier");
     }
@@ -649,8 +727,20 @@ mod tests {
         assert_eq!(labels.menu_status, "Current status: Error");
         assert_eq!(labels.tooltip, "NiumaNotifier - Current status: Error");
         assert_eq!(labels.show_window, "Show NiumaNotifier");
+        assert_eq!(labels.event_center, "Show Event Center");
         assert_eq!(labels.language, "Language");
         assert_eq!(labels.quit, "Quit NiumaNotifier");
+    }
+
+    #[test]
+    fn event_center_tray_label_is_localized() {
+        assert_eq!(event_center_label(TrayLocale::ZhTw), "顯示事件中心");
+        assert_eq!(event_center_label(TrayLocale::Ja), "イベントセンターを表示");
+        assert_eq!(event_center_label(TrayLocale::Ko), "이벤트 센터 표시");
+        assert_eq!(
+            event_center_label(TrayLocale::De),
+            "Ereigniszentrum anzeigen"
+        );
     }
 
     #[test]
