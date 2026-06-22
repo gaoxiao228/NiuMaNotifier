@@ -362,13 +362,12 @@ fn management_actions_for_manifest(manifest: &PluginManifest) -> Vec<PluginManag
         Ok(status) if status.installed => PluginManagementAction {
             id: "codex_hook_uninstall".to_string(),
             label: "移除 Hook".to_string(),
-            description:
-                "Niuma Hook 已写入 Codex 配置。仍需在 Codex 中执行 /hooks 并信任 Niuma Hook，信任后才能接收权限请求。"
-                    .to_string(),
+            description: "Hook 已安装到 Codex 配置。首次使用前，请在 Codex 的 /hooks 中信任 Niuma Hook。"
+                .to_string(),
             kind: PluginManagementActionKind::Danger,
             enabled: true,
-            status_label: Some("Hook 已安装，需在 /hooks 中信任".to_string()),
-            status_level: PluginManagementActionStatusLevel::Warning,
+            status_label: Some("Hook 已安装".to_string()),
+            status_level: PluginManagementActionStatusLevel::Ok,
         },
         Ok(_) => PluginManagementAction {
             id: "codex_hook_install".to_string(),
@@ -1260,16 +1259,15 @@ mod tests {
 
         assert_eq!(remove_action.id, "codex_hook_uninstall");
         assert_eq!(remove_action.label, "移除 Hook");
-        assert_eq!(
-            remove_action.status_label.as_deref(),
-            Some("Hook 已安装，需在 /hooks 中信任")
-        );
+        assert_eq!(remove_action.status_label.as_deref(), Some("Hook 已安装"));
         assert_eq!(
             remove_action.status_level,
-            PluginManagementActionStatusLevel::Warning
+            PluginManagementActionStatusLevel::Ok
         );
-        assert!(remove_action.description.contains("已写入 Codex 配置"));
-        assert!(remove_action.description.contains("执行 /hooks 并信任"));
+        assert_eq!(
+            remove_action.description,
+            "Hook 已安装到 Codex 配置。首次使用前，请在 Codex 的 /hooks 中信任 Niuma Hook。"
+        );
         assert!(codex_config_file(temp.path()).exists() || codex_hooks_file(temp.path()).exists());
 
         restore_codex_home(previous_codex_home);

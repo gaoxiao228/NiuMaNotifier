@@ -2,12 +2,12 @@
 
 ## 背景
 
-插件管理页当前在 Codex Hook 已写入配置时只显示“Hook 已安装”。这个表达会让用户误以为 Codex 已经完整启用 Niuma Hook，但实际还需要用户在 Codex 中执行 `/hooks` 并信任 Niuma Hook。
+插件管理页需要说明 Codex Hook 安装后的信任步骤，但不能把文案写成应用已经判断用户尚未信任。当前应用只能稳定检测 Hook 是否写入 Codex 配置，不能可靠检测 Codex 内的信任状态。
 
 ## 目标
 
 - 保留“已安装”的事实表达。
-- 明确提示仍需在 Codex `/hooks` 中信任。
+- 用说明文案提示首次使用前需要在 Codex `/hooks` 中信任。
 - 不新增 Codex 信任状态检测，因为当前应用只能稳定检测 Hook 是否写入配置。
 - 不调整插件管理页布局。
 
@@ -15,10 +15,10 @@
 
 当 Codex Hook 已安装时：
 
-- 状态标签显示为“Hook 已安装，需在 /hooks 中信任”。
-- 动作描述显示为“Niuma Hook 已写入 Codex 配置。仍需在 Codex 中执行 /hooks 并信任 Niuma Hook，信任后才能接收权限请求。”。
+- 状态标签显示为“Hook 已安装”。
+- 动作描述显示为“Hook 已安装到 Codex 配置。首次使用前，请在 Codex 的 /hooks 中信任 Niuma Hook。”。
 - 按钮继续显示“移除 Hook”。
-- 状态等级从 `ok` 调整为 `warning`，表示还需要用户完成信任确认。
+- 状态等级保持 `ok`，只表达“Hook 已安装”这个可检测事实。
 
 当 Codex Hook 未安装或读取失败时，继续使用安装动作，并保留安装后需要 `/hooks` 信任的提示。
 

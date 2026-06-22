@@ -444,11 +444,11 @@ renderPluginManagement({
           id: 'codex_hook_uninstall',
           label: '移除 Hook',
           description:
-            'Niuma Hook 已写入 Codex 配置。仍需在 Codex 中执行 /hooks 并信任 Niuma Hook，信任后才能接收权限请求。',
+            'Hook 已安装到 Codex 配置。首次使用前，请在 Codex 的 /hooks 中信任 Niuma Hook。',
           kind: 'danger',
           enabled: true,
-          status_label: 'Hook 已安装，需在 /hooks 中信任',
-          status_level: 'warning'
+          status_label: 'Hook 已安装',
+          status_level: 'ok'
         }
       ]
     }
@@ -460,9 +460,9 @@ renderPluginManagement({
 
 if (
   !installedHookElement.innerHTML.includes('data-plugin-action-id="codex_hook_uninstall"') ||
-  !installedHookElement.innerHTML.includes('Hook 已安装，需在 /hooks 中信任') ||
-  !installedHookElement.innerHTML.includes('执行 /hooks 并信任 Niuma Hook') ||
-  !installedHookElement.innerHTML.includes('plugin-management-action-status warning')
+  !installedHookElement.innerHTML.includes('Hook 已安装到 Codex 配置') ||
+  !installedHookElement.innerHTML.includes('首次使用前，请在 Codex 的 /hooks 中信任 Niuma Hook') ||
+  !installedHookElement.innerHTML.includes('plugin-management-action-status ok')
 ) {
-  throw new Error('已安装 Hook 的管理动作应提示用户仍需通过 /hooks 信任')
+  throw new Error('已安装 Hook 的管理动作应以说明文案提示首次使用前需要通过 /hooks 信任')
 }
