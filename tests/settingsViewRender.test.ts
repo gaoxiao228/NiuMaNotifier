@@ -416,3 +416,53 @@ if (
 ) {
   throw new Error('ntfy 插件应在插件管理中渲染 Topic 配置表单')
 }
+
+const installedHookElement = new FakeElement()
+
+renderPluginManagement({
+  element: installedHookElement as HTMLElement,
+  language: 'zh-CN',
+  busyPluginId: null,
+  importBusy: false,
+  resultText: '',
+  plugins: [
+    {
+      id: 'builtin-codex',
+      tool_id: 'codex',
+      display_name: 'Codex',
+      version: '0.1.0',
+      source: 'builtin',
+      capabilities: ['event_watcher'],
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: '/assets/codex-icon.png',
+      config_schema: [],
+      install_path: null,
+      management_actions: [
+        {
+          id: 'codex_hook_uninstall',
+          label: '移除 Hook',
+          description:
+            'Niuma Hook 已写入 Codex 配置。仍需在 Codex 中执行 /hooks 并信任 Niuma Hook，信任后才能接收权限请求。',
+          kind: 'danger',
+          enabled: true,
+          status_label: 'Hook 已安装，需在 /hooks 中信任',
+          status_level: 'warning'
+        }
+      ]
+    }
+  ],
+  busyConfigPluginId: null,
+  configResultText: '',
+  pluginConfigs: {}
+})
+
+if (
+  !installedHookElement.innerHTML.includes('data-plugin-action-id="codex_hook_uninstall"') ||
+  !installedHookElement.innerHTML.includes('Hook 已安装，需在 /hooks 中信任') ||
+  !installedHookElement.innerHTML.includes('执行 /hooks 并信任 Niuma Hook') ||
+  !installedHookElement.innerHTML.includes('plugin-management-action-status warning')
+) {
+  throw new Error('已安装 Hook 的管理动作应提示用户仍需通过 /hooks 信任')
+}
