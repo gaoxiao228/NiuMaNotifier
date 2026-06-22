@@ -129,7 +129,15 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
             state
                 .attention_items
                 .retain(|item| !attention_item_matches_event(item, event));
-            state.latest_activity = Some(LatestActivity::idle());
+            if state
+                .latest_activity
+                .as_ref()
+                .map(|activity| latest_activity_matches_event(activity, event))
+                .unwrap_or(false)
+            {
+                // idle 只能清理同一 tool + session_id 的最新活动，避免同名 session 跨工具串扰。
+                state.latest_activity = Some(LatestActivity::idle());
+            }
         }
     }
 }

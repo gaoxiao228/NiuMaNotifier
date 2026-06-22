@@ -816,6 +816,66 @@ fn idle_from_same_session_clears_attention_without_hiding_other_attention() {
 }
 
 #[test]
+fn idle_from_same_session_id_other_tool_does_not_clear_latest_activity() {
+    let store = NiumaStore::new(test_sqlite_path("idle_other_tool_keeps_latest"));
+    store
+        .append_event(sample_session_event(
+            "dedupe-codex-running-shared",
+            "shared-session",
+            EventType::SessionStarted,
+            1_000,
+        ))
+        .unwrap();
+
+    let state = store
+        .append_event(sample_tool_event(
+            ToolKind::ClaudeCode,
+            "dedupe-claude-idle-shared",
+            "shared-session",
+            EventType::SessionIdled,
+            2_000,
+        ))
+        .unwrap();
+    let snapshot = store.internal_status_snapshot().unwrap();
+
+    // latest_activity 的运行态身份必须同时匹配 tool 和 session_id，避免同名 session 跨工具串扰。
+    let latest_activity = state.latest_activity.unwrap();
+    assert_eq!(latest_activity.tool, Some(ToolKind::Codex));
+    assert_eq!(
+        latest_activity.session_id.as_deref(),
+        Some("shared-session")
+    );
+    assert_eq!(latest_activity.status, RuntimeStateStatus::Running);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Running);
+    assert_eq!(
+        snapshot.primary_session_id.as_deref(),
+        Some("shared-session")
+    );
+    // runtime_states 也要保留两个工具各自的状态，idle 只影响 ClaudeCode 自己。
+    assert_eq!(
+        state
+            .runtime_states
+            .iter()
+            .find(
+                |session| session.tool == ToolKind::Codex && session.session_id == "shared-session"
+            )
+            .unwrap()
+            .status,
+        RuntimeStateStatus::Running
+    );
+    assert_eq!(
+        state
+            .runtime_states
+            .iter()
+            .find(|session| session.tool == ToolKind::ClaudeCode
+                && session.session_id == "shared-session")
+            .unwrap()
+            .status,
+        RuntimeStateStatus::Idle
+    );
+}
+
+#[test]
 fn stale_clears_same_session_running_activity_without_becoming_primary_status() {
     let store = NiumaStore::new(test_sqlite_path("stale_clears_running_activity"));
     store

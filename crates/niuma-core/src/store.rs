@@ -220,14 +220,15 @@ impl NiumaStore {
                         session.session_id,
                         now.timestamp()
                     ),
-                    source: "codex-session-stale-sweeper".to_string(),
+                    source: "niuma-session-stale-sweeper".to_string(),
                     tool: session.tool.clone(),
                     session_id: session.session_id.clone(),
                     project_path: session.project_path.clone(),
                     project_name: session.project_name.clone(),
                     event_type: EventType::SessionStaled,
                     severity: "info".to_string(),
-                    summary: "Codex session became stale".to_string(),
+                    // 摘要带上 tool，避免 ClaudeCode 等其他工具的 stale 事件显示成 Codex。
+                    summary: format!("{} session became stale", tool_key),
                     content: None,
                     error_message: None,
                     attention_resolve_key: None,
