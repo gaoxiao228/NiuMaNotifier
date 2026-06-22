@@ -18,9 +18,9 @@ use niuma_core::models::{
 };
 use niuma_core::notification_store::{NotificationRecordStatus, PluginNotificationResult};
 use niuma_core::plugin::{
-    import_external_plugin_dir, remove_external_plugin, resolve_plugin_config,
-    save_plugin_enabled_state, validate_plugin_config, PluginKind, PluginManifest, PluginRegistry,
-    PluginSource, ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
+    import_external_plugin_dir, plugin_uses_listener_config, remove_external_plugin,
+    resolve_plugin_config, save_plugin_enabled_state, validate_plugin_config, PluginKind,
+    PluginManifest, PluginRegistry, PluginSource, ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
 };
 use niuma_core::runtime_event::StateChangeReason;
 use serde::{Deserialize, Serialize};
@@ -1418,24 +1418,17 @@ pub(crate) async fn set_plugin_enabled(State(state): State<AppState>, body: Byte
         );
     };
 
-    if let Some(tool) = plugin.tool_id {
-        if let Err(error) = state
-            .mutation_service
-            .set_tool_listening_enabled(tool, request.enabled)
-        {
-            return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
-        }
-    } else {
-        let mut enabled_map = match state.store.plugin_enabled_map() {
-            Ok(map) => map,
-            Err(error) => {
-                return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
-            }
-        };
-        enabled_map.insert(plugin.id.clone(), request.enabled);
-        if let Err(error) = state.store.save_plugin_enabled_map(&enabled_map) {
-            return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
-        }
+    let uses_listener_config = plugin_uses_listener_config(&plugin);
+    if let Err(error) = save_plugin_enabled_state(
+        &state.store,
+        &state.mutation_service,
+        &plugin,
+        request.enabled,
+    ) {
+        return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
+    }
+    if !uses_listener_config {
+        // 非 event_watcher 插件的启用状态不会触发 listener 变更，需要显式刷新运行管理。
         state
             .runtime_events
             .publish_state_changed(StateChangeReason::PluginConfigChanged);

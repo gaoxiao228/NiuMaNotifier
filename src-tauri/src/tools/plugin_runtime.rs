@@ -6,9 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use niuma_core::plugin::{
-    current_plugin_registry, default_non_tool_plugin_enabled, resolve_plugin_config,
-    PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState, BUILTIN_BARK_PLUGIN_ID,
-    BUILTIN_NTFY_PLUGIN_ID,
+    current_plugin_registry, default_non_tool_plugin_enabled, plugin_uses_listener_config,
+    resolve_plugin_config, PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState,
+    BUILTIN_BARK_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
 use niuma_core::store::NiumaStore;
@@ -255,7 +255,10 @@ fn notification_plugin_config_payload(
 }
 
 fn plugin_runtime_enabled(store: &NiumaStore, manifest: &PluginManifest) -> bool {
-    if let Some(tool) = &manifest.tool_id {
+    if plugin_uses_listener_config(manifest) {
+        let Some(tool) = &manifest.tool_id else {
+            return false;
+        };
         return store
             .listener_config()
             .map(|config| config.is_tool_enabled(tool))

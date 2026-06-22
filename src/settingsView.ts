@@ -83,19 +83,30 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
   }
   options.element.innerHTML = options.plugins
     .map((plugin) => {
-      const busy = options.busyPluginId === plugin.id || isPluginTransitioning(plugin)
+      const runtimeManaged = isPluginRuntimeManaged(plugin)
+      const busy = options.busyPluginId === plugin.id || (runtimeManaged && isPluginTransitioning(plugin))
       const pluginType = translatePluginKind(options.language, plugin.kind ?? 'tool')
       const pluginSubtitle = plugin.tool_id
         ? `${plugin.id} · ${plugin.tool_id}`
         : `${plugin.id} · ${pluginType}`
+      const runtimeBadge = runtimeManaged
+        ? `<span class="plugin-runtime-inline ${escapeHtml(
+            plugin.runtime_status
+          )}">${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</span>`
+        : ''
+      const runtimeMeta = runtimeManaged
+        ? `
+                <dt>${escapeHtml(t.pluginRuntimeStatus)}</dt>
+                <dd>${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</dd>
+                <dt>${escapeHtml(t.pluginLastError)}</dt>
+                <dd>${escapeHtml(plugin.last_error || t.none)}</dd>`
+        : ''
       return `
         <article class="plugin-card" data-plugin-id="${escapeHtml(plugin.id)}">
           <div class="plugin-card-main">
             ${renderPluginIcon(plugin)}
             <div>
-              <h3>${escapeHtml(plugin.display_name)} <span class="plugin-runtime-inline ${escapeHtml(
-                plugin.runtime_status
-              )}">${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</span></h3>
+              <h3>${escapeHtml(plugin.display_name)} ${runtimeBadge}</h3>
               <p>${escapeHtml(pluginSubtitle)}</p>
             </div>
             <label class="plugin-enable-toggle">
@@ -110,12 +121,9 @@ export function renderPluginManagement(options: PluginManagementRenderOptions) {
                 <dd>${escapeHtml(translatePluginSource(options.language, plugin.source))}</dd>
                 <dt>${escapeHtml(t.pluginVersion)}</dt>
                 <dd>${escapeHtml(plugin.version)}</dd>
-                <dt>${escapeHtml(t.pluginRuntimeStatus)}</dt>
-                <dd>${escapeHtml(translateRuntimeStatus(options.language, plugin.runtime_status))}</dd>
+                ${runtimeMeta}
                 <dt>${escapeHtml(t.pluginInstallPath)}</dt>
                 <dd>${escapeHtml(plugin.install_path || t.none)}</dd>
-                <dt>${escapeHtml(t.pluginLastError)}</dt>
-                <dd>${escapeHtml(plugin.last_error || t.none)}</dd>
               </dl>
               <div class="plugin-capabilities" aria-label="${escapeHtml(t.pluginCapabilities)}">
                 <span class="plugin-capabilities-label">${escapeHtml(t.pluginCapabilities)}</span>
@@ -401,4 +409,11 @@ export function translatePluginCapability(language: LanguageCode, capability: st
 
 function isPluginTransitioning(plugin: PluginManagementItem) {
   return plugin.runtime_status === 'starting' || plugin.runtime_status === 'stopping'
+}
+
+function isPluginRuntimeManaged(plugin: PluginManagementItem) {
+  // 当前运行管理器只负责常驻监听/消费类 capability；session provider 在后续 runtime 接入前不显示运行态。
+  return plugin.capabilities.some((capability) =>
+    ['event_watcher', 'event_consumer', 'state_consumer'].includes(capability)
+  )
 }

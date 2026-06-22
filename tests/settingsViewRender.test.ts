@@ -309,10 +309,29 @@ if (codexCardHtml.slice(0, codexSideStart).includes('class="plugin-management-ac
 if (
   !listElement.innerHTML.includes('data-plugin-toggle="builtin-bark"') ||
   !listElement.innerHTML.includes('data-plugin-toggle="builtin-ntfy"') ||
+  !listElement.innerHTML.includes('data-plugin-toggle="codex-session-provider"') ||
   listElement.innerHTML.includes('data-plugin-toggle="builtin-bark"  disabled') ||
   listElement.innerHTML.includes('data-plugin-toggle="builtin-ntfy"  disabled')
 ) {
-  throw new Error('notification 插件应渲染可用开关')
+  throw new Error('notification 和 session provider 插件应渲染可用开关')
+}
+
+const providerCardStart = listElement.innerHTML.indexOf('data-plugin-id="codex-session-provider"')
+const providerNextCardStart = listElement.innerHTML.indexOf(
+  'data-plugin-id="',
+  providerCardStart + 1
+)
+const providerCardHtml = listElement.innerHTML.slice(
+  providerCardStart,
+  providerNextCardStart === -1 ? undefined : providerNextCardStart
+)
+
+// session provider 还未进入运行管理时，只展示启用状态，避免被误认为常驻 runtime。
+if (
+  providerCardHtml.includes('plugin-runtime-inline') ||
+  providerCardHtml.includes('<dt>运行状态</dt>')
+) {
+  throw new Error('纯 session provider 不应显示运行时状态')
 }
 
 if (

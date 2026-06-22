@@ -616,6 +616,9 @@ pub fn import_external_plugin_dir(
     if paths_refer_to_same_dir(source_dir, &destination) {
         return Err("插件已位于目标插件目录".to_string());
     }
+    let registry_before_import =
+        PluginRegistry::with_builtin_plugins().discover_external_plugins(destination_root);
+    registry_before_import.validate_provider_capability_uniqueness(&manifest)?;
     fs::create_dir_all(destination_root).map_err(|error| format!("创建插件目录失败：{error}"))?;
     if destination.exists() {
         fs::remove_dir_all(&destination).map_err(|error| format!("替换旧插件失败：{error}"))?;
@@ -689,9 +692,13 @@ pub fn save_plugin_enabled_state(
     manifest: &PluginManifest,
     enabled: bool,
 ) -> Result<(), String> {
-    if let Some(tool) = &manifest.tool_id {
+    if plugin_uses_listener_config(manifest) {
+        let tool = manifest
+            .tool_id
+            .clone()
+            .ok_or_else(|| format!("工具监听插件缺少 tool_id：{}", manifest.id))?;
         return service
-            .set_tool_listening_enabled(tool.clone(), enabled)
+            .set_tool_listening_enabled(tool, enabled)
             .map(|_| ());
     }
     let mut enabled_map = store.plugin_enabled_map()?;
@@ -820,18 +827,32 @@ fn plugin_enabled(
     config: &ListenerConfig,
     plugin_enabled_map: &BTreeMap<String, bool>,
 ) -> bool {
-    if let Some(tool) = &manifest.tool_id {
-        return config.is_tool_enabled(tool);
+    if plugin_uses_listener_config(manifest) {
+        if let Some(tool) = &manifest.tool_id {
+            return config.is_tool_enabled(tool);
+        }
     }
     plugin_enabled_map
         .get(&manifest.id)
         .copied()
-        .unwrap_or_else(|| default_non_tool_plugin_enabled(manifest))
+        .unwrap_or_else(|| default_plugin_enabled(manifest))
+}
+
+pub fn plugin_uses_listener_config(manifest: &PluginManifest) -> bool {
+    // 只有 event_watcher 表示“工具监听开关”；session provider 虽然有 tool_id，也独立启用。
+    manifest.tool_id.is_some()
+        && manifest
+            .capabilities
+            .contains(&PluginCapability::EventWatcher)
+}
+
+pub fn default_plugin_enabled(manifest: &PluginManifest) -> bool {
+    manifest.source == PluginSource::Builtin
 }
 
 pub fn default_non_tool_plugin_enabled(manifest: &PluginManifest) -> bool {
-    // 只给内置非 tool 插件默认开启；外置插件通过导入流程写入显式启用状态。
-    manifest.source == PluginSource::Builtin
+    // 保留给运行管理器使用；默认只自动开启内置插件，外置插件由导入流程写入显式状态。
+    default_plugin_enabled(manifest)
 }
 
 fn builtin_codex_plugin_command(default_command: Option<String>) -> String {
@@ -901,6 +922,7 @@ mod tests {
     };
     use crate::listener_config::ListenerConfig;
     use crate::models::ToolId;
+    use crate::runtime_event::RuntimeEventBus;
     use std::sync::{Mutex, OnceLock};
 
     #[test]
@@ -1463,6 +1485,60 @@ mod tests {
     }
 
     #[test]
+    fn session_provider_enable_state_uses_plugin_map_without_changing_listener_config() {
+        let store = NiumaStore::new(test_sqlite_path("session_provider_enabled_map"));
+        store
+            .save_listener_config(
+                &ListenerConfig::default().with_tool_enabled(&ToolKind::Codex, true),
+            )
+            .unwrap();
+        let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
+        let manifest = builtin_codex_session_provider_manifest();
+
+        // session provider 有 tool_id，但没有 event_watcher，启用状态必须独立于工具监听配置。
+        save_plugin_enabled_state(&store, &service, &manifest, false).unwrap();
+
+        assert!(store
+            .listener_config()
+            .unwrap()
+            .is_tool_enabled(&ToolKind::Codex));
+        assert_eq!(
+            store
+                .plugin_enabled_map()
+                .unwrap()
+                .get(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID),
+            Some(&false)
+        );
+        let items = PluginRegistry::with_builtin_plugins().management_items(
+            &store.listener_config().unwrap(),
+            &store.plugin_enabled_map().unwrap(),
+            &HashMap::new(),
+        );
+        let provider = items
+            .iter()
+            .find(|plugin| plugin.id == BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID)
+            .unwrap();
+        assert!(!provider.enabled);
+    }
+
+    #[test]
+    fn builtin_tool_session_provider_defaults_enabled_until_explicitly_disabled() {
+        let registry = PluginRegistry::with_builtin_plugins();
+        let items = registry.management_items(
+            &ListenerConfig::default().with_tool_enabled(&ToolKind::Codex, false),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+        let provider = items
+            .iter()
+            .find(|plugin| plugin.id == BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID)
+            .unwrap();
+
+        // 内置 provider 默认可用，不应被 event_watcher 的 Codex listener 开关牵连。
+        assert!(provider.enabled);
+    }
+
+    #[test]
     fn builtin_codex_management_item_declares_install_hook_action_when_uninstalled() {
         let _guard = env_lock().lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
@@ -1632,6 +1708,64 @@ mod tests {
     }
 
     #[test]
+    fn import_rejects_duplicate_provider_before_copying_destination() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        write_session_provider_plugin(source.path(), "external-codex-session-provider", "codex");
+
+        let error = import_external_plugin_dir(
+            source.path(),
+            destination.path(),
+            &ListenerConfig::default(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+
+        // 与内置 Codex session provider 冲突时，不能留下半导入目录。
+        assert!(error.contains("同一工具的 provider capability 只能由一个插件声明"));
+        assert!(!destination
+            .path()
+            .join("external-codex-session-provider")
+            .exists());
+    }
+
+    #[test]
+    fn import_replaces_same_external_provider_without_self_conflict() {
+        let source = tempfile::tempdir().unwrap();
+        let replacement = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        write_session_provider_plugin(source.path(), "demo-session-provider", "demo_tool");
+        write_session_provider_plugin(replacement.path(), "demo-session-provider", "demo_tool");
+        std::fs::write(replacement.path().join("replacement.txt"), "new").unwrap();
+
+        import_external_plugin_dir(
+            source.path(),
+            destination.path(),
+            &ListenerConfig::default(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        let result = import_external_plugin_dir(
+            replacement.path(),
+            destination.path(),
+            &ListenerConfig::default(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        // 同 id 替换自身时允许 provider capability 不变，但仍执行目录替换。
+        assert!(result.imported);
+        assert!(destination
+            .path()
+            .join("demo-session-provider/replacement.txt")
+            .exists());
+    }
+
+    #[test]
     fn remove_rejects_builtin_plugin_id() {
         let destination = tempfile::tempdir().unwrap();
 
@@ -1686,6 +1820,38 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn write_session_provider_plugin(dir: &Path, id: &str, tool_id: &str) {
+        std::fs::write(
+            dir.join("plugin.json"),
+            format!(
+                r#"{{
+                    "id": "{id}",
+                    "kind": "tool",
+                    "tool_id": "{tool_id}",
+                    "display_name": "Session Provider",
+                    "version": "0.1.0",
+                    "command": "node",
+                    "platforms": ["macos", "windows", "linux"],
+                    "capabilities": ["tool_session_list_provider", "tool_session_detail_provider"]
+                }}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn test_sqlite_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "niuma-notifier-plugin-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("niuma.sqlite")
     }
 
     fn env_lock() -> &'static Mutex<()> {

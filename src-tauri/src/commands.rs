@@ -12,9 +12,10 @@ use niuma_core::platform::locale::{
 };
 use niuma_core::plugin::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
-    remove_external_plugin, resolve_plugin_config, save_plugin_enabled_state,
-    validate_plugin_config, PluginCapability, PluginKind, PluginManagementItem, PluginManifest,
-    PluginRegistry, PluginRuntimeStatus, PluginSource, ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
+    plugin_uses_listener_config, remove_external_plugin, resolve_plugin_config,
+    save_plugin_enabled_state, validate_plugin_config, PluginCapability, PluginKind,
+    PluginManagementItem, PluginManifest, PluginRegistry, PluginRuntimeStatus, PluginSource,
+    ToolPluginInfo, BUILTIN_CODEX_PLUGIN_ID,
 };
 use niuma_core::runtime_event::{
     PluginNotificationTestRequest, RuntimeEventBus, StateChangeReason,
@@ -695,19 +696,12 @@ fn set_plugin_enabled_by_id(
         );
     };
 
-    if let Some(tool) = plugin.tool_id {
-        if let Err(error) = service.set_tool_listening_enabled(tool, enabled) {
-            return ApiResponse::fail(ApiErrorCode::System, error);
-        }
-    } else {
-        let mut enabled_map = match store.plugin_enabled_map() {
-            Ok(map) => map,
-            Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
-        };
-        enabled_map.insert(plugin.id.clone(), enabled);
-        if let Err(error) = store.save_plugin_enabled_map(&enabled_map) {
-            return ApiResponse::fail(ApiErrorCode::System, error);
-        }
+    let uses_listener_config = plugin_uses_listener_config(&plugin);
+    if let Err(error) = save_plugin_enabled_state(store, service, &plugin, enabled) {
+        return ApiResponse::fail(ApiErrorCode::System, error);
+    }
+    if !uses_listener_config {
+        // 非 event_watcher 插件使用独立启用表，需要显式通知运行管理刷新。
         runtime_events.publish_state_changed(StateChangeReason::PluginConfigChanged);
     }
 

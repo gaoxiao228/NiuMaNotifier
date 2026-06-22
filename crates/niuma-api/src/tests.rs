@@ -9,6 +9,7 @@ use niuma_core::models::{
 use niuma_core::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
 };
+use niuma_core::plugin::BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID;
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
@@ -1329,6 +1330,67 @@ async fn plugin_enabled_updates_tool_listener_config() {
         RuntimeEvent::StateChanged {
             version: 1,
             reason: niuma_core::runtime_event::StateChangeReason::ListenerConfigChanged
+        }
+    );
+}
+
+#[tokio::test]
+async fn plugin_enabled_updates_session_provider_map_without_touching_listener_config() {
+    let store = NiumaStore::new(test_path("plugin_enabled_session_provider"));
+    store
+        .save_listener_config(&ListenerConfig::default().with_tool_enabled(&ToolKind::Codex, true))
+        .unwrap();
+    let bus = RuntimeEventBus::new();
+    let mut receiver = bus.subscribe();
+    let router = app_with_bus_and_plugin_dir(
+        store.clone(),
+        bus,
+        test_dir("plugin_enabled_session_provider_dir"),
+    );
+
+    let body = serde_json::json!({
+        "plugin_id": BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID,
+        "enabled": false
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugins/enabled")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value = response_json(response).await;
+
+    // session provider 的启用状态独立存储，不能连带关闭 Codex event_watcher。
+    assert_eq!(value["code"], 0);
+    assert!(store
+        .listener_config()
+        .unwrap()
+        .is_tool_enabled(&ToolKind::Codex));
+    assert_eq!(
+        store
+            .plugin_enabled_map()
+            .unwrap()
+            .get(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID),
+        Some(&false)
+    );
+    assert!(value["data"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |plugin| plugin["id"] == BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID
+                && plugin["enabled"] == false
+        ));
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        RuntimeEvent::StateChanged {
+            version: 1,
+            reason: niuma_core::runtime_event::StateChangeReason::PluginConfigChanged
         }
     );
 }
