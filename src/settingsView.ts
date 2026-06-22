@@ -8,7 +8,7 @@ export type SettingsShellRenderOptions = {
   activePanel?: SettingsPanel
 }
 
-export type SettingsPanel = 'plugins' | 'event-center' | 'notification-history'
+export type SettingsPanel = 'plugins' | 'notification-history'
 
 export type PluginManagementRenderOptions = {
   element: HTMLElement | null
@@ -31,7 +31,6 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
   const t = translations[options.language]
   const activePanel = options.activePanel ?? 'plugins'
   const pluginsActive = activePanel === 'plugins'
-  const eventCenterActive = activePanel === 'event-center'
   const notificationHistoryActive = activePanel === 'notification-history'
   return `
     <div class="settings-layout">
@@ -39,9 +38,6 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
         <button class="settings-nav-item ${pluginsActive ? 'active' : ''}" type="button" data-settings-panel="plugins" ${
           pluginsActive ? 'aria-current="page"' : ''
         }>${escapeHtml(t.pluginManagement)}</button>
-        <button class="settings-nav-item ${eventCenterActive ? 'active' : ''}" type="button" data-settings-panel="event-center" ${
-          eventCenterActive ? 'aria-current="page"' : ''
-        }>${escapeHtml(t.eventCenter)}</button>
         <button class="settings-nav-item ${notificationHistoryActive ? 'active' : ''}" type="button" data-settings-panel="notification-history" ${
           notificationHistoryActive ? 'aria-current="page"' : ''
         }>${escapeHtml(t.notificationHistory)}</button>
@@ -59,18 +55,6 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
             <div id="plugin-import-result" class="settings-result"></div>
             <div id="plugin-management-list" class="plugin-management-list"></div>
           </div>
-        </div>
-        <div id="settings-panel-event-center" class="settings-panel settings-event-center" ${
-          eventCenterActive ? '' : 'hidden'
-        }>
-          <div class="settings-heading">
-            <div>
-              <h2>${escapeHtml(t.eventCenter)}</h2>
-              <p>${escapeHtml(t.eventCenterDescription)}</p>
-            </div>
-          </div>
-          <!-- 事件中心实时列表由主流程在面板激活后挂载到该容器。 -->
-          <div id="settings-event-center" class="event-center-shell"></div>
         </div>
         <div id="settings-panel-notification-history" class="settings-panel settings-notification-history" ${
           notificationHistoryActive ? '' : 'hidden'

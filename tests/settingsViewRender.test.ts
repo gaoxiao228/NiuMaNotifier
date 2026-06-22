@@ -14,20 +14,16 @@ if (!shell.includes('通知历史')) {
   throw new Error('设置页左侧应包含通知历史入口')
 }
 
-if (!shell.includes('事件中心')) {
-  throw new Error('设置页左侧应包含事件中心入口')
-}
-
-if (!shell.includes('data-settings-panel="event-center"')) {
-  throw new Error('事件中心入口应声明设置页切换目标')
+if (shell.includes('data-settings-panel="event-center"')) {
+  throw new Error('设置页不应再包含事件中心入口')
 }
 
 if (!shell.includes('data-settings-panel="notification-history"')) {
   throw new Error('通知历史入口应声明设置页切换目标')
 }
 
-if (!shell.includes('id="settings-event-center"')) {
-  throw new Error('设置页应渲染事件中心内容容器')
+if (shell.includes('id="settings-event-center"')) {
+  throw new Error('设置页不应再渲染事件中心内容容器')
 }
 
 if (!shell.includes('id="settings-notification-history"')) {
@@ -50,8 +46,8 @@ if (!shell.includes('id="settings-panel-notification-history" class="settings-pa
   throw new Error('插件管理默认页不应在下方同时展示通知历史区域')
 }
 
-if (!shell.includes('id="settings-panel-event-center" class="settings-panel settings-event-center" hidden')) {
-  throw new Error('插件管理默认页不应显示事件中心面板')
+if (shell.includes('id="settings-panel-event-center"')) {
+  throw new Error('设置页不应再渲染事件中心面板')
 }
 
 if (!shell.includes('data-settings-panel="plugins" aria-current="page"')) {
@@ -72,23 +68,6 @@ if (
   historyShell.includes('id="settings-panel-notification-history" class="settings-panel settings-notification-history" hidden')
 ) {
   throw new Error('通知历史应只在通知历史侧边栏面板中显示')
-}
-
-const eventCenterShell = renderSettingsShell({
-  language: 'zh-CN',
-  activePanel: 'event-center'
-})
-
-if (!eventCenterShell.includes('data-settings-panel="event-center" aria-current="page"')) {
-  throw new Error('事件中心面板选中时应标记当前导航项')
-}
-
-if (
-  !eventCenterShell.includes('id="settings-panel-plugins" class="settings-panel plugin-management-panel" hidden') ||
-  !eventCenterShell.includes('id="settings-panel-notification-history" class="settings-panel settings-notification-history" hidden') ||
-  eventCenterShell.includes('id="settings-panel-event-center" class="settings-panel settings-event-center" hidden')
-) {
-  throw new Error('事件中心应只在事件中心侧边栏面板中显示')
 }
 
 if (!shell.includes('id="plugin-import"')) {
