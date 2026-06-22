@@ -20,19 +20,48 @@ use crate::manual_test::manual_test_scenario;
 use crate::response::{preflight, route_not_found};
 use crate::sse::{events_stream, sse_stream, MainStateBroadcaster};
 use crate::state::AppState;
+use crate::tool_sessions::ToolSessionRegistry;
 
 pub fn app(store: NiumaStore) -> Router {
     app_with_bus(store, RuntimeEventBus::new())
 }
 
+pub fn app_with_tool_sessions(store: NiumaStore, tool_sessions: ToolSessionRegistry) -> Router {
+    app_with_bus_and_plugin_dir_and_tool_sessions(
+        store,
+        RuntimeEventBus::new(),
+        default_user_plugin_dir(),
+        tool_sessions,
+    )
+}
+
 pub fn app_with_bus(store: NiumaStore, runtime_events: RuntimeEventBus) -> Router {
-    app_with_bus_and_plugin_dir(store, runtime_events, default_user_plugin_dir())
+    app_with_bus_and_plugin_dir_and_tool_sessions(
+        store,
+        runtime_events,
+        default_user_plugin_dir(),
+        ToolSessionRegistry::new(),
+    )
 }
 
 pub fn app_with_bus_and_plugin_dir(
     store: NiumaStore,
     runtime_events: RuntimeEventBus,
     plugin_dir: PathBuf,
+) -> Router {
+    app_with_bus_and_plugin_dir_and_tool_sessions(
+        store,
+        runtime_events,
+        plugin_dir,
+        ToolSessionRegistry::new(),
+    )
+}
+
+fn app_with_bus_and_plugin_dir_and_tool_sessions(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    plugin_dir: PathBuf,
+    tool_sessions: ToolSessionRegistry,
 ) -> Router {
     let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
     let approval_arbiter = Arc::new(Mutex::new(ApprovalArbiter::default()));
@@ -135,5 +164,6 @@ pub fn app_with_bus_and_plugin_dir(
             approval_arbiter,
             plugin_dir,
             main_state_broadcaster: Arc::new(Mutex::new(MainStateBroadcaster::default())),
+            tool_sessions,
         })
 }

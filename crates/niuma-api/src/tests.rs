@@ -13,11 +13,13 @@ use niuma_core::plugin::BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID;
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
+use niuma_core::tool_session::{ToolSessionListItem, ToolSessionStatus};
 use serde_json::Value;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
 
+use crate::tool_sessions::{ToolSessionListQuery, ToolSessionRegistry};
 use crate::{app, app_with_bus, app_with_bus_and_plugin_dir};
 
 #[tokio::test]
@@ -2087,6 +2089,163 @@ async fn plugin_notification_test_results_rejects_non_notification_plugin() {
     assert!(value["message"].as_str().unwrap().contains("不是通知插件"));
 }
 
+#[test]
+fn session_list_filters_snapshot_items() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![
+            tool_session_item("codex-active", ToolKind::Codex, 30, 20, true, false),
+            tool_session_item("codex-inactive", ToolKind::Codex, 40, 30, false, false),
+            tool_session_item("codex-subagent", ToolKind::Codex, 50, 40, true, true),
+        ],
+    );
+    registry.replace_snapshot(
+        ToolKind::ClaudeCode,
+        vec![tool_session_item(
+            "claude-active",
+            ToolKind::ClaudeCode,
+            60,
+            50,
+            true,
+            false,
+        )],
+    );
+
+    let items = registry
+        .list(ToolSessionListQuery {
+            tool: Some("codex".to_string()),
+            active_only: true,
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap();
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].session_id, "codex-active");
+    assert_eq!(items[0].tool, ToolKind::Codex);
+}
+
+#[test]
+fn tool_session_list_all_merges_snapshots() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "codex-newer",
+            ToolKind::Codex,
+            100,
+            80,
+            true,
+            false,
+        )],
+    );
+    registry.replace_snapshot(
+        ToolKind::ClaudeCode,
+        vec![tool_session_item(
+            "claude-older",
+            ToolKind::ClaudeCode,
+            90,
+            85,
+            true,
+            false,
+        )],
+    );
+
+    let items = registry
+        .list(ToolSessionListQuery {
+            tool: Some("all".to_string()),
+            include_subagents: true,
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["codex-newer", "claude-older"]
+    );
+}
+
+#[test]
+fn tool_session_list_limit_is_capped_at_500() {
+    let registry = ToolSessionRegistry::new();
+    let sessions = (0..520)
+        .map(|index| {
+            tool_session_item(
+                &format!("codex-{index}"),
+                ToolKind::Codex,
+                index,
+                index,
+                true,
+                false,
+            )
+        })
+        .collect();
+    registry.replace_snapshot(ToolKind::Codex, sessions);
+
+    let items = registry
+        .list(ToolSessionListQuery {
+            tool: Some("all".to_string()),
+            include_subagents: true,
+            limit: Some(900),
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap();
+
+    assert_eq!(items.len(), 500);
+    assert_eq!(items[0].session_id, "codex-519");
+}
+
+#[test]
+fn tool_session_list_limit_zero_returns_error() {
+    let registry = ToolSessionRegistry::new();
+
+    let error = registry
+        .list(ToolSessionListQuery {
+            limit: Some(0),
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap_err();
+
+    assert!(error.contains("limit"));
+}
+
+#[test]
+fn tool_session_find_session_matches_tool_and_session_id() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "shared-session",
+            ToolKind::Codex,
+            10,
+            10,
+            true,
+            false,
+        )],
+    );
+    registry.replace_snapshot(
+        ToolKind::ClaudeCode,
+        vec![tool_session_item(
+            "shared-session",
+            ToolKind::ClaudeCode,
+            20,
+            20,
+            true,
+            false,
+        )],
+    );
+
+    let item = registry
+        .find_session(&ToolKind::ClaudeCode, "shared-session")
+        .unwrap();
+
+    assert_eq!(item.tool, ToolKind::ClaudeCode);
+    assert_eq!(item.id, "claude_code:shared-session");
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
@@ -2183,6 +2342,36 @@ fn sample_event_with_type(
         failure_reason: None,
         payload_ref: None,
         created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
+    }
+}
+
+fn tool_session_item(
+    session_id: &str,
+    tool: ToolKind,
+    last_seen_at: i64,
+    modified_at: i64,
+    is_active: bool,
+    is_subagent: bool,
+) -> ToolSessionListItem {
+    let tool_id = tool.as_str().to_string();
+    ToolSessionListItem {
+        id: format!("{tool_id}:{session_id}"),
+        tool,
+        session_id: session_id.to_string(),
+        project_path: "/tmp/demo".to_string(),
+        project_name: "demo".to_string(),
+        file_path: format!("/tmp/demo/{session_id}.jsonl"),
+        modified_at: Utc.timestamp_opt(modified_at, 0).single().unwrap(),
+        discovered_at: Utc.timestamp_opt(1, 0).single().unwrap(),
+        last_seen_at: Utc.timestamp_opt(last_seen_at, 0).single().unwrap(),
+        is_active,
+        is_subagent,
+        parent_session_id: is_subagent.then(|| "parent-session".to_string()),
+        status: if is_active {
+            ToolSessionStatus::Active
+        } else {
+            ToolSessionStatus::Inactive
+        },
     }
 }
 

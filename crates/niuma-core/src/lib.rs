@@ -18,4 +18,5 @@ pub mod state;
 pub mod state_mutation;
 pub mod store;
 pub mod tool_metadata;
+pub mod tool_session;
 pub mod tools;

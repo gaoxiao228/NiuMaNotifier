@@ -1,0 +1,72 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::models::ToolKind;
+
+// 工具会话状态来自 provider snapshot，unknown 用于兼容无法判断活跃性的工具。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSessionStatus {
+    Active,
+    Inactive,
+    Unknown,
+}
+
+// 列表项是宿主保存的轻量会话索引，供后续 session_list API 直接返回。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ToolSessionListItem {
+    pub id: String,
+    pub tool: ToolKind,
+    pub session_id: String,
+    pub project_path: String,
+    pub project_name: String,
+    pub file_path: String,
+    pub modified_at: DateTime<Utc>,
+    pub discovered_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub is_active: bool,
+    pub is_subagent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    pub status: ToolSessionStatus,
+}
+
+// 消息角色覆盖主流 AI 工具会话记录，unknown 用于保留 provider 无法映射的原始角色。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSessionMessageRole {
+    User,
+    Assistant,
+    System,
+    ToolCall,
+    ToolResult,
+    Event,
+    Unknown,
+}
+
+// 详情消息保留 metadata，方便 provider 携带工具特有字段而不阻塞统一 API。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolSessionMessage {
+    pub id: String,
+    pub role: ToolSessionMessageRole,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+// 会话详情模型由后续 provider RPC 填充；registry 当前只保存列表 snapshot。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolSessionDetail {
+    pub tool: ToolKind,
+    pub session_id: String,
+    pub project_path: String,
+    pub project_name: String,
+    pub is_subagent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    pub messages: Vec<ToolSessionMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}

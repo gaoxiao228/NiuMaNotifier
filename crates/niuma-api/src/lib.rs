@@ -12,8 +12,9 @@ mod response;
 mod routes;
 mod sse;
 mod state;
+pub mod tool_sessions;
 
-pub use routes::{app, app_with_bus, app_with_bus_and_plugin_dir};
+pub use routes::{app, app_with_bus, app_with_bus_and_plugin_dir, app_with_tool_sessions};
 
 pub fn local_api_addr() -> String {
     config::local_api_addr()
