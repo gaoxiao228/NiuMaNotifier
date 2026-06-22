@@ -384,6 +384,18 @@ export function translatePluginCapability(language: LanguageCode, capability: st
   if (capability === 'state_consumer') {
     return t.pluginCapabilityStateConsumer
   }
+  if (capability === 'tool_session_list_provider') {
+    return t.pluginCapabilityToolSessionListProvider
+  }
+  if (capability === 'tool_session_detail_provider') {
+    return t.pluginCapabilityToolSessionDetailProvider
+  }
+  if (capability === 'tool_session_list_reader') {
+    return t.pluginCapabilityToolSessionListReader
+  }
+  if (capability === 'tool_session_detail_reader') {
+    return t.pluginCapabilityToolSessionDetailReader
+  }
   return capability
 }
 

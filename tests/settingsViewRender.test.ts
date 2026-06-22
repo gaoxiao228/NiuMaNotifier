@@ -235,6 +235,25 @@ renderPluginManagement({
         }
       ],
       install_path: '/tmp/status-indicator'
+    },
+    {
+      id: 'codex-session-provider',
+      tool_id: 'codex',
+      display_name: 'Codex Session Provider',
+      version: '0.1.0',
+      source: 'external',
+      capabilities: [
+        'tool_session_list_provider',
+        'tool_session_detail_provider',
+        'tool_session_list_reader',
+        'tool_session_detail_reader'
+      ],
+      enabled: true,
+      runtime_status: 'running',
+      last_error: null,
+      icon_url: null,
+      config_schema: [],
+      install_path: '/tmp/codex-session-provider'
     }
   ],
   busyConfigPluginId: null,
@@ -367,6 +386,15 @@ if (
   !listElement.innerHTML.includes('授权处理')
 ) {
   throw new Error('插件管理应展示 approval_handler 的授权处理能力标签')
+}
+
+if (
+  !listElement.innerHTML.includes('提供 AI 会话列表') ||
+  !listElement.innerHTML.includes('提供 AI 会话解析') ||
+  !listElement.innerHTML.includes('读取 AI 会话列表') ||
+  !listElement.innerHTML.includes('可读取 AI 会话内容')
+) {
+  throw new Error('插件管理应翻译工具会话 provider 和 reader 能力标签')
 }
 
 if (!listElement.innerHTML.includes('启动中') || !listElement.innerHTML.includes('停止中')) {

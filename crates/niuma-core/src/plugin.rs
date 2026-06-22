@@ -16,14 +16,18 @@ pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
 pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
 pub const BUILTIN_CODEX_PLUGIN_ID: &str = "builtin-codex";
+pub const BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID: &str = "builtin-codex-session-provider";
 pub const BUILTIN_BARK_PLUGIN_ID: &str = "builtin-bark";
 pub const BUILTIN_NTFY_PLUGIN_ID: &str = "builtin-ntfy";
 
 const CODEX_PLUGIN_COMMAND: &str = "niuma-codex-plugin";
+const CODEX_SESSION_PROVIDER_PLUGIN_COMMAND: &str = "niuma-codex-session-provider";
 const BARK_PLUGIN_COMMAND: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_COMMAND: &str = "niuma-plugin-ntfy";
 const BUILTIN_CODEX_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../builtin-plugins/codex/plugin.json");
+const BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_MANIFEST_JSON: &str =
+    include_str!("../../../builtin-plugins/codex-session-provider/plugin.json");
 const BUILTIN_BARK_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../builtin-plugins/bark/plugin.json");
 const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
@@ -37,6 +41,10 @@ pub enum PluginCapability {
     ApprovalHandler,
     NotificationTest,
     StateConsumer,
+    ToolSessionListProvider,
+    ToolSessionDetailProvider,
+    ToolSessionListReader,
+    ToolSessionDetailReader,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -249,6 +257,7 @@ impl PluginRegistry {
     pub fn with_builtin_plugins() -> Self {
         let mut registry = Self::new();
         registry.register(builtin_codex_manifest());
+        registry.register(builtin_codex_session_provider_manifest());
         registry.register(builtin_bark_manifest());
         registry.register(builtin_ntfy_manifest());
         registry
@@ -273,6 +282,15 @@ impl PluginRegistry {
                                 );
                                 continue;
                             }
+                            if let Err(error) =
+                                self.validate_provider_capability_uniqueness(&manifest)
+                            {
+                                eprintln!(
+                                    "NiumaNotifier external plugin manifest ignored {}: {error}",
+                                    manifest_path.display()
+                                );
+                                continue;
+                            }
                             self.register(manifest);
                         }
                     }
@@ -290,9 +308,37 @@ impl PluginRegistry {
     }
 
     pub fn register(&mut self, manifest: PluginManifest) {
+        if let Err(error) = self.validate_provider_capability_uniqueness(&manifest) {
+            panic!("内置或直接注册插件 manifest 无效：{error}");
+        }
         // 同 id 后注册覆盖先注册，方便外部插件导入新版时替换旧 manifest。
         self.manifests.retain(|item| item.id != manifest.id);
         self.manifests.push(manifest);
+    }
+
+    fn validate_provider_capability_uniqueness(
+        &self,
+        manifest: &PluginManifest,
+    ) -> Result<(), String> {
+        let Some(tool_id) = manifest.tool_id.as_ref() else {
+            return Ok(());
+        };
+        for capability in provider_capabilities(&manifest.capabilities) {
+            if let Some(existing) = self.manifests.iter().find(|item| {
+                item.id != manifest.id
+                    && item.tool_id.as_ref() == Some(tool_id)
+                    && item.capabilities.contains(&capability)
+            }) {
+                return Err(format!(
+                    "同一工具的 provider capability 只能由一个插件声明：tool_id={}，capability={}，已有插件={}，新插件={}",
+                    tool_id.as_str(),
+                    plugin_capability_id(&capability),
+                    existing.id,
+                    manifest.id
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn manifests(&self) -> &[PluginManifest] {
@@ -416,6 +462,12 @@ impl PluginManifest {
 impl ToolPluginInfo {
     fn try_from_manifest(manifest: &PluginManifest) -> Option<Self> {
         let tool_id = manifest.tool_id.clone()?;
+        if !manifest
+            .capabilities
+            .contains(&PluginCapability::EventWatcher)
+        {
+            return None;
+        }
         Some(Self {
             id: manifest.id.clone(),
             tool_id,
@@ -434,6 +486,21 @@ pub fn builtin_codex_manifest() -> PluginManifest {
     manifest.source = PluginSource::Builtin;
     manifest.command = Some(builtin_codex_plugin_command(manifest.command));
     // 内置插件的 binary 路径由桌面端/环境变量解析，不使用源码目录作为运行目录。
+    manifest.base_dir = None;
+    manifest
+}
+
+pub fn builtin_codex_session_provider_manifest() -> PluginManifest {
+    let mut manifest = parse_plugin_manifest(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_MANIFEST_JSON)
+        .expect("内置 Codex session provider 插件 manifest 必须是有效 plugin.json");
+    manifest.source = PluginSource::Builtin;
+    manifest.command = Some(
+        manifest
+            .command
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| CODEX_SESSION_PROVIDER_PLUGIN_COMMAND.to_string()),
+    );
+    // Session provider 是独立内置进程，运行目录同样由打包后的命令解析。
     manifest.base_dir = None;
     manifest
 }
@@ -653,12 +720,26 @@ fn validate_plugin_manifest(manifest: &PluginManifest) -> Result<(), String> {
     if manifest.kind == PluginKind::Tool && manifest.tool_id.is_none() {
         return Err(format!("工具插件缺少 tool_id：{}", manifest.id));
     }
-    if manifest.kind != PluginKind::Tool
-        && manifest
+    if manifest.kind != PluginKind::Tool {
+        for capability in non_tool_forbidden_provider_capabilities(&manifest.capabilities) {
+            return Err(format!(
+                "非工具插件不能声明 {}：{}",
+                plugin_capability_id(&capability),
+                manifest.id
+            ));
+        }
+    }
+    if manifest
+        .capabilities
+        .contains(&PluginCapability::ToolSessionDetailProvider)
+        && !manifest
             .capabilities
-            .contains(&PluginCapability::EventWatcher)
+            .contains(&PluginCapability::ToolSessionListProvider)
     {
-        return Err(format!("非工具插件不能声明 event_watcher：{}", manifest.id));
+        return Err(format!(
+            "tool_session_detail_provider 必须同时声明 tool_session_list_provider：{}",
+            manifest.id
+        ));
     }
     let mut keys = std::collections::BTreeSet::new();
     for field in &manifest.config_schema {
@@ -676,6 +757,38 @@ fn validate_plugin_manifest(manifest: &PluginManifest) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn non_tool_forbidden_provider_capabilities(
+    capabilities: &[PluginCapability],
+) -> Vec<PluginCapability> {
+    // 这些能力会代表具体 tool 上报或提供数据，必须绑定 tool_id 后才能安全路由。
+    provider_capabilities(capabilities)
+}
+
+fn provider_capabilities(capabilities: &[PluginCapability]) -> Vec<PluginCapability> {
+    [
+        PluginCapability::EventWatcher,
+        PluginCapability::ToolSessionListProvider,
+        PluginCapability::ToolSessionDetailProvider,
+    ]
+    .into_iter()
+    .filter(|capability| capabilities.contains(capability))
+    .collect()
+}
+
+fn plugin_capability_id(capability: &PluginCapability) -> &'static str {
+    match capability {
+        PluginCapability::EventWatcher => "event_watcher",
+        PluginCapability::EventConsumer => "event_consumer",
+        PluginCapability::ApprovalHandler => "approval_handler",
+        PluginCapability::NotificationTest => "notification_test",
+        PluginCapability::StateConsumer => "state_consumer",
+        PluginCapability::ToolSessionListProvider => "tool_session_list_provider",
+        PluginCapability::ToolSessionDetailProvider => "tool_session_detail_provider",
+        PluginCapability::ToolSessionListReader => "tool_session_list_reader",
+        PluginCapability::ToolSessionDetailReader => "tool_session_detail_reader",
+    }
 }
 
 fn plugin_config_value_matches(field: &PluginConfigField, value: &Value) -> bool {
@@ -875,6 +988,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_tool_session_provider_and_reader_capabilities() {
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "codex-session-provider",
+                "kind": "tool",
+                "tool_id": "codex",
+                "display_name": "Codex Session Provider",
+                "version": "0.1.0",
+                "command": "niuma-codex-session-provider",
+                "capabilities": [
+                    "tool_session_list_provider",
+                    "tool_session_detail_provider",
+                    "tool_session_list_reader",
+                    "tool_session_detail_reader"
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest.capabilities,
+            vec![
+                PluginCapability::ToolSessionListProvider,
+                PluginCapability::ToolSessionDetailProvider,
+                PluginCapability::ToolSessionListReader,
+                PluginCapability::ToolSessionDetailReader,
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_tool_plugin_without_tool_id() {
         let error = parse_plugin_manifest(
             r#"{
@@ -909,6 +1053,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_tool_session_detail_provider_without_list_provider() {
+        let error = parse_plugin_manifest(
+            r#"{
+                "id": "broken-detail-provider",
+                "kind": "tool",
+                "tool_id": "codex",
+                "display_name": "Broken Detail Provider",
+                "version": "0.1.0",
+                "command": "broken",
+                "capabilities": ["tool_session_detail_provider"]
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("tool_session_detail_provider 必须同时声明 tool_session_list_provider")
+        );
+    }
+
+    #[test]
+    fn rejects_tool_session_provider_on_non_tool_plugin() {
+        let error = parse_plugin_manifest(
+            r#"{
+                "id": "broken-notification-provider",
+                "kind": "notification",
+                "display_name": "Broken Provider",
+                "version": "0.1.0",
+                "command": "broken",
+                "capabilities": ["tool_session_list_provider"]
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("非工具插件不能声明 tool_session_list_provider"));
+    }
+
+    #[test]
     fn runtime_status_serializes_transition_states() {
         assert_eq!(
             serde_json::to_string(&PluginRuntimeStatus::Starting).unwrap(),
@@ -937,6 +1118,25 @@ mod tests {
         assert_eq!(plugin.kind, PluginKind::Tool);
         assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
         assert_eq!(plugin.icon_url.as_deref(), Some("/assets/codex-icon.png"));
+    }
+
+    #[test]
+    fn registry_contains_builtin_codex_session_provider_plugin() {
+        let registry = PluginRegistry::with_builtin_plugins();
+        let plugin = registry
+            .plugin_by_id("builtin-codex-session-provider")
+            .unwrap();
+
+        assert_eq!(plugin.kind, PluginKind::Tool);
+        assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
+        assert_eq!(plugin.icon_url.as_deref(), Some("/assets/codex-icon.png"));
+        assert_eq!(
+            plugin.capabilities,
+            vec![
+                PluginCapability::ToolSessionListProvider,
+                PluginCapability::ToolSessionDetailProvider,
+            ]
+        );
     }
 
     #[test]
@@ -1118,6 +1318,72 @@ mod tests {
         assert_eq!(plugin.source, PluginSource::External);
         assert_eq!(plugin.base_dir.as_deref(), Some(plugin_dir.as_path()));
         assert_eq!(registry.tools()[0].display_name, "Demo Tool");
+    }
+
+    #[test]
+    #[should_panic(expected = "同一工具的 provider capability 只能由一个插件声明")]
+    fn registry_rejects_duplicate_provider_capability_for_same_tool() {
+        let mut registry = PluginRegistry::new();
+        registry.register(
+            parse_plugin_manifest(
+                r#"{
+                    "id": "codex-list-provider-a",
+                    "kind": "tool",
+                    "tool_id": "codex",
+                    "display_name": "Codex List Provider A",
+                    "version": "0.1.0",
+                    "command": "provider-a",
+                    "capabilities": ["tool_session_list_provider"]
+                }"#,
+            )
+            .unwrap(),
+        );
+
+        registry.register(
+            parse_plugin_manifest(
+                r#"{
+                    "id": "codex-list-provider-b",
+                    "kind": "tool",
+                    "tool_id": "codex",
+                    "display_name": "Codex List Provider B",
+                    "version": "0.1.0",
+                    "command": "provider-b",
+                    "capabilities": ["tool_session_list_provider"]
+                }"#,
+            )
+            .unwrap(),
+        );
+    }
+
+    #[test]
+    fn registry_skips_external_plugin_with_duplicate_builtin_provider_capability() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin_dir = temp.path().join("external-codex-session-provider");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "id": "external-codex-session-provider",
+                "kind": "tool",
+                "tool_id": "codex",
+                "display_name": "External Codex Session Provider",
+                "version": "0.1.0",
+                "command": "node",
+                "platforms": ["macos", "windows", "linux"],
+                "capabilities": ["tool_session_list_provider"]
+            }"#,
+        )
+        .unwrap();
+
+        let registry =
+            PluginRegistry::with_builtin_plugins().discover_external_plugins(temp.path());
+
+        assert!(registry
+            .plugin_by_id("external-codex-session-provider")
+            .is_none());
+        assert!(registry
+            .plugin_by_id("builtin-codex-session-provider")
+            .is_some());
     }
 
     #[test]

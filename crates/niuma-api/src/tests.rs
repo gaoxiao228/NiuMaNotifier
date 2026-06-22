@@ -1028,6 +1028,22 @@ async fn plugins_list_returns_builtin_plugin_status() {
             && plugin["config_schema"]
                 .as_array()
                 .is_some_and(|schema| !schema.is_empty())));
+    assert!(value["data"]["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|plugin| plugin["id"] == "builtin-codex-session-provider"
+            && plugin["tool_id"] == "codex"
+            && plugin["capabilities"]
+                .as_array()
+                .is_some_and(|capabilities| capabilities
+                    .iter()
+                    .any(|capability| capability == "tool_session_list_provider"))
+            && plugin["capabilities"]
+                .as_array()
+                .is_some_and(|capabilities| capabilities
+                    .iter()
+                    .any(|capability| capability == "tool_session_detail_provider"))));
     let codex = value["data"]["list"]
         .as_array()
         .unwrap()
