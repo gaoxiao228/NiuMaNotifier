@@ -437,6 +437,8 @@ Notification plugins and status indicator plugins both consume real-time data th
 - Ignore keep-alive comment lines that start with `:`.
 - Split SSE frames by blank lines, and support multiple `data:` lines in the same frame.
 - Dispatch by `event:`. Ignore unknown event types.
+- Do not treat `curl -N` visibility as complete integration verification. The plugin's own SSE client must parse a complete `data: JSON` payload and actually dispatch the event to its handler.
+- In the current v1 event stream, one event is usually delivered as one complete JSON object on a single `data:` line. Clients may try to parse as soon as a `data:` line is received; if parsing fails, keep accumulating following `data:` lines until the blank-line frame boundary and parse again.
 - Reconnect automatically after disconnection. A fixed 2 to 5 second interval or exponential backoff is recommended.
 - Do not assume SSE will replay history. Events missed during disconnection should not be recovered through database queries.
 
@@ -488,7 +490,9 @@ Notification plugins do not need to query the recent events list or write the no
 
 ## Approval Consumers
 
-Consumers that can handle approvals must declare both `event_consumer` and `approval_handler`. They may show Allow/Deny actions after receiving `approval_requested`. Event consumers without `approval_handler` may notify that an approval is pending, but should not show approval actions or submit decisions.
+Consumers that can handle approvals must declare both `event_consumer` and `approval_handler`. Real-time approval UI must be triggered only by the `/api/v1/events/stream` stream when it sends `event: event` with `event_type = approval_requested`. Event consumers without `approval_handler` may notify that an approval is pending, but should not show approval actions or submit decisions.
+
+`/api/v1/state/stream` and `/api/v1/main-state` are display-state APIs only. They may show that the app is in `waiting_approval`, but they must not be used to trigger Allow/Deny UI. `GET /api/v1/approval-requests?status=pending` is only for optional plugin startup recovery; each plugin decides whether it needs that recovery path.
 
 Approval handling plugins can continue to use `kind = notification`. `notification_test` is not required; declare it only when the plugin needs to support the app's test-notification button.
 
@@ -605,7 +609,7 @@ Business failure example:
 
 After a request reaches business logic, the API usually returns HTTP 200. Plugins must check the top-level `code`. `code = 0` means the business operation succeeded. `accepted=true` means this consumer won the decision. `accepted=false` means another consumer or the desktop UI already handled it first. In that case, mark the local action as handled and do not retry to overwrite it.
 
-Consumers can also recover pending approvals on startup or poll decision state:
+Consumers may optionally recover pending approvals once on startup and may poll decision state:
 
 ```http
 GET /api/v1/approval-requests?status=pending
@@ -665,9 +669,9 @@ Recommended recovery flow:
 
 1. Read `NIUMA_LOCAL_API_URL` and `NIUMA_PLUGIN_ID` on startup.
 2. Connect to `/api/v1/events/stream`.
-3. Call `GET /api/v1/approval-requests?status=pending` once as startup compensation.
+3. If the plugin wants startup recovery, optionally call `GET /api/v1/approval-requests?status=pending` once as startup compensation.
 4. Locally dedupe `request_id` values from SSE events and the pending list.
-5. Present pending approval actions.
+5. Present pending approval actions from `approval_requested` events and, if enabled, the startup pending list.
 6. On `approval_resolved`, remove or disable the local action.
 7. On `approval_returned_to_codex`, disable the action and tell the user to handle it in Codex.
 8. After submitting a decision, use `accepted` to decide whether this consumer won the decision.
@@ -722,24 +726,57 @@ async function connect() {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let currentEventName = 'message'
+  let currentDataLines = []
+
+  function dispatchCurrentData() {
+    if (currentEventName !== 'event' || currentDataLines.length === 0) return
+    const dataText = currentDataLines.join('\n')
+    const event = JSON.parse(dataText)
+    if (event.event_type !== 'approval_requested') return
+    const requestId = approvalRequestId(event)
+    if (!requestId) return
+    console.log(`[approval] ${event.project_name}: ${event.summary}`)
+    console.log(`Call decide("${requestId}", "allow") or decide("${requestId}", "deny")`)
+  }
+
+  function resetCurrentFrame() {
+    currentEventName = 'message'
+    currentDataLines = []
+  }
+
+  function tryDispatchCurrentData() {
+    try {
+      dispatchCurrentData()
+      resetCurrentFrame()
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
+    }
+  }
 
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() || ''
-    for (const frame of frames) {
-      if (frame.startsWith(':')) continue
-      const eventName = frame.match(/^event: (.+)$/m)?.[1]
-      const data = frame.match(/^data: (.+)$/m)?.[1]
-      if (eventName !== 'event' || !data) continue
-      const event = JSON.parse(data)
-      if (event.event_type !== 'approval_requested') continue
-      const requestId = approvalRequestId(event)
-      if (!requestId) continue
-      console.log(`[approval] ${event.project_name}: ${event.summary}`)
-      console.log(`Call decide("${requestId}", "allow") or decide("${requestId}", "deny")`)
+    const lines = buffer.split(/\r?\n/)
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.startsWith(':')) continue
+      if (line === '') {
+        // Blank lines end an SSE frame. Retry dispatch in case data spanned lines.
+        tryDispatchCurrentData()
+        resetCurrentFrame()
+        continue
+      }
+      if (line.startsWith('event:')) {
+        currentEventName = line.slice(6).trim()
+        continue
+      }
+      if (line.startsWith('data:')) {
+        currentDataLines.push(line.slice(5).trimStart())
+        // v1 usually sends a complete JSON object in one data line.
+        tryDispatchCurrentData()
+      }
     }
   }
 }
@@ -783,6 +820,7 @@ error
 Consumption constraints:
 
 - `/api/v1/state/stream` sends the current main state snapshot immediately after connection, then sends updates only when the main state content changes.
+- `/api/v1/state/stream` and `/api/v1/main-state` are for display state only. They must not trigger approval interaction UI.
 - Status indicator plugins should not report events, write notification history, or write NiumaNotifier persistent files directly.
 - Display should be based on `status`. Do not infer main state from plugin ID, raw tool logs, or `event_type`.
 - Plugins can use `NIUMA_PLUGIN_DATA_DIR` to save local runtime state such as window position or display style.
@@ -1068,7 +1106,7 @@ GET /api/v1/state/stream
 GET /api/v1/main-state
 ```
 
-Do not infer main state from plugin ID, raw tool logs, or `event_type`.
+Do not infer main state from plugin ID, raw tool logs, or `event_type`. Approval interaction belongs to `/api/v1/events/stream` and must be triggered by `approval_requested`, not by display-state APIs.
 
 ## Development Checklist
 

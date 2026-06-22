@@ -437,6 +437,8 @@ unknown
 - 忽略以 `:` 开头的 keep-alive 注释行。
 - 按空行分隔 SSE frame，支持同一个 frame 中出现多行 `data:`。
 - 根据 `event:` 区分事件类型；未知事件类型应忽略。
+- 不要把 `curl -N` 能看到事件当作完整接入验证。插件自己的 SSE 客户端必须能解析完整的 `data: JSON` 载荷，并实际派发到事件处理逻辑。
+- 当前 v1 事件流里，单个事件通常是一行完整 JSON。客户端可以在收到 `data:` 行后先尝试解析；如果解析失败，应继续累积后续 `data:` 行，直到空行 frame 边界后再次解析。
 - 连接断开后自动重连，推荐使用 2 到 5 秒固定间隔或指数退避。
 - 不要假设 SSE 会补发历史数据；断线期间错过的事件不应通过数据库回查补偿。
 
@@ -488,7 +490,9 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 
 ## 授权消费者
 
-具备授权处理能力的消费者必须同时声明 `event_consumer` 和 `approval_handler`。这类消费者可以在收到 `approval_requested` 后展示“同意/拒绝”。没有 `approval_handler` 的事件消费者可以通知用户有授权等待处理，但不应展示授权操作，也不应提交授权决策。
+具备授权处理能力的消费者必须同时声明 `event_consumer` 和 `approval_handler`。实时授权弹窗必须只由 `/api/v1/events/stream` 中 `event: event` 且 `event_type = approval_requested` 的事件触发。没有 `approval_handler` 的事件消费者可以通知用户有授权等待处理，但不应展示授权操作，也不应提交授权决策。
+
+`/api/v1/state/stream` 和 `/api/v1/main-state` 只表示展示状态。它们可以展示当前处于 `waiting_approval`，但不能作为“同意/拒绝”交互触发源。`GET /api/v1/approval-requests?status=pending` 仅用于插件启动恢复场景，是否使用由插件自行决定。
 
 授权处理插件可以继续使用 `kind = notification`。`notification_test` 不是必需能力，只有插件需要支持主界面“测试通知”按钮时才声明。
 
@@ -605,7 +609,7 @@ Content-Type: application/json
 
 接口进入业务处理后通常返回 HTTP 200，插件必须检查外层 `code`。`code = 0` 才表示业务成功；`accepted=true` 表示当前消费者赢得本次决策；`accepted=false` 表示已有其他消费者或桌面 UI 先处理，消费者应把本地按钮置为已处理状态，不要重试覆盖。
 
-消费者也可以轮询或启动时恢复待处理授权：
+消费者可以在启动时可选恢复待处理授权，也可以轮询决策状态：
 
 ```http
 GET /api/v1/approval-requests?status=pending
@@ -665,9 +669,9 @@ GET /api/v1/approval-decisions?request_id=codex:s1:t1:Bash:abc123
 
 1. 启动后读取 `NIUMA_LOCAL_API_URL` 和 `NIUMA_PLUGIN_ID`。
 2. 建立 `/api/v1/events/stream` SSE 连接。
-3. 调用 `GET /api/v1/approval-requests?status=pending` 做一次补偿恢复。
+3. 如果插件需要启动恢复，可选调用 `GET /api/v1/approval-requests?status=pending` 做一次补偿恢复。
 4. 对 SSE 事件和 pending 列表中的 `request_id` 做本地去重。
-5. 展示待处理授权。
+5. 展示来自 `approval_requested` 事件的待处理授权；如果启用了启动恢复，也展示启动时恢复到的 pending 列表。
 6. 收到 `approval_resolved` 后移除或禁用本地按钮。
 7. 收到 `approval_returned_to_codex` 后禁用按钮并提示回 Codex 操作。
 8. 提交决策后根据 `accepted` 判断是否赢得决策。
@@ -722,24 +726,57 @@ async function connect() {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let currentEventName = 'message'
+  let currentDataLines = []
+
+  function dispatchCurrentData() {
+    if (currentEventName !== 'event' || currentDataLines.length === 0) return
+    const dataText = currentDataLines.join('\n')
+    const event = JSON.parse(dataText)
+    if (event.event_type !== 'approval_requested') return
+    const requestId = approvalRequestId(event)
+    if (!requestId) return
+    console.log(`[approval] ${event.project_name}: ${event.summary}`)
+    console.log(`调用 decide("${requestId}", "allow") 或 decide("${requestId}", "deny")`)
+  }
+
+  function resetCurrentFrame() {
+    currentEventName = 'message'
+    currentDataLines = []
+  }
+
+  function tryDispatchCurrentData() {
+    try {
+      dispatchCurrentData()
+      resetCurrentFrame()
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
+    }
+  }
 
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() || ''
-    for (const frame of frames) {
-      if (frame.startsWith(':')) continue
-      const eventName = frame.match(/^event: (.+)$/m)?.[1]
-      const data = frame.match(/^data: (.+)$/m)?.[1]
-      if (eventName !== 'event' || !data) continue
-      const event = JSON.parse(data)
-      if (event.event_type !== 'approval_requested') continue
-      const requestId = approvalRequestId(event)
-      if (!requestId) continue
-      console.log(`[approval] ${event.project_name}: ${event.summary}`)
-      console.log(`调用 decide("${requestId}", "allow") 或 decide("${requestId}", "deny")`)
+    const lines = buffer.split(/\r?\n/)
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.startsWith(':')) continue
+      if (line === '') {
+        // 空行表示 SSE frame 结束；如果 data 跨行，结束时再兜底派发一次。
+        tryDispatchCurrentData()
+        resetCurrentFrame()
+        continue
+      }
+      if (line.startsWith('event:')) {
+        currentEventName = line.slice(6).trim()
+        continue
+      }
+      if (line.startsWith('data:')) {
+        currentDataLines.push(line.slice(5).trimStart())
+        // v1 通常用一行 data 发送完整 JSON，此处收到后立即尝试派发。
+        tryDispatchCurrentData()
+      }
     }
   }
 }
@@ -783,6 +820,7 @@ error
 消费约束：
 
 - `/api/v1/state/stream` 连接建立后会先发送一次当前主状态快照，后续仅在主状态内容变化时发送。
+- `/api/v1/state/stream` 和 `/api/v1/main-state` 只用于展示状态，不能触发授权交互 UI。
 - 状态指示插件不应上报事件、不应写通知历史，也不应直接写 NiumaNotifier 的持久化文件。
 - 状态展示应以 `status` 为准；不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。
 - 插件可以使用 `NIUMA_PLUGIN_DATA_DIR` 保存窗口位置、展示样式等本地运行状态。
@@ -1068,7 +1106,7 @@ GET /api/v1/state/stream
 GET /api/v1/main-state
 ```
 
-不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。
+不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。授权交互属于 `/api/v1/events/stream`，必须由 `approval_requested` 事件触发，不能由展示状态接口触发。
 
 ## 开发检查清单
 
