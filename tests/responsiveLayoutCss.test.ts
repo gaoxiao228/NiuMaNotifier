@@ -266,13 +266,13 @@ if (
   throw new Error('通知历史插件名称不应被单行省略，应允许换行完整显示')
 }
 
-// 事件中心应继承设置页固定高度布局，内部列表和 JSON 详情各自滚动。
+// 事件中心独立窗口应固定自身高度，内部列表和 JSON 详情各自滚动。
 if (
-  !ruleIncludes('.settings-event-center', 'display: grid;') ||
-  !ruleIncludes('.settings-event-center', 'grid-template-rows: auto minmax(0, 1fr);') ||
-  !ruleIncludes('.settings-event-center', 'height: 100%;')
+  !ruleIncludes('.event-center-window', 'display: grid;') ||
+  !ruleIncludes('.event-center-window', 'grid-template-rows: auto minmax(0, 1fr);') ||
+  !ruleIncludes('.event-center-window', 'height: 100vh;')
 ) {
-  throw new Error('事件中心面板应填满右侧区域，并让实时事件列表占据标题下方剩余空间')
+  throw new Error('事件中心独立窗口应填满窗口，并让实时事件列表占据标题下方剩余空间')
 }
 
 if (
