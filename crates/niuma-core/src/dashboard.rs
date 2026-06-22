@@ -1,4 +1,4 @@
-use crate::models::{NiumaEvent, NiumaSession};
+use crate::models::{NiumaEvent, RuntimeStateItem};
 use crate::store::NiumaStore;
 
 #[derive(Clone)]
@@ -11,8 +11,8 @@ impl DashboardService {
         Self { store }
     }
 
-    pub fn sessions(&self) -> Result<Vec<NiumaSession>, String> {
-        self.store.sessions()
+    pub fn runtime_state_list(&self) -> Result<Vec<RuntimeStateItem>, String> {
+        self.store.runtime_state_list()
     }
 
     pub fn recent_events(&self, limit: usize) -> Result<Vec<NiumaEvent>, String> {

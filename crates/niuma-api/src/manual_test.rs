@@ -70,7 +70,7 @@ pub(crate) async fn manual_test_scenario(State(state): State<AppState>, body: By
             200,
             ApiResponse::ok(json!({
                 "event_count": result.state.events.len(),
-                "session_count": result.state.sessions.len()
+                "session_count": result.state.runtime_states.len()
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),

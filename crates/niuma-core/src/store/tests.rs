@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::listener_config::ListenerConfig;
 use crate::models::{
     ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason,
-    EventType, NiumaEvent, SessionStatus, ToolKind,
+    EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
 };
 use crate::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
@@ -166,7 +166,7 @@ fn return_to_codex_keeps_attention_item_waiting_approval() {
     assert_eq!(state.attention_items.len(), 1);
     assert_eq!(
         state.attention_items[0].status,
-        SessionStatus::WaitingApproval
+        RuntimeStateStatus::WaitingApproval
     );
 }
 
@@ -178,9 +178,12 @@ fn append_event_updates_session_status() {
     let state = store.append_event(event).unwrap();
 
     assert!(state.events.is_empty());
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].status, SessionStatus::WaitingApproval);
-    assert_eq!(state.sessions[0].project_name, "demo");
+    assert_eq!(state.runtime_states.len(), 1);
+    assert_eq!(
+        state.runtime_states[0].status,
+        RuntimeStateStatus::WaitingApproval
+    );
+    assert_eq!(state.runtime_states[0].project_name, "demo");
 }
 
 #[test]
@@ -203,12 +206,12 @@ fn sessions_returns_stored_sessions_ordered_by_activity() {
         ))
         .unwrap();
 
-    let sessions = store.sessions().unwrap();
+    let sessions = store.runtime_state_list().unwrap();
 
     assert_eq!(sessions.len(), 2);
-    assert_eq!(sessions[0].id, "session-a");
-    assert_eq!(sessions[1].id, "session-b");
-    assert_eq!(sessions[1].status, SessionStatus::WaitingApproval);
+    assert_eq!(sessions[0].session_id, "session-a");
+    assert_eq!(sessions[1].session_id, "session-b");
+    assert_eq!(sessions[1].status, RuntimeStateStatus::WaitingApproval);
 }
 
 #[test]
@@ -264,11 +267,11 @@ fn new_store_with_same_path_starts_with_empty_runtime_state() {
 
     let reloaded = NiumaStore::new(path);
 
-    assert!(reloaded.sessions().unwrap().is_empty());
+    assert!(reloaded.runtime_state_list().unwrap().is_empty());
     assert!(reloaded.public_recent_events(10).unwrap().is_empty());
     assert_eq!(
         reloaded.internal_status_snapshot().unwrap().status,
-        SessionStatus::Idle
+        RuntimeStateStatus::Idle
     );
 }
 
@@ -368,7 +371,7 @@ fn append_event_deduplicates_by_dedupe_key() {
     let state = store.append_event(event).unwrap();
 
     assert!(state.events.is_empty());
-    assert_eq!(state.sessions.len(), 1);
+    assert_eq!(state.runtime_states.len(), 1);
 }
 
 #[test]
@@ -433,15 +436,15 @@ fn append_events_writes_multiple_events_once() {
     let state = store.append_events(vec![first, second]).unwrap();
 
     assert!(state.events.is_empty());
-    assert_eq!(state.sessions.len(), 2);
+    assert_eq!(state.runtime_states.len(), 2);
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "manual-b")
+            .find(|session| session.session_id == "manual-b")
             .unwrap()
             .status,
-        SessionStatus::WaitingApproval
+        RuntimeStateStatus::WaitingApproval
     );
 }
 
@@ -454,7 +457,7 @@ fn append_events_deduplicates_existing_events() {
     let state = store.append_events(vec![first, second]).unwrap();
 
     assert!(state.events.is_empty());
-    assert_eq!(state.sessions[0].status, SessionStatus::Running);
+    assert_eq!(state.runtime_states[0].status, RuntimeStateStatus::Running);
 }
 
 #[test]
@@ -479,7 +482,7 @@ fn append_events_with_result_returns_only_applied_events() {
         .unwrap();
 
     assert_eq!(result.applied_events, vec![first, second]);
-    assert_eq!(result.state.sessions.len(), 1);
+    assert_eq!(result.state.runtime_states.len(), 1);
     assert_eq!(result.state.attention_items.len(), 1);
 }
 
@@ -505,7 +508,7 @@ fn completed_from_other_session_does_not_hide_existing_attention_item() {
 
     let snapshot = store.internal_status_snapshot().unwrap();
 
-    assert_eq!(snapshot.status, SessionStatus::WaitingApproval);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingApproval);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-a"));
 }
 
@@ -550,7 +553,7 @@ fn running_from_same_session_clears_all_attention_items_for_that_session() {
 
     assert_eq!(state.attention_items.len(), 1);
     assert_eq!(state.attention_items[0].session_id, "session-b");
-    assert_eq!(snapshot.status, SessionStatus::Error);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Error);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-b"));
 }
 
@@ -577,8 +580,8 @@ fn activity_from_same_session_clears_waiting_input() {
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert!(state.attention_items.is_empty());
-    assert_eq!(state.sessions[0].status, SessionStatus::Running);
-    assert_eq!(snapshot.status, SessionStatus::Running);
+    assert_eq!(state.runtime_states[0].status, RuntimeStateStatus::Running);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Running);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-a"));
 }
 
@@ -603,22 +606,22 @@ fn unkeyed_activity_keeps_keyed_approval_waiting() {
     let state = store.append_event(activity).unwrap();
     let snapshot = store.internal_status_snapshot().unwrap();
     let session = state
-        .sessions
+        .runtime_states
         .iter()
-        .find(|session| session.id == "session-a")
+        .find(|session| session.session_id == "session-a")
         .unwrap();
 
     assert_eq!(state.attention_items.len(), 1);
     assert_eq!(
         state.attention_items[0].status,
-        SessionStatus::WaitingApproval
+        RuntimeStateStatus::WaitingApproval
     );
-    assert_eq!(session.status, SessionStatus::WaitingApproval);
+    assert_eq!(session.status, RuntimeStateStatus::WaitingApproval);
     assert_eq!(
         session.last_activity_at,
         Utc.timestamp_opt(2_000, 0).single().unwrap()
     );
-    assert_eq!(snapshot.status, SessionStatus::WaitingApproval);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingApproval);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-a"));
 }
 
@@ -652,8 +655,11 @@ fn resolved_approval_activity_clears_only_matching_attention_item() {
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert_eq!(state.attention_items.len(), 1);
-    assert_eq!(state.attention_items[0].status, SessionStatus::WaitingInput);
-    assert_eq!(snapshot.status, SessionStatus::WaitingInput);
+    assert_eq!(
+        state.attention_items[0].status,
+        RuntimeStateStatus::WaitingInput
+    );
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingInput);
 }
 
 #[test]
@@ -685,8 +691,11 @@ fn resolved_approval_activity_clears_unkeyed_hook_approval_without_hiding_input(
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert_eq!(state.attention_items.len(), 1);
-    assert_eq!(state.attention_items[0].status, SessionStatus::WaitingInput);
-    assert_eq!(snapshot.status, SessionStatus::WaitingInput);
+    assert_eq!(
+        state.attention_items[0].status,
+        RuntimeStateStatus::WaitingInput
+    );
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingInput);
 }
 
 #[test]
@@ -722,7 +731,7 @@ fn idle_from_same_session_clears_attention_without_hiding_other_attention() {
 
     assert_eq!(state.attention_items.len(), 1);
     assert_eq!(state.attention_items[0].session_id, "session-b");
-    assert_eq!(snapshot.status, SessionStatus::WaitingInput);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingInput);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-b"));
 }
 
@@ -751,14 +760,14 @@ fn stale_clears_same_session_running_activity_without_becoming_primary_status() 
 
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "session-a")
+            .find(|session| session.session_id == "session-a")
             .unwrap()
             .status,
-        SessionStatus::Stale
+        RuntimeStateStatus::Stale
     );
-    assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Idle);
     assert_eq!(snapshot.primary_session_id, None);
 }
 
@@ -795,7 +804,7 @@ fn stale_does_not_hide_attention_from_other_sessions() {
 
     assert_eq!(state.attention_items.len(), 1);
     assert_eq!(state.attention_items[0].session_id, "session-b");
-    assert_eq!(snapshot.status, SessionStatus::WaitingInput);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingInput);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-b"));
 }
 
@@ -834,30 +843,30 @@ fn mark_stale_running_sessions_only_stales_old_running_sessions() {
 
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "old-running")
+            .find(|session| session.session_id == "old-running")
             .unwrap()
             .status,
-        SessionStatus::Stale
+        RuntimeStateStatus::Stale
     );
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "new-running")
+            .find(|session| session.session_id == "new-running")
             .unwrap()
             .status,
-        SessionStatus::Running
+        RuntimeStateStatus::Running
     );
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "old-completed")
+            .find(|session| session.session_id == "old-completed")
             .unwrap()
             .status,
-        SessionStatus::Completed
+        RuntimeStateStatus::Completed
     );
 }
 
@@ -880,12 +889,12 @@ fn mark_stale_running_sessions_stales_at_exact_timeout_boundary() {
 
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "boundary-running")
+            .find(|session| session.session_id == "boundary-running")
             .unwrap()
             .status,
-        SessionStatus::Stale
+        RuntimeStateStatus::Stale
     );
 }
 
@@ -913,12 +922,12 @@ fn mark_stale_running_sessions_is_idempotent_for_same_now() {
     assert!(state.events.is_empty());
     assert_eq!(
         state
-            .sessions
+            .runtime_states
             .iter()
-            .find(|session| session.id == "old-running")
+            .find(|session| session.session_id == "old-running")
             .unwrap()
             .status,
-        SessionStatus::Stale
+        RuntimeStateStatus::Stale
     );
 }
 
@@ -946,7 +955,7 @@ fn duplicate_attention_events_are_kept_when_dedupe_keys_are_different() {
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert_eq!(state.attention_items.len(), 2);
-    assert_eq!(snapshot.status, SessionStatus::WaitingApproval);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingApproval);
     assert_eq!(
         snapshot.updated_at,
         Some(Utc.timestamp_opt(1_000, 0).single().unwrap())
@@ -961,8 +970,11 @@ fn input_requested_updates_session_to_waiting_input() {
 
     let state = store.append_event(event).unwrap();
 
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].status, SessionStatus::WaitingInput);
+    assert_eq!(state.runtime_states.len(), 1);
+    assert_eq!(
+        state.runtime_states[0].status,
+        RuntimeStateStatus::WaitingInput
+    );
 }
 
 #[test]
@@ -972,8 +984,8 @@ fn task_failed_updates_session_to_error() {
 
     let state = store.append_event(event).unwrap();
 
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].status, SessionStatus::Error);
+    assert_eq!(state.runtime_states.len(), 1);
+    assert_eq!(state.runtime_states[0].status, RuntimeStateStatus::Error);
 }
 
 #[test]
@@ -986,7 +998,7 @@ fn reset_clears_events_and_sessions() {
     let state = store.reset().unwrap();
 
     assert!(state.events.is_empty());
-    assert!(state.sessions.is_empty());
+    assert!(state.runtime_states.is_empty());
     assert!(store.load().unwrap().events.is_empty());
 }
 
@@ -1229,7 +1241,7 @@ fn dismiss_active_blocker_clears_all_attention_items_without_changing_latest_act
 
     assert_eq!(result.dismissed_count, 2);
     assert!(state.attention_items.is_empty());
-    assert_eq!(snapshot.status, SessionStatus::Running);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Running);
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("session-running")
@@ -1280,8 +1292,8 @@ fn sqlite_store_matches_core_status_flow() {
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert!(state.events.is_empty());
-    assert_eq!(state.sessions.len(), 2);
-    assert_eq!(snapshot.status, SessionStatus::WaitingApproval);
+    assert_eq!(state.runtime_states.len(), 2);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingApproval);
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("session-approval")
@@ -1440,13 +1452,13 @@ fn clear_tool_state_removes_only_codex_aggregation() {
 
     let state = store.clear_tool_state(&ToolKind::Codex).unwrap();
 
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].tool, ToolKind::ClaudeCode);
-    assert_eq!(state.sessions[0].id, "claude-session");
+    assert_eq!(state.runtime_states.len(), 1);
+    assert_eq!(state.runtime_states[0].tool, ToolKind::ClaudeCode);
+    assert_eq!(state.runtime_states[0].session_id, "claude-session");
     assert_eq!(state.attention_items.len(), 1);
     assert_eq!(state.attention_items[0].session_id, "claude-session");
     let snapshot = store.internal_status_snapshot().unwrap();
-    assert_eq!(snapshot.status, SessionStatus::WaitingApproval);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingApproval);
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("claude-session")
@@ -1468,9 +1480,9 @@ fn clear_tool_state_resets_codex_latest_activity_to_idle() {
     let state = store.clear_tool_state(&ToolKind::Codex).unwrap();
     let snapshot = store.internal_status_snapshot().unwrap();
 
-    assert!(state.sessions.is_empty());
+    assert!(state.runtime_states.is_empty());
     assert!(state.attention_items.is_empty());
-    assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Idle);
 }
 
 #[test]
@@ -1551,18 +1563,18 @@ fn session_activity_keeps_session_running_and_updates_last_activity() {
         .unwrap();
 
     let session = state
-        .sessions
+        .runtime_states
         .iter()
-        .find(|session| session.id == "session-a")
+        .find(|session| session.session_id == "session-a")
         .unwrap();
-    assert_eq!(session.status, SessionStatus::Running);
+    assert_eq!(session.status, RuntimeStateStatus::Running);
     assert_eq!(
         session.last_activity_at,
         Utc.timestamp_opt(1_200, 0).single().unwrap()
     );
     assert_eq!(
         store.internal_status_snapshot().unwrap().status,
-        SessionStatus::Running
+        RuntimeStateStatus::Running
     );
 }
 
@@ -1596,14 +1608,14 @@ fn session_activity_after_completion_does_not_reopen_session() {
         .unwrap();
 
     let session = state
-        .sessions
+        .runtime_states
         .iter()
-        .find(|session| session.id == "session-a")
+        .find(|session| session.session_id == "session-a")
         .unwrap();
-    assert_eq!(session.status, SessionStatus::Completed);
+    assert_eq!(session.status, RuntimeStateStatus::Completed);
     assert_eq!(
         store.internal_status_snapshot().unwrap().status,
-        SessionStatus::Completed
+        RuntimeStateStatus::Completed
     );
 }
 
@@ -1646,12 +1658,12 @@ fn codex_rollback_sequence_finishes_even_with_late_token_count() {
     let snapshot = store.internal_status_snapshot().unwrap();
     let state = store.load().unwrap();
     let session = state
-        .sessions
+        .runtime_states
         .iter()
-        .find(|session| session.id == "session-rollback")
+        .find(|session| session.session_id == "session-rollback")
         .unwrap();
-    assert_eq!(session.status, SessionStatus::Completed);
-    assert_eq!(snapshot.status, SessionStatus::Completed);
+    assert_eq!(session.status, RuntimeStateStatus::Completed);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Completed);
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("session-rollback")
@@ -1706,9 +1718,9 @@ fn empty_project_path_does_not_overwrite_existing_session_path() {
 
     let state = store.append_event(empty_path_event).unwrap();
     let session = state
-        .sessions
+        .runtime_states
         .iter()
-        .find(|session| session.id == "session-a")
+        .find(|session| session.session_id == "session-a")
         .unwrap();
 
     assert_eq!(session.project_path, "/tmp/demo");
@@ -1739,7 +1751,7 @@ fn sqlite_store_reset_and_dismiss_preserve_activity_behavior() {
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert_eq!(result.dismissed_count, 1);
-    assert_eq!(snapshot.status, SessionStatus::Running);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Running);
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("session-running")
@@ -1749,8 +1761,8 @@ fn sqlite_store_reset_and_dismiss_preserve_activity_behavior() {
     let snapshot = store.internal_status_snapshot().unwrap();
 
     assert!(state.events.is_empty());
-    assert!(state.sessions.is_empty());
-    assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert!(state.runtime_states.is_empty());
+    assert_eq!(snapshot.status, RuntimeStateStatus::Idle);
 }
 
 fn sample_event(dedupe_key: &str, event_type: EventType) -> NiumaEvent {

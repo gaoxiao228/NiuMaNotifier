@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::models::{EventType, NiumaEvent, SessionStatus};
+use crate::models::{EventType, NiumaEvent, RuntimeStateStatus};
 
 // 主状态 detail 和通知正文共用这里的展示字段规则，避免 content/summary fallback 分叉。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,20 +31,20 @@ pub(crate) fn detail_from_event(event: &NiumaEvent) -> EventDisplayDetail {
 }
 
 pub(crate) fn fallback_content_for_status(
-    status: &SessionStatus,
+    status: &RuntimeStateStatus,
     content: Option<&str>,
     summary: &str,
 ) -> Option<String> {
     match status {
-        SessionStatus::WaitingApproval | SessionStatus::WaitingInput | SessionStatus::Completed => {
-            Some(truncate(
-                content
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or(summary),
-                8000,
-            ))
-        }
-        SessionStatus::Running => content
+        RuntimeStateStatus::WaitingApproval
+        | RuntimeStateStatus::WaitingInput
+        | RuntimeStateStatus::Completed => Some(truncate(
+            content
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(summary),
+            8000,
+        )),
+        RuntimeStateStatus::Running => content
             .filter(|value| !value.trim().is_empty())
             .map(|value| truncate(value, 8000)),
         _ => None,
@@ -52,11 +52,11 @@ pub(crate) fn fallback_content_for_status(
 }
 
 pub(crate) fn fallback_error_for_status(
-    status: &SessionStatus,
+    status: &RuntimeStateStatus,
     error_message: Option<&str>,
     summary: &str,
 ) -> Option<String> {
-    if *status == SessionStatus::Error {
+    if *status == RuntimeStateStatus::Error {
         return Some(truncate(
             error_message
                 .filter(|value| !value.trim().is_empty())
@@ -67,21 +67,21 @@ pub(crate) fn fallback_error_for_status(
     None
 }
 
-pub(crate) fn status_for_event_type(event_type: &EventType) -> SessionStatus {
+pub(crate) fn status_for_event_type(event_type: &EventType) -> RuntimeStateStatus {
     match event_type {
         EventType::SessionStarted | EventType::SessionActivity | EventType::ApprovalResolved => {
-            SessionStatus::Running
+            RuntimeStateStatus::Running
         }
         EventType::ApprovalRequested | EventType::ApprovalReturnedToCodex => {
-            SessionStatus::WaitingApproval
+            RuntimeStateStatus::WaitingApproval
         }
-        EventType::InputRequested => SessionStatus::WaitingInput,
-        EventType::TaskFailed => SessionStatus::Error,
+        EventType::InputRequested => RuntimeStateStatus::WaitingInput,
+        EventType::TaskFailed => RuntimeStateStatus::Error,
         EventType::AssistantMessageCompleted | EventType::ManualDismissed => {
-            SessionStatus::Completed
+            RuntimeStateStatus::Completed
         }
-        EventType::SessionIdled => SessionStatus::Idle,
-        EventType::SessionStaled => SessionStatus::Stale,
+        EventType::SessionIdled => RuntimeStateStatus::Idle,
+        EventType::SessionStaled => RuntimeStateStatus::Stale,
     }
 }
 
@@ -101,27 +101,27 @@ pub(crate) fn event_type_name(event_type: &EventType) -> &'static str {
     }
 }
 
-pub(crate) fn event_type_name_for_status(status: &SessionStatus) -> &'static str {
+pub(crate) fn event_type_name_for_status(status: &RuntimeStateStatus) -> &'static str {
     match status {
-        SessionStatus::WaitingApproval => "approval_requested",
-        SessionStatus::WaitingInput => "input_requested",
-        SessionStatus::Running => "session_activity",
-        SessionStatus::Completed => "assistant_message_completed",
-        SessionStatus::Error => "task_failed",
-        SessionStatus::Idle => "session_idled",
-        SessionStatus::Stale => "session_staled",
+        RuntimeStateStatus::WaitingApproval => "approval_requested",
+        RuntimeStateStatus::WaitingInput => "input_requested",
+        RuntimeStateStatus::Running => "session_activity",
+        RuntimeStateStatus::Completed => "assistant_message_completed",
+        RuntimeStateStatus::Error => "task_failed",
+        RuntimeStateStatus::Idle => "session_idled",
+        RuntimeStateStatus::Stale => "session_staled",
     }
 }
 
-pub(crate) fn status_summary(status: &SessionStatus) -> &'static str {
+pub(crate) fn status_summary(status: &RuntimeStateStatus) -> &'static str {
     match status {
-        SessionStatus::WaitingApproval => "waiting approval",
-        SessionStatus::WaitingInput => "waiting input",
-        SessionStatus::Running => "running",
-        SessionStatus::Completed => "completed",
-        SessionStatus::Error => "error",
-        SessionStatus::Idle => "idle",
-        SessionStatus::Stale => "stale",
+        RuntimeStateStatus::WaitingApproval => "waiting approval",
+        RuntimeStateStatus::WaitingInput => "waiting input",
+        RuntimeStateStatus::Running => "running",
+        RuntimeStateStatus::Completed => "completed",
+        RuntimeStateStatus::Error => "error",
+        RuntimeStateStatus::Idle => "idle",
+        RuntimeStateStatus::Stale => "stale",
     }
 }
 

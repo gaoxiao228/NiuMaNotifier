@@ -1,5 +1,5 @@
 use crate::models::{
-    AttentionItem, InternalStateSnapshot, LatestActivity, NiumaEvent, SessionStatus,
+    AttentionItem, InternalStateSnapshot, LatestActivity, NiumaEvent, RuntimeStateStatus,
 };
 
 pub struct InternalStateEngine;
@@ -34,7 +34,7 @@ impl InternalStateEngine {
         }
 
         InternalStateSnapshot {
-            status: SessionStatus::Idle,
+            status: RuntimeStateStatus::Idle,
             primary_session_id: None,
             updated_at: None,
             primary_event: None,

@@ -10,8 +10,8 @@ use crate::event_display::{
     fallback_content_for_status, fallback_error_for_status, status_summary, EventDisplayDetail,
 };
 use crate::models::{
-    ApprovalRequest, ApprovalStatus, AttentionItem, LatestActivity, NiumaEvent, NiumaSession,
-    SessionStatus, ToolKind,
+    ApprovalRequest, ApprovalStatus, AttentionItem, LatestActivity, NiumaEvent, RuntimeStateItem,
+    RuntimeStateStatus, ToolKind,
 };
 use crate::runtime_event::RuntimeEventBus;
 use crate::store::NiumaStore;
@@ -115,7 +115,7 @@ impl MainStateService {
             return Ok(state_from_attention_item(
                 item,
                 MainStateStatus::from(&item.status),
-                &state.sessions,
+                &state.runtime_states,
                 &public_events,
                 &state.approval_requests,
             ));
@@ -124,7 +124,7 @@ impl MainStateService {
             return Ok(state_from_attention_item(
                 item,
                 MainStateStatus::Error,
-                &state.sessions,
+                &state.runtime_states,
                 &public_events,
                 &state.approval_requests,
             ));
@@ -132,7 +132,7 @@ impl MainStateService {
         if let Some(activity) = state.latest_activity.as_ref() {
             return Ok(state_from_latest_activity(
                 activity,
-                &state.sessions,
+                &state.runtime_states,
                 &public_events,
                 now,
             ));
@@ -144,14 +144,14 @@ impl MainStateService {
 fn state_from_attention_item(
     item: &AttentionItem,
     status: MainStateStatus,
-    sessions: &[NiumaSession],
+    runtime_states: &[RuntimeStateItem],
     public_events: &HashMap<String, NiumaEvent>,
     approval_requests: &[ApprovalRequest],
 ) -> MainStatePayload {
     let event = public_events.get(&item.event_id);
-    let session = sessions
+    let session = runtime_states
         .iter()
-        .find(|session| session.id == item.session_id)
+        .find(|state| state.session_id == item.session_id)
         .map(StateSession::from);
     MainStatePayload {
         version: 0,
@@ -164,7 +164,7 @@ fn state_from_attention_item(
 
 fn state_from_latest_activity(
     activity: &LatestActivity,
-    sessions: &[NiumaSession],
+    runtime_states: &[RuntimeStateItem],
     public_events: &HashMap<String, NiumaEvent>,
     now: DateTime<Utc>,
 ) -> MainStatePayload {
@@ -188,7 +188,11 @@ fn state_from_latest_activity(
     let session = activity
         .session_id
         .as_deref()
-        .and_then(|session_id| sessions.iter().find(|session| session.id == session_id))
+        .and_then(|session_id| {
+            runtime_states
+                .iter()
+                .find(|state| state.session_id == session_id)
+        })
         .map(StateSession::from);
     MainStatePayload {
         version: 0,
@@ -206,10 +210,10 @@ fn event_map(events: Vec<NiumaEvent>) -> HashMap<String, NiumaEvent> {
         .collect()
 }
 
-impl From<&NiumaSession> for StateSession {
-    fn from(session: &NiumaSession) -> Self {
+impl From<&RuntimeStateItem> for StateSession {
+    fn from(session: &RuntimeStateItem) -> Self {
         Self {
-            id: session.id.clone(),
+            id: session.session_id.clone(),
             tool: session.tool.clone(),
             project_name: session.project_name.clone(),
             project_path: session.project_path.clone(),
@@ -217,15 +221,15 @@ impl From<&NiumaSession> for StateSession {
     }
 }
 
-impl From<&SessionStatus> for MainStateStatus {
-    fn from(status: &SessionStatus) -> Self {
+impl From<&RuntimeStateStatus> for MainStateStatus {
+    fn from(status: &RuntimeStateStatus) -> Self {
         match status {
-            SessionStatus::WaitingApproval => MainStateStatus::WaitingApproval,
-            SessionStatus::WaitingInput => MainStateStatus::WaitingInput,
-            SessionStatus::Running => MainStateStatus::Running,
-            SessionStatus::Completed => MainStateStatus::Completed,
-            SessionStatus::Error => MainStateStatus::Error,
-            SessionStatus::Idle | SessionStatus::Stale => MainStateStatus::Idle,
+            RuntimeStateStatus::WaitingApproval => MainStateStatus::WaitingApproval,
+            RuntimeStateStatus::WaitingInput => MainStateStatus::WaitingInput,
+            RuntimeStateStatus::Running => MainStateStatus::Running,
+            RuntimeStateStatus::Completed => MainStateStatus::Completed,
+            RuntimeStateStatus::Error => MainStateStatus::Error,
+            RuntimeStateStatus::Idle | RuntimeStateStatus::Stale => MainStateStatus::Idle,
         }
     }
 }
@@ -234,7 +238,7 @@ fn first_waiting_item(items: &[AttentionItem]) -> Option<&AttentionItem> {
     items.iter().find(|item| {
         matches!(
             item.status,
-            SessionStatus::WaitingApproval | SessionStatus::WaitingInput
+            RuntimeStateStatus::WaitingApproval | RuntimeStateStatus::WaitingInput
         )
     })
 }
@@ -242,7 +246,7 @@ fn first_waiting_item(items: &[AttentionItem]) -> Option<&AttentionItem> {
 fn first_error_item(items: &[AttentionItem]) -> Option<&AttentionItem> {
     items
         .iter()
-        .find(|item| item.status == SessionStatus::Error)
+        .find(|item| item.status == RuntimeStateStatus::Error)
 }
 
 fn detail_from_attention_item(
@@ -263,7 +267,7 @@ fn detail_from_attention_item(
         None => StateDetail {
             event_id: item.event_id.clone(),
             event_type: event_type_name_for_status(&item.status).to_string(),
-            severity: if item.status == SessionStatus::Error {
+            severity: if item.status == RuntimeStateStatus::Error {
                 "error"
             } else {
                 "urgent"
@@ -288,7 +292,7 @@ fn activity_detail(activity: &LatestActivity, event: Option<&NiumaEvent>) -> Opt
     event
         .map(detail_from_event)
         .or_else(|| match activity.status {
-            SessionStatus::Idle | SessionStatus::Stale => None,
+            RuntimeStateStatus::Idle | RuntimeStateStatus::Stale => None,
             _ => activity.event_id.as_ref().map(|event_id| StateDetail {
                 event_id: event_id.clone(),
                 event_type: event_type_name_for_status(&activity.status).to_string(),

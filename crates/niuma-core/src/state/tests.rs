@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 
-use crate::models::{AttentionItem, LatestActivity, SessionStatus, ToolKind};
+use crate::models::{AttentionItem, LatestActivity, RuntimeStateStatus, ToolKind};
 use crate::state::InternalStateEngine;
 
 #[test]
@@ -20,14 +20,14 @@ fn earliest_attention_item_wins_over_later_attention_item() {
         second_time,
     );
     let attention_items = vec![
-        AttentionItem::from_event(&first_event, SessionStatus::WaitingInput),
-        AttentionItem::from_event(&second_event, SessionStatus::WaitingApproval),
+        AttentionItem::from_event(&first_event, RuntimeStateStatus::WaitingInput),
+        AttentionItem::from_event(&second_event, RuntimeStateStatus::WaitingApproval),
     ];
 
     let snapshot =
         InternalStateEngine::aggregate(&attention_items, None, &[first_event, second_event]);
 
-    assert_eq!(snapshot.status, SessionStatus::WaitingInput);
+    assert_eq!(snapshot.status, RuntimeStateStatus::WaitingInput);
     assert_eq!(snapshot.primary_session_id.as_deref(), Some("session-a"));
     assert_eq!(snapshot.primary_event.unwrap().summary, "event-input");
 }
@@ -41,11 +41,11 @@ fn latest_activity_is_used_when_no_attention_items_exist() {
         crate::models::EventType::SessionStarted,
         now,
     );
-    let activity = LatestActivity::from_event(&event, SessionStatus::Running);
+    let activity = LatestActivity::from_event(&event, RuntimeStateStatus::Running);
 
     let snapshot = InternalStateEngine::aggregate(&[], Some(&activity), &[event]);
 
-    assert_eq!(snapshot.status, SessionStatus::Running);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Running);
     assert_eq!(
         snapshot.primary_session_id.as_deref(),
         Some("session-running")
@@ -60,7 +60,7 @@ fn latest_activity_is_used_when_no_attention_items_exist() {
 fn idle_is_used_when_no_attention_or_latest_activity_exists() {
     let snapshot = InternalStateEngine::aggregate(&[], None, &[]);
 
-    assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert_eq!(snapshot.status, RuntimeStateStatus::Idle);
     assert_eq!(snapshot.primary_session_id, None);
     assert_eq!(snapshot.primary_event, None);
 }

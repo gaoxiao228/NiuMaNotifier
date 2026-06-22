@@ -245,7 +245,7 @@ mod tests {
         let result = service.set_codex_listening_enabled(false).unwrap();
 
         assert!(!result.config.codex_listening_enabled);
-        assert!(store.load().unwrap().sessions.is_empty());
+        assert!(store.load().unwrap().runtime_states.is_empty());
         assert_eq!(
             receiver.try_recv().unwrap(),
             RuntimeEvent::StateChanged {
@@ -295,9 +295,9 @@ mod tests {
         assert!(result.config.codex_listening_enabled);
         assert!(!result.config.claude_code_listening_enabled);
         let state = store.load().unwrap();
-        assert_eq!(state.sessions.len(), 1);
-        assert_eq!(state.sessions[0].tool, ToolKind::Codex);
-        assert_eq!(state.sessions[0].id, "codex-session");
+        assert_eq!(state.runtime_states.len(), 1);
+        assert_eq!(state.runtime_states[0].tool, ToolKind::Codex);
+        assert_eq!(state.runtime_states[0].session_id, "codex-session");
     }
 
     fn sample_event(

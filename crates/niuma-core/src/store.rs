@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::listener_config::ListenerConfig;
 use crate::models::{
     ApprovalDecisionKind, ApprovalRequest, AttentionItem, EventType, InternalStateSnapshot,
-    LatestActivity, NiumaEvent, NiumaSession, SessionStatus, ToolKind,
+    LatestActivity, NiumaEvent, RuntimeStateItem, RuntimeStateStatus, ToolKind,
 };
 use crate::notification_store::{
     insert_record_if_absent, load_history_records, load_plugin_result, load_records,
@@ -28,7 +28,7 @@ mod transitions;
 use config_files::ConfigFileStore;
 use schema::init_schema;
 use transitions::{
-    already_applied, apply_attention_transition, is_late_terminal_activity, upsert_session,
+    already_applied, apply_attention_transition, is_late_terminal_activity, upsert_runtime_state,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -36,7 +36,7 @@ pub struct StoredState {
     #[serde(default)]
     pub events: Vec<NiumaEvent>,
     #[serde(default)]
-    pub sessions: Vec<NiumaSession>,
+    pub runtime_states: Vec<RuntimeStateItem>,
     #[serde(default)]
     pub attention_items: Vec<AttentionItem>,
     #[serde(default)]
@@ -49,7 +49,7 @@ impl Default for StoredState {
     fn default() -> Self {
         Self {
             events: Vec::new(),
-            sessions: Vec::new(),
+            runtime_states: Vec::new(),
             attention_items: Vec::new(),
             latest_activity: Some(LatestActivity::idle()),
             approval_requests: Vec::new(),
@@ -150,14 +150,14 @@ impl NiumaStore {
             if self.event_already_applied(&runtime, &state, &event) {
                 continue;
             }
-            if is_late_terminal_activity(&state.sessions, &event) {
+            if is_late_terminal_activity(&state.runtime_states, &event) {
                 continue;
             }
             runtime.dedupe_keys.insert(event.dedupe_key.clone());
             if is_public_event(&event) {
                 runtime.public_events.push(event.clone());
             }
-            upsert_session(&mut state.sessions, &event);
+            upsert_runtime_state(&mut state.runtime_states, &event);
             apply_attention_transition(&mut state, &event);
             applied_events.push(event);
         }
@@ -200,16 +200,20 @@ impl NiumaStore {
         let mut runtime = self.runtime()?;
         let mut state = runtime.state.clone();
         let events = state
-            .sessions
+            .runtime_states
             .iter()
-            .filter(|session| session.status == SessionStatus::Running)
+            .filter(|session| session.status == RuntimeStateStatus::Running)
             .filter(|session| now - session.last_activity_at >= timeout)
             .map(|session| NiumaEvent {
-                id: format!("event_stale_{}_{}", session.id, now.timestamp_millis()),
-                dedupe_key: format!("stale:{}:{}", session.id, now.timestamp()),
+                id: format!(
+                    "event_stale_{}_{}",
+                    session.session_id,
+                    now.timestamp_millis()
+                ),
+                dedupe_key: format!("stale:{}:{}", session.session_id, now.timestamp()),
                 source: "codex-session-stale-sweeper".to_string(),
                 tool: session.tool.clone(),
-                session_id: session.id.clone(),
+                session_id: session.session_id.clone(),
                 project_path: session.project_path.clone(),
                 project_name: session.project_name.clone(),
                 event_type: EventType::SessionStaled,
@@ -231,7 +235,7 @@ impl NiumaStore {
                 continue;
             }
             runtime.dedupe_keys.insert(event.dedupe_key.clone());
-            upsert_session(&mut state.sessions, &event);
+            upsert_runtime_state(&mut state.runtime_states, &event);
             apply_attention_transition(&mut state, &event);
             staled_count += 1;
         }
@@ -272,8 +276,8 @@ impl NiumaStore {
         })
     }
 
-    pub fn sessions(&self) -> Result<Vec<NiumaSession>, String> {
-        Ok(self.load()?.sessions)
+    pub fn runtime_state_list(&self) -> Result<Vec<RuntimeStateItem>, String> {
+        Ok(self.load()?.runtime_states)
     }
 
     pub fn recent_events(&self, limit: usize) -> Result<Vec<NiumaEvent>, String> {
@@ -519,13 +523,13 @@ impl NiumaStore {
         let mut runtime = self.runtime()?;
         let mut state = runtime.state.clone();
         let removed_session_ids = state
-            .sessions
+            .runtime_states
             .iter()
             .filter(|session| &session.tool == tool)
-            .map(|session| session.id.clone())
+            .map(|session| session.session_id.clone())
             .collect::<std::collections::HashSet<_>>();
 
-        state.sessions.retain(|session| &session.tool != tool);
+        state.runtime_states.retain(|session| &session.tool != tool);
         state
             .approval_requests
             .retain(|request| &request.tool != tool);

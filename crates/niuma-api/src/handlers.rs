@@ -179,9 +179,9 @@ pub(crate) async fn get_events(
     }
 }
 
-pub(crate) async fn get_sessions(State(state): State<AppState>) -> Response {
-    match DashboardService::new(state.store).sessions() {
-        Ok(sessions) => json_response(200, ApiResponse::ok(json!({ "list": sessions }))),
+pub(crate) async fn get_runtime_state_list(State(state): State<AppState>) -> Response {
+    match DashboardService::new(state.store).runtime_state_list() {
+        Ok(items) => json_response(200, ApiResponse::ok(json!({ "list": items }))),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
     }
 }
@@ -291,7 +291,7 @@ pub(crate) async fn post_plugin_events(State(state): State<AppState>, body: Byte
                 "plugin_id": plugin.id,
                 "event_count": result.state.events.len(),
                 "applied_count": result.applied_events.len(),
-                "session_count": result.state.sessions.len(),
+                "session_count": result.state.runtime_states.len(),
                 "delayed_count": delayed_count,
                 "suppressed_count": suppressed_count
             })),
@@ -547,7 +547,7 @@ fn append_events_response(state: &AppState, events: Vec<NiumaEvent>) -> Response
                 "delayed": false,
                 "applied": true,
                 "event_count": result.state.events.len(),
-                "session_count": result.state.sessions.len()
+                "session_count": result.state.runtime_states.len()
             })),
         ),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
@@ -1690,7 +1690,7 @@ pub(crate) async fn reset_state(State(state): State<AppState>, body: Bytes) -> R
                     "reset": true,
                     "reset_at": reset_at,
                     "event_count": stored.events.len(),
-                    "session_count": stored.sessions.len(),
+                    "session_count": stored.runtime_states.len(),
                     "state": main_state
                 })),
             ),

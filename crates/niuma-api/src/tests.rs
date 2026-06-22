@@ -208,10 +208,33 @@ async fn post_plugin_events_rejects_tool_mismatch() {
 }
 
 #[tokio::test]
-async fn get_sessions_returns_standard_list_envelope() {
-    let store = NiumaStore::new(test_path("get_sessions_list"));
+async fn runtime_state_list_returns_standard_list_envelope() {
+    let store = NiumaStore::new(test_path("runtime_state_list"));
     store.append_event(sample_event()).unwrap();
     let router = app(store);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/runtime_state_list")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["list"][0]["session_id"], "s1");
+    // 运行态只保留工具 session_id 作为关联字段，不再暴露旧的 id 字段。
+    assert!(value["data"]["list"][0].get("id").is_none());
+}
+
+#[tokio::test]
+async fn old_sessions_route_is_removed() {
+    let router = app(NiumaStore::new(test_path("old_sessions_route_removed")));
 
     let response = router
         .oneshot(
@@ -225,9 +248,8 @@ async fn get_sessions_returns_standard_list_envelope() {
     let status = response.status();
     let value = response_json(response).await;
 
-    assert_eq!(status, 200);
-    assert_eq!(value["code"], 0);
-    assert_eq!(value["data"]["list"][0]["id"], "s1");
+    assert_eq!(status, 404);
+    assert_eq!(value["code"], 900005);
 }
 
 #[tokio::test]

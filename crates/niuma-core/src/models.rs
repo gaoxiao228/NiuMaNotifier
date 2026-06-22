@@ -55,7 +55,7 @@ impl<'de> Deserialize<'de> for ToolId {
 // 状态枚举使用产品文档中的命名，序列化时保持 API 友好的 snake_case。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionStatus {
+pub enum RuntimeStateStatus {
     Idle,
     Running,
     WaitingApproval,
@@ -66,12 +66,12 @@ pub enum SessionStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NiumaSession {
-    pub id: String,
+pub struct RuntimeStateItem {
     pub tool: ToolKind,
+    pub session_id: String,
     pub project_path: String,
     pub project_name: String,
-    pub status: SessionStatus,
+    pub status: RuntimeStateStatus,
     pub last_event_id: Option<String>,
     pub last_activity_at: DateTime<Utc>,
 }
@@ -80,7 +80,7 @@ pub struct NiumaSession {
 pub struct AttentionItem {
     pub event_id: String,
     pub session_id: String,
-    pub status: SessionStatus,
+    pub status: RuntimeStateStatus,
     pub summary: String,
     // 用于把后续“已恢复运行”的事件精确匹配到某个待处理项。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,7 +89,7 @@ pub struct AttentionItem {
 }
 
 impl AttentionItem {
-    pub fn from_event(event: &NiumaEvent, status: SessionStatus) -> Self {
+    pub fn from_event(event: &NiumaEvent, status: RuntimeStateStatus) -> Self {
         Self {
             event_id: event.id.clone(),
             session_id: event.session_id.clone(),
@@ -175,7 +175,7 @@ pub struct ApprovalDecision {
 pub struct LatestActivity {
     pub event_id: Option<String>,
     pub session_id: Option<String>,
-    pub status: SessionStatus,
+    pub status: RuntimeStateStatus,
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -184,12 +184,12 @@ impl LatestActivity {
         Self {
             event_id: None,
             session_id: None,
-            status: SessionStatus::Idle,
+            status: RuntimeStateStatus::Idle,
             updated_at: None,
         }
     }
 
-    pub fn from_event(event: &NiumaEvent, status: SessionStatus) -> Self {
+    pub fn from_event(event: &NiumaEvent, status: RuntimeStateStatus) -> Self {
         Self {
             event_id: Some(event.id.clone()),
             session_id: Some(event.session_id.clone()),
@@ -277,7 +277,7 @@ pub struct NiumaEvent {
 // 对外展示状态统一使用 MainStatePayload，由 MainStateService 计算。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InternalStateSnapshot {
-    pub status: SessionStatus,
+    pub status: RuntimeStateStatus,
     pub primary_session_id: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
     pub primary_event: Option<NiumaEvent>,
