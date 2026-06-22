@@ -4,7 +4,7 @@ use std::thread;
 
 use chrono::{DateTime, Utc};
 use niuma_core::main_state::{MainStateService, MainStateStatus, MainStateWatcher};
-use niuma_core::models::SessionStatus;
+use niuma_core::models::RuntimeStateStatus;
 use niuma_core::platform::locale::{
     active_language, active_language_preference, set_active_language_preference,
     LanguagePreference, SystemLanguage,
@@ -316,25 +316,25 @@ fn refresh_tray_labels<R: Runtime>(
     *last_labels = Some(labels);
 }
 
-fn current_status_from_store(store: &NiumaStore, now: DateTime<Utc>) -> SessionStatus {
+fn current_status_from_store(store: &NiumaStore, now: DateTime<Utc>) -> RuntimeStateStatus {
     MainStateService::new(store.clone())
         .current_state(now)
-        .map(|state| session_status_from_main_state(&state.status))
-        .unwrap_or(SessionStatus::Idle)
+        .map(|state| runtime_state_status_from_main_state(&state.status))
+        .unwrap_or(RuntimeStateStatus::Idle)
 }
 
-fn session_status_from_main_state(status: &MainStateStatus) -> SessionStatus {
+fn runtime_state_status_from_main_state(status: &MainStateStatus) -> RuntimeStateStatus {
     match status {
-        MainStateStatus::WaitingApproval => SessionStatus::WaitingApproval,
-        MainStateStatus::WaitingInput => SessionStatus::WaitingInput,
-        MainStateStatus::Running => SessionStatus::Running,
-        MainStateStatus::Completed => SessionStatus::Completed,
-        MainStateStatus::Error => SessionStatus::Error,
-        MainStateStatus::Idle => SessionStatus::Idle,
+        MainStateStatus::WaitingApproval => RuntimeStateStatus::WaitingApproval,
+        MainStateStatus::WaitingInput => RuntimeStateStatus::WaitingInput,
+        MainStateStatus::Running => RuntimeStateStatus::Running,
+        MainStateStatus::Completed => RuntimeStateStatus::Completed,
+        MainStateStatus::Error => RuntimeStateStatus::Error,
+        MainStateStatus::Idle => RuntimeStateStatus::Idle,
     }
 }
 
-fn tray_icon_for_status(_status: SessionStatus) -> tauri::Result<Image<'static>> {
+fn tray_icon_for_status(_status: RuntimeStateStatus) -> tauri::Result<Image<'static>> {
     Image::from_bytes(include_bytes!("../icons/icon.png"))
 }
 
@@ -349,7 +349,7 @@ struct TrayLabels {
     quit: &'static str,
 }
 
-fn tray_labels(status: &SessionStatus, locale: TrayLocale) -> TrayLabels {
+fn tray_labels(status: &RuntimeStateStatus, locale: TrayLocale) -> TrayLabels {
     let title = tray_status_label(status, locale);
     TrayLabels {
         title,
@@ -362,61 +362,61 @@ fn tray_labels(status: &SessionStatus, locale: TrayLocale) -> TrayLabels {
     }
 }
 
-pub fn tray_status_label(status: &SessionStatus, locale: TrayLocale) -> &'static str {
+pub fn tray_status_label(status: &RuntimeStateStatus, locale: TrayLocale) -> &'static str {
     match locale {
         TrayLocale::ZhCn => match status {
-            SessionStatus::Idle => "空闲",
-            SessionStatus::Running => "运行中",
-            SessionStatus::WaitingApproval => "待审批",
-            SessionStatus::WaitingInput => "待输入",
-            SessionStatus::Completed => "完成",
-            SessionStatus::Error => "出错",
-            SessionStatus::Stale => "空闲",
+            RuntimeStateStatus::Idle => "空闲",
+            RuntimeStateStatus::Running => "运行中",
+            RuntimeStateStatus::WaitingApproval => "待审批",
+            RuntimeStateStatus::WaitingInput => "待输入",
+            RuntimeStateStatus::Completed => "完成",
+            RuntimeStateStatus::Error => "出错",
+            RuntimeStateStatus::Stale => "空闲",
         },
         TrayLocale::ZhTw => match status {
-            SessionStatus::Idle => "閒置",
-            SessionStatus::Running => "執行中",
-            SessionStatus::WaitingApproval => "待審批",
-            SessionStatus::WaitingInput => "待輸入",
-            SessionStatus::Completed => "完成",
-            SessionStatus::Error => "出錯",
-            SessionStatus::Stale => "閒置",
+            RuntimeStateStatus::Idle => "閒置",
+            RuntimeStateStatus::Running => "執行中",
+            RuntimeStateStatus::WaitingApproval => "待審批",
+            RuntimeStateStatus::WaitingInput => "待輸入",
+            RuntimeStateStatus::Completed => "完成",
+            RuntimeStateStatus::Error => "出錯",
+            RuntimeStateStatus::Stale => "閒置",
         },
         TrayLocale::En => match status {
-            SessionStatus::Idle => "Idle",
-            SessionStatus::Running => "Running",
-            SessionStatus::WaitingApproval => "Approval",
-            SessionStatus::WaitingInput => "Input",
-            SessionStatus::Completed => "Done",
-            SessionStatus::Error => "Error",
-            SessionStatus::Stale => "Idle",
+            RuntimeStateStatus::Idle => "Idle",
+            RuntimeStateStatus::Running => "Running",
+            RuntimeStateStatus::WaitingApproval => "Approval",
+            RuntimeStateStatus::WaitingInput => "Input",
+            RuntimeStateStatus::Completed => "Done",
+            RuntimeStateStatus::Error => "Error",
+            RuntimeStateStatus::Stale => "Idle",
         },
         TrayLocale::Ja => match status {
-            SessionStatus::Idle => "待機",
-            SessionStatus::Running => "実行中",
-            SessionStatus::WaitingApproval => "承認待ち",
-            SessionStatus::WaitingInput => "入力待ち",
-            SessionStatus::Completed => "完了",
-            SessionStatus::Error => "エラー",
-            SessionStatus::Stale => "待機",
+            RuntimeStateStatus::Idle => "待機",
+            RuntimeStateStatus::Running => "実行中",
+            RuntimeStateStatus::WaitingApproval => "承認待ち",
+            RuntimeStateStatus::WaitingInput => "入力待ち",
+            RuntimeStateStatus::Completed => "完了",
+            RuntimeStateStatus::Error => "エラー",
+            RuntimeStateStatus::Stale => "待機",
         },
         TrayLocale::Ko => match status {
-            SessionStatus::Idle => "대기",
-            SessionStatus::Running => "실행 중",
-            SessionStatus::WaitingApproval => "승인 대기",
-            SessionStatus::WaitingInput => "입력 대기",
-            SessionStatus::Completed => "완료",
-            SessionStatus::Error => "오류",
-            SessionStatus::Stale => "대기",
+            RuntimeStateStatus::Idle => "대기",
+            RuntimeStateStatus::Running => "실행 중",
+            RuntimeStateStatus::WaitingApproval => "승인 대기",
+            RuntimeStateStatus::WaitingInput => "입력 대기",
+            RuntimeStateStatus::Completed => "완료",
+            RuntimeStateStatus::Error => "오류",
+            RuntimeStateStatus::Stale => "대기",
         },
         TrayLocale::De => match status {
-            SessionStatus::Idle => "Leerlauf",
-            SessionStatus::Running => "Läuft",
-            SessionStatus::WaitingApproval => "Freigabe",
-            SessionStatus::WaitingInput => "Eingabe",
-            SessionStatus::Completed => "Fertig",
-            SessionStatus::Error => "Fehler",
-            SessionStatus::Stale => "Leerlauf",
+            RuntimeStateStatus::Idle => "Leerlauf",
+            RuntimeStateStatus::Running => "Läuft",
+            RuntimeStateStatus::WaitingApproval => "Freigabe",
+            RuntimeStateStatus::WaitingInput => "Eingabe",
+            RuntimeStateStatus::Completed => "Fertig",
+            RuntimeStateStatus::Error => "Fehler",
+            RuntimeStateStatus::Stale => "Leerlauf",
         },
     }
 }
@@ -694,7 +694,9 @@ pub fn install_macos_terminate_guard() -> bool {
 mod tests {
     use chrono::{TimeZone, Utc};
     use niuma_core::listener_config::ListenerConfig;
-    use niuma_core::models::{CompletionReason, EventType, NiumaEvent, SessionStatus, ToolKind};
+    use niuma_core::models::{
+        CompletionReason, EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
+    };
     use niuma_core::platform::locale::SystemLanguage;
     use niuma_core::store::NiumaStore;
 
@@ -708,10 +710,10 @@ mod tests {
     #[test]
     fn zh_cn_tray_status_uses_short_labels() {
         assert_eq!(
-            tray_status_label(&SessionStatus::WaitingApproval, TrayLocale::ZhCn),
+            tray_status_label(&RuntimeStateStatus::WaitingApproval, TrayLocale::ZhCn),
             "待审批"
         );
-        let labels = tray_labels(&SessionStatus::Running, TrayLocale::ZhCn);
+        let labels = tray_labels(&RuntimeStateStatus::Running, TrayLocale::ZhCn);
         assert_eq!(labels.title, "运行中");
         assert_eq!(labels.menu_status, "当前状态：运行中");
         assert_eq!(labels.tooltip, "NiumaNotifier - 当前状态：运行中");
@@ -724,10 +726,10 @@ mod tests {
     #[test]
     fn english_tray_status_uses_compact_status_and_full_menu_text() {
         assert_eq!(
-            tray_status_label(&SessionStatus::WaitingInput, TrayLocale::En),
+            tray_status_label(&RuntimeStateStatus::WaitingInput, TrayLocale::En),
             "Input"
         );
-        let labels = tray_labels(&SessionStatus::Error, TrayLocale::En);
+        let labels = tray_labels(&RuntimeStateStatus::Error, TrayLocale::En);
         assert_eq!(labels.title, "Error");
         assert_eq!(labels.menu_status, "Current status: Error");
         assert_eq!(labels.tooltip, "NiumaNotifier - Current status: Error");
@@ -750,7 +752,7 @@ mod tests {
 
     #[test]
     fn stale_tray_status_is_presented_as_idle() {
-        let labels = tray_labels(&SessionStatus::Stale, TrayLocale::En);
+        let labels = tray_labels(&RuntimeStateStatus::Stale, TrayLocale::En);
 
         assert_eq!(labels.title, "Idle");
         assert_eq!(labels.menu_status, "Current status: Idle");
@@ -764,11 +766,11 @@ mod tests {
 
         assert_eq!(
             current_status_from_store(&store, at(1_000 + 59)),
-            SessionStatus::Completed
+            RuntimeStateStatus::Completed
         );
         assert_eq!(
             current_status_from_store(&store, at(1_000 + 61)),
-            SessionStatus::Idle
+            RuntimeStateStatus::Idle
         );
     }
 

@@ -189,7 +189,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_main_state,
-            commands::get_sessions,
+            commands::get_runtime_state_list,
             commands::get_recent_events,
             commands::get_local_api_url,
             commands::get_active_language,
@@ -244,7 +244,7 @@ fn main() {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use niuma_core::models::{EventType, NiumaEvent, SessionStatus, ToolKind};
+    use niuma_core::models::{EventType, NiumaEvent, RuntimeStateStatus, ToolKind};
 
     #[test]
     fn stale_sweep_once_marks_old_running_sessions() {
@@ -266,8 +266,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            store.load().unwrap().sessions[0].status,
-            SessionStatus::Stale
+            store.load().unwrap().runtime_states[0].status,
+            RuntimeStateStatus::Stale
         );
         let _ = std::fs::remove_file(path);
     }

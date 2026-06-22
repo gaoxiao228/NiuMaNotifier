@@ -60,11 +60,12 @@ pub(crate) fn get_recent_events(
 }
 
 #[tauri::command]
-pub(crate) fn get_sessions(
+pub(crate) fn get_runtime_state_list(
     runtime_state: tauri::State<'_, AppRuntimeState>,
 ) -> ApiResponse<serde_json::Value> {
-    match DashboardService::new(runtime_state.store.clone()).sessions() {
-        Ok(sessions) => ApiResponse::ok(json!({ "list": sessions })),
+    // Tauri fallback 与本地 API 保持同一份运行态列表语义。
+    match DashboardService::new(runtime_state.store.clone()).runtime_state_list() {
+        Ok(runtime_states) => ApiResponse::ok(json!({ "list": runtime_states })),
         Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
     }
 }
