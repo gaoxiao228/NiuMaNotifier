@@ -67,9 +67,9 @@ export type ApprovalDecisionResult = {
   reason: string | null
 }
 
-export type NiumaSession = {
-  id: string
+export type RuntimeStateItem = {
   tool: string
+  session_id: string
   project_path: string
   project_name: string
   status: string
@@ -77,8 +77,8 @@ export type NiumaSession = {
   last_activity_at: string
 }
 
-export type SessionsPayload = {
-  list: NiumaSession[]
+export type RuntimeStateListPayload = {
+  list: RuntimeStateItem[]
 }
 
 export type RecentEvents = {
@@ -246,28 +246,28 @@ export async function refreshMainState() {
 
 export async function refreshSupplementaryData() {
   try {
-    // 主状态由 state SSE 驱动；这里仅刷新列表类辅助数据。
-    const [sessions, events] = await Promise.all([
-      requestLocalApi<SessionsPayload>('/api/v1/sessions'),
+    // 主状态由 state SSE 驱动；这里仅刷新运行态列表和最近事件。
+    const [runtimeStateList, events] = await Promise.all([
+      requestLocalApi<RuntimeStateListPayload>('/api/v1/runtime_state_list'),
       requestLocalApi<RecentEvents>('/api/v1/events?limit=10')
     ])
     return {
-      sessions: sessions.list,
+      runtimeStates: runtimeStateList.list,
       events: events.list
     }
   } catch {
-    const [sessionsResponse, eventsResponse] = await Promise.all([
-      invoke<ApiResponse<SessionsPayload>>('get_sessions'),
+    const [runtimeStateListResponse, eventsResponse] = await Promise.all([
+      invoke<ApiResponse<RuntimeStateListPayload>>('get_runtime_state_list'),
       invoke<ApiResponse<RecentEvents>>('get_recent_events')
     ])
-    if (sessionsResponse.code !== 0) {
-      throw new Error(sessionsResponse.message)
+    if (runtimeStateListResponse.code !== 0) {
+      throw new Error(runtimeStateListResponse.message)
     }
     if (eventsResponse.code !== 0) {
       throw new Error(eventsResponse.message)
     }
     return {
-      sessions: sessionsResponse.data.list,
+      runtimeStates: runtimeStateListResponse.data.list,
       events: eventsResponse.data.list
     }
   }

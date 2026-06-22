@@ -1,4 +1,4 @@
-import type { ListenerToolConfig, MainStatePayload, NiumaEvent, NiumaSession } from './api'
+import type { ListenerToolConfig, MainStatePayload, NiumaEvent, RuntimeStateItem } from './api'
 import {
   translateEventType,
   translateStatus,
@@ -40,10 +40,10 @@ export type StatusSummaryRenderOptions = {
   language: LanguageCode
 }
 
-export type SessionRenderOptions = {
+export type RuntimeStateRenderOptions = {
   listElement: HTMLElement | null
   overviewElement: HTMLDListElement | null
-  sessions: NiumaSession[]
+  runtimeStates: RuntimeStateItem[]
   events: NiumaEvent[]
   selectedSessionId: string | null
   primarySessionId: string | null | undefined
@@ -239,29 +239,29 @@ export function renderEvents(
     .join('')
 }
 
-export function renderSessions(options: SessionRenderOptions) {
+export function renderSessions(options: RuntimeStateRenderOptions) {
   const t = translations[options.language]
-  const selectedSessionId = chooseSelectedSessionId(
+  const selectedSessionId = chooseSelectedRuntimeStateSessionId(
     options.selectedSessionId,
-    options.sessions,
+    options.runtimeStates,
     options.primarySessionId
   )
   if (!options.listElement || !options.overviewElement) {
     return selectedSessionId
   }
-  if (options.sessions.length === 0) {
+  if (options.runtimeStates.length === 0) {
     options.listElement.innerHTML = `<p class="empty">${escapeHtml(t.noSessions)}</p>`
     options.overviewElement.innerHTML = `<div class="empty">${escapeHtml(t.noSessionSelected)}</div>`
     return selectedSessionId
   }
-  options.listElement.innerHTML = sortedSessionsByLatestActivity(options.sessions)
-    .map((session) => {
-      const selected = session.id === selectedSessionId
+  options.listElement.innerHTML = sortedRuntimeStatesByLatestActivity(options.runtimeStates)
+    .map((runtimeState) => {
+      const selected = runtimeState.session_id === selectedSessionId
       return `
-        <button class="session-item${selected ? ' selected' : ''}" type="button" data-session-id="${escapeHtml(session.id)}">
-          <strong>${escapeHtml(session.project_name || t.none)}</strong>
-          <span>${escapeHtml(session.project_path || t.none)}</span>
-          <small>${escapeHtml(translateTool(options.language, session.tool))} · ${escapeHtml(translateStatus(options.language, session.status))} · ${escapeHtml(formatLocalTime(session.last_activity_at, options.language))}</small>
+        <button class="session-item${selected ? ' selected' : ''}" type="button" data-session-id="${escapeHtml(runtimeState.session_id)}">
+          <strong>${escapeHtml(runtimeState.project_name || t.none)}</strong>
+          <span>${escapeHtml(runtimeState.project_path || t.none)}</span>
+          <small>${escapeHtml(translateTool(options.language, runtimeState.tool))} · ${escapeHtml(translateStatus(options.language, runtimeState.status))} · ${escapeHtml(formatLocalTime(runtimeState.last_activity_at, options.language))}</small>
         </button>
       `
     })
@@ -270,58 +270,62 @@ export function renderSessions(options: SessionRenderOptions) {
   return selectedSessionId
 }
 
-function chooseSelectedSessionId(
+function chooseSelectedRuntimeStateSessionId(
   currentId: string | null,
-  sessions: NiumaSession[],
+  runtimeStates: RuntimeStateItem[],
   primarySessionId: string | null | undefined
 ) {
-  if (currentId && sessions.some((session) => session.id === currentId)) {
+  if (currentId && runtimeStates.some((runtimeState) => runtimeState.session_id === currentId)) {
     return currentId
   }
-  if (primarySessionId && sessions.some((session) => session.id === primarySessionId)) {
+  if (
+    primarySessionId &&
+    runtimeStates.some((runtimeState) => runtimeState.session_id === primarySessionId)
+  ) {
     return primarySessionId
   }
-  return sortedSessionsByLatestActivity(sessions)[0]?.id ?? null
+  return sortedRuntimeStatesByLatestActivity(runtimeStates)[0]?.session_id ?? null
 }
 
 function latestEventForSession(sessionId: string, events: NiumaEvent[]) {
   return events.find((event) => event.session_id === sessionId) ?? null
 }
 
-function sortedSessionsByLatestActivity(sessions: NiumaSession[]) {
-  return [...sessions].sort(
+function sortedRuntimeStatesByLatestActivity(runtimeStates: RuntimeStateItem[]) {
+  return [...runtimeStates].sort(
     (left, right) =>
       new Date(right.last_activity_at).getTime() - new Date(left.last_activity_at).getTime()
   )
 }
 
 function renderSelectedSessionOverview(
-  options: SessionRenderOptions,
+  options: RuntimeStateRenderOptions,
   selectedSessionId: string | null
 ) {
   const t = translations[options.language]
-  const session = options.sessions.find((item) => item.id === selectedSessionId)
+  const runtimeState = options.runtimeStates.find((item) => item.session_id === selectedSessionId)
   if (!options.overviewElement) {
     return
   }
-  if (!session) {
+  if (!runtimeState) {
     options.overviewElement.innerHTML = `<div class="empty">${escapeHtml(t.noSessionSelected)}</div>`
     return
   }
-  const latestEvent = latestEventForSession(session.id, options.events)
+  // 后端运行态的稳定标识是 session_id，前端不再读取旧的 id 字段。
+  const latestEvent = latestEventForSession(runtimeState.session_id, options.events)
   options.overviewElement.innerHTML = `
     <dt>${escapeHtml(t.projectName)}</dt>
-    <dd>${escapeHtml(session.project_name || t.none)}</dd>
+    <dd>${escapeHtml(runtimeState.project_name || t.none)}</dd>
     <dt>${escapeHtml(t.path)}</dt>
-    <dd>${escapeHtml(session.project_path || t.none)}</dd>
+    <dd>${escapeHtml(runtimeState.project_path || t.none)}</dd>
     <dt>${escapeHtml(t.toolLabel)}</dt>
-    <dd>${escapeHtml(translateTool(options.language, session.tool))}</dd>
+    <dd>${escapeHtml(translateTool(options.language, runtimeState.tool))}</dd>
     <dt>${escapeHtml(t.sessionId)}</dt>
-    <dd>${escapeHtml(session.id)}</dd>
+    <dd>${escapeHtml(runtimeState.session_id)}</dd>
     <dt>${escapeHtml(t.currentStatus)}</dt>
-    <dd>${escapeHtml(translateStatus(options.language, session.status))}</dd>
+    <dd>${escapeHtml(translateStatus(options.language, runtimeState.status))}</dd>
     <dt>${escapeHtml(t.lastActivity)}</dt>
-    <dd>${escapeHtml(formatLocalTime(session.last_activity_at, options.language))}</dd>
+    <dd>${escapeHtml(formatLocalTime(runtimeState.last_activity_at, options.language))}</dd>
     <dt>${escapeHtml(t.latestEvent)}</dt>
     <dd>${escapeHtml(latestEvent ? latestEvent.summary : t.none)}</dd>
   `

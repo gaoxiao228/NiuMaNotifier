@@ -1,5 +1,12 @@
-import { renderRequestDetail, renderStatusSummary, shouldShowManualBlockerAction } from '../src/statusView'
-import type { MainStatePayload } from '../src/api'
+import {
+  renderRequestDetail,
+  renderSessions,
+  renderStatusSummary,
+  shouldShowManualBlockerAction
+} from '../src/statusView'
+import type { MainStatePayload, RuntimeStateItem } from '../src/api'
+
+type RuntimeStateHasNoLegacyId = 'id' extends keyof RuntimeStateItem ? false : true
 
 class FakeElement {
   className = ''
@@ -12,6 +19,38 @@ class FakeDetailElement extends FakeElement {
 
 class FakeActionElement extends FakeElement {
   hidden = false
+}
+
+const runtimeStates: RuntimeStateItem[] = [
+  {
+    tool: 'codex',
+    session_id: 'runtime-session-new',
+    project_path: '/Users/niuma/code/new',
+    project_name: 'new-project',
+    status: 'running',
+    last_event_id: 'event-new',
+    last_activity_at: '2026-06-16T10:00:00Z'
+  },
+  {
+    tool: 'codex',
+    session_id: 'runtime-session-old',
+    project_path: '/Users/niuma/code/old',
+    project_name: 'old-project',
+    status: 'completed',
+    last_event_id: null,
+    last_activity_at: '2026-06-15T10:00:00Z'
+  }
+]
+
+const runtimeStateWithoutLegacyId = runtimeStates[0] as RuntimeStateItem & { id?: never }
+const runtimeStateHasNoLegacyId: RuntimeStateHasNoLegacyId = true
+
+if ('id' in runtimeStateWithoutLegacyId) {
+  throw new Error('运行态类型不应包含旧 id 字段')
+}
+
+if (!runtimeStateHasNoLegacyId) {
+  throw new Error('运行态类型不应声明旧 id 字段')
 }
 
 function stateWithStatus(status: string): MainStatePayload {
@@ -92,6 +131,50 @@ if (!runningElement.className.includes('warning')) {
 
 if (runningElement.innerHTML.includes('<p>') || runningElement.innerHTML.includes('running')) {
   throw new Error('主状态摘要不应在状态标题下方重复显示 raw status')
+}
+
+const runtimeStateListElement = new FakeElement()
+const runtimeStateOverviewElement = new FakeElement()
+const selectedRuntimeStateId = renderSessions({
+  listElement: runtimeStateListElement as HTMLElement,
+  overviewElement: runtimeStateOverviewElement as HTMLDListElement,
+  runtimeStates,
+  events: [
+    {
+      id: 'event-old',
+      tool: 'codex',
+      session_id: 'runtime-session-old',
+      project_name: 'old-project',
+      project_path: '/Users/niuma/code/old',
+      event_type: 'completed',
+      severity: 'info',
+      summary: '旧运行态事件',
+      created_at: '2026-06-15T10:01:00Z'
+    }
+  ],
+  selectedSessionId: 'runtime-session-old',
+  primarySessionId: 'missing-session',
+  language: 'zh-CN'
+})
+
+if (selectedRuntimeStateId !== 'runtime-session-old') {
+  throw new Error('运行态列表应使用 session_id 保留当前选中项')
+}
+
+if (!runtimeStateListElement.innerHTML.includes('data-session-id="runtime-session-old"')) {
+  throw new Error('运行态按钮应使用 session_id 写入 data-session-id')
+}
+
+if (!runtimeStateListElement.innerHTML.includes('session-item selected')) {
+  throw new Error('运行态列表应根据 session_id 标记选中项')
+}
+
+if (!runtimeStateOverviewElement.innerHTML.includes('runtime-session-old')) {
+  throw new Error('运行态详情应显示 session_id')
+}
+
+if (!runtimeStateOverviewElement.innerHTML.includes('旧运行态事件')) {
+  throw new Error('运行态详情应使用 session_id 匹配最近事件')
 }
 
 const requestDetailElement = new FakeDetailElement()
