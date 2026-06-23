@@ -2161,6 +2161,33 @@ async fn session_list_invalid_limit_returns_standard_400() {
 }
 
 #[tokio::test]
+async fn session_list_zero_limit_returns_business_failure_envelope() {
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_list_zero_limit")),
+        ToolSessionRegistry::new(),
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_list?limit=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("limit"));
+    // 业务失败仍必须保留统一 envelope 的 data 字段，允许为空或上下文对象。
+    assert!(value.get("data").is_some());
+    assert!(value["data"].is_null() || value["data"].is_object());
+}
+
+#[tokio::test]
 async fn session_detail_missing_tool_session_id_business_failure() {
     let router = app_with_tool_sessions(
         NiumaStore::new(test_path("session_detail_missing")),
