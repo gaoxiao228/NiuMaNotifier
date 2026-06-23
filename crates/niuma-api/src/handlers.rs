@@ -30,7 +30,7 @@ use serde_json::json;
 
 use crate::response::json_response;
 use crate::state::AppState;
-use crate::tool_sessions::ToolSessionListQuery;
+use crate::tool_sessions::{capped_limit, ToolSessionListQuery};
 
 const RESET_CONFIRMATION: &str = "RESET_NIUMA_STATE";
 
@@ -271,6 +271,16 @@ pub(crate) async fn get_session_detail(
             ApiResponse::fail(ApiErrorCode::BusinessValidation, "session_id 不能为空"),
         );
     };
+    let limit = match capped_limit(query.limit) {
+        Ok(limit) => limit,
+        Err(error) => {
+            // limit 属于业务参数范围校验，按统一 envelope 返回业务失败。
+            return json_response(
+                200,
+                ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+            );
+        }
+    };
 
     let tool = ToolKind::from_id(tool);
     if state
@@ -286,7 +296,7 @@ pub(crate) async fn get_session_detail(
 
     match state
         .tool_sessions
-        .detail(&tool, &session_id, query.limit, query.cursor)
+        .detail(&tool, &session_id, limit, query.cursor)
     {
         Ok(detail) => json_response(200, ApiResponse::ok(json!(detail))),
         Err(error) => json_response(

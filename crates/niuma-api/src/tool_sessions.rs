@@ -29,7 +29,7 @@ pub trait ToolSessionDetailProvider: Send + Sync {
         &self,
         tool: &ToolKind,
         session_id: &str,
-        limit: Option<usize>,
+        limit: usize,
         cursor: Option<String>,
     ) -> Result<ToolSessionDetail, String>;
 }
@@ -133,7 +133,7 @@ impl ToolSessionRegistry {
         &self,
         tool: &ToolKind,
         session_id: &str,
-        limit: Option<usize>,
+        limit: usize,
         cursor: Option<String>,
     ) -> Result<ToolSessionDetail, String> {
         let provider = self
@@ -147,7 +147,7 @@ impl ToolSessionRegistry {
     }
 }
 
-fn capped_limit(limit: Option<usize>) -> Result<usize, String> {
+pub(crate) fn capped_limit(limit: Option<usize>) -> Result<usize, String> {
     match limit.unwrap_or(DEFAULT_LIMIT) {
         0 => Err("limit 必须大于 0".to_string()),
         value => Ok(value.min(MAX_LIMIT)),

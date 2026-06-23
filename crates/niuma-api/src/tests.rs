@@ -18,7 +18,7 @@ use niuma_core::tool_session::{
     ToolSessionStatus,
 };
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
@@ -2311,6 +2311,7 @@ async fn session_detail_existing_snapshot_with_fake_provider_returns_detail() {
         ToolKind::Codex,
         Arc::new(FakeDetailProvider {
             detail: sample_tool_session_detail("existing-session"),
+            calls: Arc::new(StdMutex::new(Vec::new())),
         }),
     );
     let router = app_with_tool_sessions(
@@ -2337,6 +2338,83 @@ async fn session_detail_existing_snapshot_with_fake_provider_returns_detail() {
     assert_eq!(value["data"]["messages"][1]["id"], "m1");
 }
 
+#[tokio::test]
+async fn session_detail_default_limit_passes_100_to_provider() {
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail: sample_tool_session_detail("existing-session"),
+        calls: Arc::clone(&calls),
+    }));
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_default_limit")),
+        registry,
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    // limit 缺省值由宿主 API 统一归一化，provider 不再感知 None。
+    assert_eq!(*calls.lock().unwrap(), vec![100]);
+}
+
+#[tokio::test]
+async fn session_detail_caps_large_limit_before_provider_call() {
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail: sample_tool_session_detail("existing-session"),
+        calls: Arc::clone(&calls),
+    }));
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_large_limit")),
+        registry,
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session&limit=900",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    // provider 只接收封顶后的 limit，避免各 provider 重复实现同一规则。
+    assert_eq!(*calls.lock().unwrap(), vec![500]);
+}
+
+#[tokio::test]
+async fn session_detail_zero_limit_fails_without_provider_call() {
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail: sample_tool_session_detail("existing-session"),
+        calls: Arc::clone(&calls),
+    }));
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_zero_limit")),
+        registry,
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail?tool=codex&session_id=existing-session&limit=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("limit"));
+    // limit=0 是宿主层业务校验失败，不能再调用 provider。
+    assert!(calls.lock().unwrap().is_empty());
+}
+
 #[test]
 fn tool_session_unregister_detail_provider_returns_not_ready() {
     let registry = ToolSessionRegistry::new();
@@ -2344,6 +2422,7 @@ fn tool_session_unregister_detail_provider_returns_not_ready() {
         ToolKind::Codex,
         Arc::new(FakeDetailProvider {
             detail: sample_tool_session_detail("existing-session"),
+            calls: Arc::new(StdMutex::new(Vec::new())),
         }),
     );
 
@@ -2351,7 +2430,7 @@ fn tool_session_unregister_detail_provider_returns_not_ready() {
     registry.unregister_detail_provider(&ToolKind::Codex);
 
     let error = registry
-        .detail(&ToolKind::Codex, "existing-session", None, None)
+        .detail(&ToolKind::Codex, "existing-session", 100, None)
         .unwrap_err();
     assert_eq!(error, "session detail provider 尚未就绪");
 }
@@ -2743,6 +2822,7 @@ fn tool_session_item(
 
 struct FakeDetailProvider {
     detail: ToolSessionDetail,
+    calls: Arc<StdMutex<Vec<usize>>>,
 }
 
 impl ToolSessionDetailProvider for FakeDetailProvider {
@@ -2750,11 +2830,31 @@ impl ToolSessionDetailProvider for FakeDetailProvider {
         &self,
         _tool: &ToolKind,
         _session_id: &str,
-        _limit: Option<usize>,
+        limit: usize,
         _cursor: Option<String>,
     ) -> Result<ToolSessionDetail, String> {
+        self.calls.lock().unwrap().push(limit);
         Ok(self.detail.clone())
     }
+}
+
+fn session_detail_registry_with_provider(
+    provider: Arc<dyn ToolSessionDetailProvider>,
+) -> ToolSessionRegistry {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "existing-session",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+    registry.register_detail_provider(ToolKind::Codex, provider);
+    registry
 }
 
 fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {

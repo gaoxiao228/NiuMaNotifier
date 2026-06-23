@@ -334,16 +334,30 @@ fn spawn_plugin_process(
 
 #[cfg(test)]
 fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
-    build_plugin_command_with_stdio(manifest, false)
+    build_plugin_command_with_stdio(manifest, PluginStdioMode::Null)
 }
 
 fn build_plugin_command_for_runtime(manifest: &PluginManifest) -> Result<Command, String> {
-    build_plugin_command_with_stdio(manifest, is_session_provider_manifest(manifest))
+    build_plugin_command_with_stdio(manifest, plugin_stdio_mode(manifest))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PluginStdioMode {
+    Null,
+    ProviderJsonLines,
+}
+
+fn plugin_stdio_mode(manifest: &PluginManifest) -> PluginStdioMode {
+    if is_session_provider_manifest(manifest) {
+        PluginStdioMode::ProviderJsonLines
+    } else {
+        PluginStdioMode::Null
+    }
 }
 
 fn build_plugin_command_with_stdio(
     manifest: &PluginManifest,
-    use_provider_stdio: bool,
+    stdio_mode: PluginStdioMode,
 ) -> Result<Command, String> {
     let command = manifest
         .command
@@ -373,12 +387,12 @@ fn build_plugin_command_with_stdio(
             "NIUMA_DB_PATH",
             NiumaStore::default_path().to_string_lossy().to_string(),
         )
-        .stdin(if use_provider_stdio {
+        .stdin(if stdio_mode == PluginStdioMode::ProviderJsonLines {
             Stdio::piped()
         } else {
             Stdio::null()
         })
-        .stdout(if use_provider_stdio {
+        .stdout(if stdio_mode == PluginStdioMode::ProviderJsonLines {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -692,13 +706,14 @@ impl ToolSessionDetailProvider for SessionProviderDetailClient {
         &self,
         tool: &niuma_core::models::ToolKind,
         session_id: &str,
-        limit: Option<usize>,
+        limit: usize,
         cursor: Option<String>,
     ) -> Result<ToolSessionDetail, String> {
         let result = self.client.session_detail(SessionDetailParams {
             tool: tool.clone(),
             session_id: session_id.to_string(),
-            limit,
+            // API 层已经完成缺省值和上限归一化；RPC 仍按既有协议字段传给 provider。
+            limit: Some(limit),
             cursor,
         })?;
         Ok(result.detail)
@@ -990,6 +1005,35 @@ mod tests {
     }
 
     #[test]
+    fn invalid_provider_stdout_line_does_not_block_later_response() {
+        let pending = ProviderPendingResponses::default();
+        let receiver = pending.insert("req-after-invalid".to_string());
+
+        // provider stdout 混入非法 JSON 后，合法 response 仍必须完成对应 pending 请求。
+        handle_provider_stdout_line(
+            &niuma_api::tool_sessions::ToolSessionRegistry::new(),
+            Some(&pending),
+            "not-json",
+        );
+        handle_provider_stdout_line(
+            &niuma_api::tool_sessions::ToolSessionRegistry::new(),
+            Some(&pending),
+            &serde_json::json!({
+                "id": "req-after-invalid",
+                "result": {
+                    "tool": "codex",
+                    "sessions": []
+                }
+            })
+            .to_string(),
+        );
+
+        let response = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(response.id, "req-after-invalid");
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
     fn provider_response_line_matches_pending_request_id() {
         let pending = ProviderPendingResponses::default();
         let receiver = pending.insert("req-1".to_string());
@@ -1016,12 +1060,32 @@ mod tests {
     #[test]
     fn pending_response_timeout_removes_pending_entry() {
         let pending = ProviderPendingResponses::default();
-        let _receiver = pending.insert("req-timeout".to_string());
+        let mut child = Command::new("/bin/sleep")
+            .arg("1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let client =
+            ProviderProcessClient::new("timeout-provider".to_string(), stdin, pending.clone());
 
-        // 超时路径会调用 remove；这里直接校验 map 可观测状态，避免真实等待慢测试。
-        pending.remove("req-timeout");
+        // 走 ProviderProcessClient::call 的 recv_timeout 分支，验证真实超时清理 pending。
+        let error = client
+            .call::<_, SessionSnapshotResult>(
+                "session_snapshot",
+                SessionSnapshotParams {
+                    tool: ToolKind::Codex,
+                },
+                Duration::from_millis(20),
+            )
+            .unwrap_err();
 
+        assert!(error.contains("provider 请求超时"));
         assert_eq!(pending.len(), 0);
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]
@@ -1099,7 +1163,7 @@ mod tests {
             .is_none());
         assert_eq!(
             registry
-                .detail(&ToolKind::Codex, "stale-session", None, None)
+                .detail(&ToolKind::Codex, "stale-session", 100, None)
                 .unwrap_err(),
             "session detail provider 尚未就绪"
         );
@@ -1174,6 +1238,25 @@ mod tests {
         );
         assert!(command_env_value(&command, "NIUMA_PLUGIN_DATA_DIR")
             .is_some_and(|value| value.contains("plugin-data") && value.contains("demo")));
+    }
+
+    #[test]
+    fn plain_plugin_command_uses_null_stdio_mode() {
+        let manifest = notification_consumer_manifest("plain-notification");
+
+        // 普通插件不能占用 provider JSON Lines stdin/stdout 通道。
+        assert_eq!(plugin_stdio_mode(&manifest), PluginStdioMode::Null);
+    }
+
+    #[test]
+    fn session_provider_command_uses_piped_stdio_mode() {
+        let manifest = session_provider_manifest("codex-session-provider");
+
+        // session provider 需要 JSON Lines 通信，必须保留 piped stdin/stdout。
+        assert_eq!(
+            plugin_stdio_mode(&manifest),
+            PluginStdioMode::ProviderJsonLines
+        );
     }
 
     #[test]
@@ -1289,7 +1372,7 @@ mod tests {
             &self,
             _tool: &ToolKind,
             session_id: &str,
-            _limit: Option<usize>,
+            _limit: usize,
             _cursor: Option<String>,
         ) -> Result<ToolSessionDetail, String> {
             Ok(ToolSessionDetail {
