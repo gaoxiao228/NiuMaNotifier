@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,9 @@ use crate::models::ToolKind;
 mod config;
 mod enablement;
 mod filesystem;
+mod manifest;
 mod runtime_state;
+mod validation;
 
 pub use config::{
     merge_plugin_config_with_defaults, plugin_config_defaults, resolve_plugin_config,
@@ -26,7 +28,9 @@ pub use filesystem::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
     remove_external_plugin,
 };
+pub use manifest::{PluginCapability, PluginKind, PluginManifest, PluginSource};
 pub use runtime_state::{PluginRuntimeState, PluginRuntimeStatus};
+pub(super) use validation::{parse_plugin_manifest, plugin_capability_id, provider_capabilities};
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
@@ -44,35 +48,6 @@ const BUILTIN_BARK_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../../builtin-plugins/bark/plugin.json");
 const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../../builtin-plugins/ntfy/plugin.json");
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginCapability {
-    EventWatcher,
-    EventConsumer,
-    ApprovalHandler,
-    NotificationTest,
-    StateConsumer,
-    ToolSessionListProvider,
-    ToolSessionDetailProvider,
-    ToolSessionListReader,
-    ToolSessionDetailReader,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginKind {
-    Tool,
-    Notification,
-    StatusIndicator,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginSource {
-    Builtin,
-    External,
-}
 
 // 管理动作只描述插件管理界面上的受控操作，不等同于插件运行时 capability。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -102,35 +77,6 @@ pub struct PluginManagementAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_label: Option<String>,
     pub status_level: PluginManagementActionStatusLevel,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PluginManifest {
-    pub id: String,
-    #[serde(default = "tool_plugin_kind")]
-    pub kind: PluginKind,
-    #[serde(default)]
-    pub tool_id: Option<ToolKind>,
-    pub display_name: String,
-    pub version: String,
-    #[serde(default)]
-    pub command: Option<String>,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-    #[serde(default)]
-    pub platforms: Vec<String>,
-    #[serde(default)]
-    pub capabilities: Vec<PluginCapability>,
-    #[serde(default)]
-    pub icon_url: Option<String>,
-    #[serde(default)]
-    pub config_schema: Vec<PluginConfigField>,
-    #[serde(default = "external_source")]
-    pub source: PluginSource,
-    #[serde(skip)]
-    pub base_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -373,24 +319,6 @@ fn management_actions_for_manifest(manifest: &PluginManifest) -> Vec<PluginManag
     vec![action]
 }
 
-impl PluginManifest {
-    pub fn from_path(path: &Path) -> Result<Self, String> {
-        let content =
-            fs::read_to_string(path).map_err(|error| format!("读取插件 manifest 失败：{error}"))?;
-        let mut manifest = parse_plugin_manifest(&content)?;
-        manifest.base_dir = path.parent().map(Path::to_path_buf);
-        Ok(manifest)
-    }
-
-    pub fn supports_current_platform(&self) -> bool {
-        self.platforms.is_empty()
-            || self
-                .platforms
-                .iter()
-                .any(|platform| platform == current_platform_id())
-    }
-}
-
 impl ToolPluginInfo {
     fn try_from_manifest(manifest: &PluginManifest) -> Option<Self> {
         let tool_id = manifest.tool_id.clone()?;
@@ -448,83 +376,6 @@ pub fn builtin_ntfy_manifest() -> PluginManifest {
     manifest
 }
 
-fn current_platform_id() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "linux"
-    }
-}
-
-fn parse_plugin_manifest(content: &str) -> Result<PluginManifest, String> {
-    let manifest: PluginManifest = serde_json::from_str(content)
-        .map_err(|error| format!("解析插件 manifest 失败：{error}"))?;
-    validate_plugin_manifest(&manifest)?;
-    Ok(manifest)
-}
-
-fn validate_plugin_manifest(manifest: &PluginManifest) -> Result<(), String> {
-    if manifest.kind == PluginKind::Tool && manifest.tool_id.is_none() {
-        return Err(format!("工具插件缺少 tool_id：{}", manifest.id));
-    }
-    if manifest.kind != PluginKind::Tool {
-        for capability in non_tool_forbidden_provider_capabilities(&manifest.capabilities) {
-            return Err(format!(
-                "非工具插件不能声明 {}：{}",
-                plugin_capability_id(&capability),
-                manifest.id
-            ));
-        }
-    }
-    if manifest
-        .capabilities
-        .contains(&PluginCapability::ToolSessionDetailProvider)
-        && !manifest
-            .capabilities
-            .contains(&PluginCapability::ToolSessionListProvider)
-    {
-        return Err(format!(
-            "tool_session_detail_provider 必须同时声明 tool_session_list_provider：{}",
-            manifest.id
-        ));
-    }
-    config::validate_config_schema(&manifest.id, &manifest.config_schema)
-}
-
-fn non_tool_forbidden_provider_capabilities(
-    capabilities: &[PluginCapability],
-) -> Vec<PluginCapability> {
-    // 这些能力会代表具体 tool 上报或提供数据，必须绑定 tool_id 后才能安全路由。
-    provider_capabilities(capabilities)
-}
-
-fn provider_capabilities(capabilities: &[PluginCapability]) -> Vec<PluginCapability> {
-    [
-        PluginCapability::EventWatcher,
-        PluginCapability::ToolSessionListProvider,
-        PluginCapability::ToolSessionDetailProvider,
-    ]
-    .into_iter()
-    .filter(|capability| capabilities.contains(capability))
-    .collect()
-}
-
-fn plugin_capability_id(capability: &PluginCapability) -> &'static str {
-    match capability {
-        PluginCapability::EventWatcher => "event_watcher",
-        PluginCapability::EventConsumer => "event_consumer",
-        PluginCapability::ApprovalHandler => "approval_handler",
-        PluginCapability::NotificationTest => "notification_test",
-        PluginCapability::StateConsumer => "state_consumer",
-        PluginCapability::ToolSessionListProvider => "tool_session_list_provider",
-        PluginCapability::ToolSessionDetailProvider => "tool_session_detail_provider",
-        PluginCapability::ToolSessionListReader => "tool_session_list_reader",
-        PluginCapability::ToolSessionDetailReader => "tool_session_detail_reader",
-    }
-}
-
 fn builtin_codex_plugin_command(default_command: Option<String>) -> String {
     // 桌面端或打包脚本可覆盖命令路径；默认值来自内置 plugin.json，最后回退到普通裸命令。
     builtin_plugin_command(
@@ -546,14 +397,6 @@ fn builtin_plugin_command(
         .unwrap_or_else(|| fallback_command.to_string())
 }
 
-fn external_source() -> PluginSource {
-    PluginSource::External
-}
-
-fn tool_plugin_kind() -> PluginKind {
-    PluginKind::Tool
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +408,7 @@ mod tests {
     use crate::runtime_event::RuntimeEventBus;
     use crate::state_mutation::StateMutationService;
     use crate::store::NiumaStore;
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
     #[test]
