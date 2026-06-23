@@ -239,10 +239,20 @@ mod tests {
         let messages = parse_codex_messages_newest_first("session-1", &lines);
 
         assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].id, "codex:session-1:00000000000000000001");
         assert_eq!(messages[0].role, ToolSessionMessageRole::Assistant);
         assert_eq!(messages[0].content, "助手回答");
+        assert_eq!(
+            messages[0].created_at.to_rfc3339(),
+            "2026-06-22T01:00:01+00:00"
+        );
+        assert_eq!(messages[1].id, "codex:session-1:00000000000000000000");
         assert_eq!(messages[1].role, ToolSessionMessageRole::User);
         assert_eq!(messages[1].content, "用户问题");
+        assert_eq!(
+            messages[1].created_at.to_rfc3339(),
+            "2026-06-22T01:00:00+00:00"
+        );
         let encoded = serde_json::to_string(&messages).unwrap();
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("raw_line"));

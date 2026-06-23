@@ -44,6 +44,13 @@ struct SessionFileSignature {
     content_hash: u64,
 }
 
+// 候选阶段只保留轻量 metadata；排序截断后才读取文件内容计算 hash。
+struct SessionFileCandidate {
+    path: PathBuf,
+    modified_system_time: SystemTime,
+    size_bytes: u64,
+}
+
 #[derive(Deserialize)]
 struct CodexRow {
     #[serde(rename = "type")]
@@ -644,25 +651,30 @@ fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SessionFileSignature
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            let file_signature = entry
-                .metadata()
-                .and_then(|metadata| session_file_signature_from_metadata(&path, &metadata))
-                .unwrap_or(SessionFileSignature {
-                    modified_system_time: SystemTime::UNIX_EPOCH,
-                    size_bytes: 0,
-                    content_hash: 0,
-                });
-            files.push((path, file_signature));
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            files.push(SessionFileCandidate {
+                path,
+                modified_system_time: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                size_bytes: metadata.len(),
+            });
         }
     }
-    files.sort_by(|left, right| {
-        right
-            .1
-            .modified_system_time
-            .cmp(&left.1.modified_system_time)
-    });
+    files.sort_by(|left, right| right.modified_system_time.cmp(&left.modified_system_time));
     files.truncate(SNAPSHOT_FILE_LIMIT);
     files
+        .into_iter()
+        .map(|candidate| {
+            let signature =
+                session_file_signature(&candidate.path).unwrap_or(SessionFileSignature {
+                    modified_system_time: candidate.modified_system_time,
+                    size_bytes: candidate.size_bytes,
+                    content_hash: 0,
+                });
+            (candidate.path, signature)
+        })
+        .collect()
 }
 
 fn session_day_dirs(codex_home: &Path) -> Vec<PathBuf> {
@@ -925,6 +937,43 @@ mod tests {
         let index = provider.index.get_mut("session-fixture").unwrap();
         // 保留旧行号但同步文件签名，强制走“读取发现缺行后重建索引”的防护分支。
         index.file_signature = truncated_signature;
+
+        let response = provider.handle_request(detail_request("req-detail", 2, None));
+        assert!(response.error.is_none());
+        let detail = response.result_as::<SessionDetailResult>().unwrap().detail;
+
+        assert_eq!(detail.messages.len(), 1);
+        assert_eq!(detail.messages[0].content, "用户问题");
+        assert_eq!(detail.next_cursor, None);
+    }
+
+    #[test]
+    fn codex_session_provider_detail_refreshes_stale_index_after_line_becomes_non_detail() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_test_session(
+            temp.path(),
+            concat!(
+                "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}]}}\n",
+            ),
+        );
+        let mut provider = CodexSessionProvider::with_codex_home(temp.path().into());
+        let _ = provider.handle_request(snapshot_request("req-snapshot"));
+
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
+            ),
+        )
+        .unwrap();
+        let updated_signature = session_file_signature(&path).unwrap();
+        let index = provider.index.get_mut("session-fixture").unwrap();
+        // 保留旧消息行号但同步文件签名，强制覆盖“行号仍存在但已不是详情消息”的防护分支。
+        index.file_signature = updated_signature;
 
         let response = provider.handle_request(detail_request("req-detail", 2, None));
         assert!(response.error.is_none());
