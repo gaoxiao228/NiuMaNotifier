@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use niuma_api::tool_sessions::{ToolSessionDetailProvider, ToolSessionRegistry};
 use niuma_core::plugin::{
     current_plugin_registry, default_non_tool_plugin_enabled, plugin_uses_listener_config,
     resolve_plugin_config, PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState,
@@ -12,18 +16,33 @@ use niuma_core::plugin::{
 };
 use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
 use niuma_core::store::NiumaStore;
+use niuma_core::tool_session::ToolSessionDetail;
+use niuma_core::tool_session_rpc::{
+    ProviderRpcNotification, ProviderRpcRequest, ProviderRpcResponse, SessionDetailParams,
+    SessionDetailResult, SessionSnapshotParams, SessionSnapshotResult,
+};
 
 const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+const SESSION_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_DETAIL_TIMEOUT: Duration = Duration::from_secs(10);
 const PARENT_PID_ENV: &str = "NIUMA_PARENT_PID";
 
-pub fn spawn_plugin_runtimes(store: NiumaStore, runtime_events: RuntimeEventBus) {
-    spawn_plugin_manager(store, runtime_events);
+pub fn spawn_plugin_runtimes(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    tool_sessions: ToolSessionRegistry,
+) {
+    spawn_plugin_manager(store, runtime_events, tool_sessions);
 }
 
-fn spawn_plugin_manager(store: NiumaStore, runtime_events: RuntimeEventBus) {
+fn spawn_plugin_manager(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    tool_sessions: ToolSessionRegistry,
+) {
     if let Err(error) = thread::Builder::new()
         .name("plugin-runtime-manager".to_string())
-        .spawn(move || run_plugin_manager(store, runtime_events))
+        .spawn(move || run_plugin_manager(store, runtime_events, tool_sessions))
     {
         eprintln!("NiumaNotifier plugin manager not started: {error}");
     }
@@ -35,7 +54,11 @@ struct ManagedPlugin {
     next_start: Instant,
 }
 
-fn run_plugin_manager(store: NiumaStore, runtime_events: RuntimeEventBus) {
+fn run_plugin_manager(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    tool_sessions: ToolSessionRegistry,
+) {
     let mut managed = HashMap::<String, ManagedPlugin>::new();
     let mut receiver = runtime_events.subscribe();
     let runtime = match tokio::runtime::Runtime::new() {
@@ -47,12 +70,16 @@ fn run_plugin_manager(store: NiumaStore, runtime_events: RuntimeEventBus) {
     };
 
     loop {
-        reconcile_managed_plugins(&store, &mut managed);
+        reconcile_managed_plugins(&store, &tool_sessions, &mut managed);
         wait_for_plugin_reconcile_signal(&runtime, &mut receiver);
     }
 }
 
-fn reconcile_managed_plugins(store: &NiumaStore, managed: &mut HashMap<String, ManagedPlugin>) {
+fn reconcile_managed_plugins(
+    store: &NiumaStore,
+    tool_sessions: &ToolSessionRegistry,
+    managed: &mut HashMap<String, ManagedPlugin>,
+) {
     let registry = current_plugin_registry();
     let manifests = managed_runtime_manifests(&registry);
     let current_ids = manifests
@@ -85,7 +112,7 @@ fn reconcile_managed_plugins(store: &NiumaStore, managed: &mut HashMap<String, M
             entry.manifest = manifest;
             entry.next_start = Instant::now();
         }
-        tick_managed_plugin(store, entry);
+        tick_managed_plugin(store, tool_sessions, entry);
     }
 }
 
@@ -105,6 +132,7 @@ fn is_managed_runtime_manifest(manifest: &PluginManifest) -> bool {
             PluginCapability::EventWatcher
                 | PluginCapability::EventConsumer
                 | PluginCapability::StateConsumer
+                | PluginCapability::ToolSessionListProvider
         )
     })
 }
@@ -136,7 +164,11 @@ fn wait_for_plugin_reconcile_signal(
     });
 }
 
-fn tick_managed_plugin(store: &NiumaStore, entry: &mut ManagedPlugin) {
+fn tick_managed_plugin(
+    store: &NiumaStore,
+    tool_sessions: &ToolSessionRegistry,
+    entry: &mut ManagedPlugin,
+) {
     if !plugin_runtime_enabled(store, &entry.manifest) {
         stop_child(store, &entry.manifest, &mut entry.child);
         entry.next_start = Instant::now();
@@ -192,7 +224,7 @@ fn tick_managed_plugin(store: &NiumaStore, entry: &mut ManagedPlugin) {
 
     if launch_files_ready && entry.child.is_none() && Instant::now() >= entry.next_start {
         save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::starting());
-        match spawn_plugin_process(&entry.manifest) {
+        match spawn_plugin_process(&entry.manifest, tool_sessions) {
             Ok(process) => {
                 eprintln!("NiumaNotifier plugin {} started", entry.manifest.id);
                 entry.child = Some(process);
@@ -274,13 +306,36 @@ fn plugin_runtime_enabled(store: &NiumaStore, manifest: &PluginManifest) -> bool
         .unwrap_or(false)
 }
 
-fn spawn_plugin_process(manifest: &PluginManifest) -> Result<Child, String> {
-    build_plugin_command(manifest)?
+fn spawn_plugin_process(
+    manifest: &PluginManifest,
+    tool_sessions: &ToolSessionRegistry,
+) -> Result<Child, String> {
+    let mut child = build_plugin_command_for_runtime(manifest)?
         .spawn()
-        .map_err(|error| format!("启动插件进程失败：{error}"))
+        .map_err(|error| format!("启动插件进程失败：{error}"))?;
+    if is_session_provider_manifest(manifest) {
+        if let Err(error) = bootstrap_session_provider(manifest, &mut child, tool_sessions) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    }
+    Ok(child)
 }
 
+#[cfg(test)]
 fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
+    build_plugin_command_with_stdio(manifest, false)
+}
+
+fn build_plugin_command_for_runtime(manifest: &PluginManifest) -> Result<Command, String> {
+    build_plugin_command_with_stdio(manifest, is_session_provider_manifest(manifest))
+}
+
+fn build_plugin_command_with_stdio(
+    manifest: &PluginManifest,
+    use_provider_stdio: bool,
+) -> Result<Command, String> {
     let command = manifest
         .command
         .as_ref()
@@ -309,7 +364,16 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
             "NIUMA_DB_PATH",
             NiumaStore::default_path().to_string_lossy().to_string(),
         )
-        .stdout(Stdio::null())
+        .stdin(if use_provider_stdio {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(if use_provider_stdio {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stderr(Stdio::null());
     if let Some(tool_id) = &manifest.tool_id {
         process.env("NIUMA_TOOL_ID", tool_id.as_str());
@@ -321,6 +385,265 @@ fn build_plugin_command(manifest: &PluginManifest) -> Result<Command, String> {
         process.current_dir(base_dir);
     }
     Ok(process)
+}
+
+fn is_session_provider_manifest(manifest: &PluginManifest) -> bool {
+    manifest
+        .capabilities
+        .contains(&PluginCapability::ToolSessionListProvider)
+}
+
+fn bootstrap_session_provider(
+    manifest: &PluginManifest,
+    child: &mut Child,
+    tool_sessions: &ToolSessionRegistry,
+) -> Result<(), String> {
+    let tool = manifest
+        .tool_id
+        .clone()
+        .ok_or_else(|| "session provider 缺少 tool_id".to_string())?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "session provider stdin 未启用".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "session provider stdout 未启用".to_string())?;
+    let pending = ProviderPendingResponses::default();
+    let client = Arc::new(ProviderProcessClient::new(
+        manifest.id.clone(),
+        stdin,
+        pending.clone(),
+    ));
+    spawn_provider_stdout_reader(
+        manifest.id.clone(),
+        stdout,
+        tool_sessions.clone(),
+        pending.clone(),
+    );
+    let snapshot = client.session_snapshot(tool.clone())?;
+    tool_sessions.replace_snapshot(snapshot.tool, snapshot.sessions);
+    if manifest
+        .capabilities
+        .contains(&PluginCapability::ToolSessionDetailProvider)
+    {
+        tool_sessions.register_detail_provider(
+            tool,
+            Arc::new(SessionProviderDetailClient {
+                client: Arc::clone(&client),
+            }),
+        );
+    }
+    Ok(())
+}
+
+fn spawn_provider_stdout_reader(
+    plugin_id: String,
+    stdout: ChildStdout,
+    tool_sessions: ToolSessionRegistry,
+    pending: ProviderPendingResponses,
+) {
+    let thread_plugin_id = plugin_id.clone();
+    if let Err(error) = thread::Builder::new()
+        .name(format!("plugin-provider-stdout-{plugin_id}"))
+        .spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => handle_provider_stdout_line(&tool_sessions, Some(&pending), &line),
+                    Err(error) => {
+                        eprintln!(
+                            "NiumaNotifier provider {thread_plugin_id} stdout read failed: {error}"
+                        );
+                        break;
+                    }
+                }
+            }
+        })
+    {
+        eprintln!("NiumaNotifier provider {plugin_id} stdout reader not started: {error}");
+    }
+}
+
+fn handle_provider_stdout_line(
+    tool_sessions: &ToolSessionRegistry,
+    pending: Option<&ProviderPendingResponses>,
+    line: &str,
+) {
+    let value = match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("NiumaNotifier provider stdout contains non-JSON line: {error}: {line}");
+            return;
+        }
+    };
+
+    if value.get("id").is_some() && (value.get("result").is_some() || value.get("error").is_some())
+    {
+        match serde_json::from_value::<ProviderRpcResponse>(value) {
+            Ok(response) => {
+                if pending.is_some_and(|pending| pending.complete(response)) {
+                    return;
+                }
+                eprintln!("NiumaNotifier provider response has no pending request");
+            }
+            Err(error) => eprintln!("NiumaNotifier provider response parse failed: {error}"),
+        }
+        return;
+    }
+
+    if value.get("method").is_some() && value.get("id").is_none() {
+        match serde_json::from_value::<ProviderRpcNotification>(value) {
+            Ok(notification) => handle_provider_notification(tool_sessions, notification),
+            Err(error) => eprintln!("NiumaNotifier provider notification parse failed: {error}"),
+        }
+        return;
+    }
+
+    eprintln!("NiumaNotifier provider stdout line is neither response nor notification: {line}");
+}
+
+fn handle_provider_notification(
+    tool_sessions: &ToolSessionRegistry,
+    notification: ProviderRpcNotification,
+) {
+    match notification.method.as_str() {
+        "session_snapshot_updated" => match notification.params_as::<SessionSnapshotResult>() {
+            Ok(snapshot) => tool_sessions.replace_snapshot(snapshot.tool, snapshot.sessions),
+            Err(error) => {
+                eprintln!("NiumaNotifier provider snapshot notification parse failed: {error}")
+            }
+        },
+        method => eprintln!("NiumaNotifier provider notification ignored: {method}"),
+    }
+}
+
+#[derive(Clone, Default)]
+struct ProviderPendingResponses {
+    inner: Arc<Mutex<HashMap<String, mpsc::Sender<ProviderRpcResponse>>>>,
+}
+
+impl ProviderPendingResponses {
+    fn insert(&self, id: String) -> mpsc::Receiver<ProviderRpcResponse> {
+        let (sender, receiver) = mpsc::channel();
+        self.inner
+            .lock()
+            .expect("provider pending response lock poisoned")
+            .insert(id, sender);
+        receiver
+    }
+
+    fn complete(&self, response: ProviderRpcResponse) -> bool {
+        let sender = self
+            .inner
+            .lock()
+            .expect("provider pending response lock poisoned")
+            .remove(&response.id);
+        sender.is_some_and(|sender| sender.send(response).is_ok())
+    }
+
+    fn remove(&self, id: &str) {
+        self.inner
+            .lock()
+            .expect("provider pending response lock poisoned")
+            .remove(id);
+    }
+}
+
+struct ProviderProcessClient {
+    plugin_id: String,
+    stdin: Arc<Mutex<ChildStdin>>,
+    pending: ProviderPendingResponses,
+    next_id: AtomicU64,
+}
+
+impl ProviderProcessClient {
+    fn new(plugin_id: String, stdin: ChildStdin, pending: ProviderPendingResponses) -> Self {
+        Self {
+            plugin_id,
+            stdin: Arc::new(Mutex::new(stdin)),
+            pending,
+            next_id: AtomicU64::new(1),
+        }
+    }
+
+    fn session_snapshot(
+        &self,
+        tool: niuma_core::models::ToolKind,
+    ) -> Result<SessionSnapshotResult, String> {
+        self.call(
+            "session_snapshot",
+            SessionSnapshotParams { tool },
+            SESSION_SNAPSHOT_TIMEOUT,
+        )
+    }
+
+    fn session_detail(&self, params: SessionDetailParams) -> Result<SessionDetailResult, String> {
+        self.call("session_detail", params, SESSION_DETAIL_TIMEOUT)
+    }
+
+    fn call<T, R>(&self, method: &str, params: T, timeout: Duration) -> Result<R, String>
+    where
+        T: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let id = format!(
+            "{}-{}",
+            self.plugin_id,
+            self.next_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let request = ProviderRpcRequest::new(id.clone(), method, params)?;
+        let receiver = self.pending.insert(id.clone());
+        let line = serde_json::to_string(&request)
+            .map_err(|error| format!("序列化 provider 请求失败：{error}"))?;
+        if let Err(error) = self.write_request_line(&line) {
+            self.pending.remove(&id);
+            return Err(error);
+        }
+        match receiver.recv_timeout(timeout) {
+            Ok(response) => response.result_as::<R>(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.pending.remove(&id);
+                Err(format!("provider 请求超时：{method}"))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.pending.remove(&id);
+                Err(format!("provider 响应通道已关闭：{method}"))
+            }
+        }
+    }
+
+    fn write_request_line(&self, line: &str) -> Result<(), String> {
+        let mut stdin = self.stdin.lock().expect("provider stdin lock poisoned");
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("写入 provider 请求失败：{error}"))
+    }
+}
+
+struct SessionProviderDetailClient {
+    client: Arc<ProviderProcessClient>,
+}
+
+impl ToolSessionDetailProvider for SessionProviderDetailClient {
+    fn detail(
+        &self,
+        tool: &niuma_core::models::ToolKind,
+        session_id: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> Result<ToolSessionDetail, String> {
+        let result = self.client.session_detail(SessionDetailParams {
+            tool: tool.clone(),
+            session_id: session_id.to_string(),
+            limit,
+            cursor,
+        })?;
+        Ok(result.detail)
+    }
 }
 
 fn plugin_config_path(plugin_id: &str) -> PathBuf {
@@ -487,11 +810,14 @@ mod tests {
         let registry = PluginRegistry::with_builtin_plugins();
         let manifests = managed_runtime_manifests(&registry);
 
-        assert_eq!(manifests.len(), 3);
+        assert_eq!(manifests.len(), 4);
         assert!(manifests
             .iter()
             .any(|manifest| manifest.id == "builtin-codex"
                 && manifest.source == PluginSource::Builtin));
+        assert!(manifests.iter().any(|manifest| manifest.id
+            == niuma_core::plugin::BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID
+            && manifest.source == PluginSource::Builtin));
         assert!(manifests
             .iter()
             .any(|manifest| manifest.id == "builtin-bark"
@@ -516,8 +842,67 @@ mod tests {
     }
 
     #[test]
+    fn managed_runtime_manifests_include_tool_session_list_providers() {
+        let mut registry = PluginRegistry::new();
+        registry.register(session_provider_manifest("codex-session-provider"));
+
+        let manifests = managed_runtime_manifests(&registry);
+
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].id, "codex-session-provider");
+    }
+
+    #[test]
+    fn provider_notification_updates_session_snapshot() {
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        let line = serde_json::json!({
+            "method": "session_snapshot_updated",
+            "params": {
+                "tool": "codex",
+                "sessions": [provider_test_session("s1")]
+            }
+        })
+        .to_string();
+
+        handle_provider_stdout_line(&registry, None, &line);
+
+        let sessions = registry
+            .list(niuma_api::tool_sessions::ToolSessionListQuery {
+                tool: Some("codex".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "s1");
+    }
+
+    #[test]
+    fn provider_response_line_matches_pending_request_id() {
+        let pending = ProviderPendingResponses::default();
+        let receiver = pending.insert("req-1".to_string());
+        let line = serde_json::json!({
+            "id": "req-1",
+            "result": {
+                "tool": "codex",
+                "sessions": []
+            }
+        })
+        .to_string();
+
+        handle_provider_stdout_line(
+            &niuma_api::tool_sessions::ToolSessionRegistry::new(),
+            Some(&pending),
+            &line,
+        );
+
+        let response = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(response.id, "req-1");
+        assert!(response.error.is_none());
+    }
+
+    #[test]
     fn spawn_plugin_runtimes_requires_shared_store_from_main_app() {
-        let _spawn: fn(NiumaStore, RuntimeEventBus) = spawn_plugin_runtimes;
+        let _spawn: fn(NiumaStore, RuntimeEventBus, ToolSessionRegistry) = spawn_plugin_runtimes;
     }
 
     #[test]
@@ -648,6 +1033,42 @@ mod tests {
             source: PluginSource::External,
             base_dir: None,
         }
+    }
+
+    fn session_provider_manifest(id: &str) -> PluginManifest {
+        PluginManifest {
+            id: id.to_string(),
+            kind: PluginKind::Tool,
+            tool_id: Some(ToolKind::Codex),
+            display_name: "Codex Session Provider".to_string(),
+            version: "0.1.0".to_string(),
+            command: Some("definitely-missing-niuma-command".to_string()),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            platforms: Vec::new(),
+            capabilities: vec![PluginCapability::ToolSessionListProvider],
+            icon_url: None,
+            config_schema: Vec::new(),
+            source: PluginSource::External,
+            base_dir: None,
+        }
+    }
+
+    fn provider_test_session(session_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("codex:{session_id}"),
+            "tool": "codex",
+            "session_id": session_id,
+            "project_path": "/tmp/demo",
+            "project_name": "demo",
+            "file_path": format!("/tmp/demo/{session_id}.jsonl"),
+            "modified_at": "1970-01-01T00:00:20Z",
+            "discovered_at": "1970-01-01T00:00:01Z",
+            "last_seen_at": "1970-01-01T00:00:30Z",
+            "is_active": true,
+            "is_subagent": false,
+            "status": "active"
+        })
     }
 
     fn test_sqlite_path(name: &str) -> PathBuf {

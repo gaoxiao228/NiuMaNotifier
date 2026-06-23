@@ -1,6 +1,7 @@
 use std::net::TcpListener;
 use std::thread;
 
+use crate::tool_sessions::ToolSessionRegistry;
 use niuma_core::config;
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::store::NiumaStore;
@@ -14,7 +15,10 @@ mod sse;
 mod state;
 pub mod tool_sessions;
 
-pub use routes::{app, app_with_bus, app_with_bus_and_plugin_dir, app_with_tool_sessions};
+pub use routes::{
+    app, app_with_bus, app_with_bus_and_plugin_dir, app_with_bus_and_tool_sessions,
+    app_with_tool_sessions,
+};
 
 pub fn local_api_addr() -> String {
     config::local_api_addr()
@@ -27,6 +31,14 @@ pub fn spawn_local_api(store: NiumaStore) -> std::io::Result<thread::JoinHandle<
 pub fn spawn_local_api_with_bus(
     store: NiumaStore,
     runtime_events: RuntimeEventBus,
+) -> std::io::Result<thread::JoinHandle<()>> {
+    spawn_local_api_with_bus_and_tool_sessions(store, runtime_events, ToolSessionRegistry::new())
+}
+
+pub fn spawn_local_api_with_bus_and_tool_sessions(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    tool_sessions: ToolSessionRegistry,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     let listener = TcpListener::bind(local_api_addr())?;
     listener.set_nonblocking(true)?;
@@ -51,7 +63,12 @@ pub fn spawn_local_api_with_bus(
                 runtime_events.clone(),
             );
             approval_proxy_watchdog::spawn_approval_proxy_watchdog(store.clone(), mutation_service);
-            if let Err(error) = axum::serve(listener, app_with_bus(store, runtime_events)).await {
+            if let Err(error) = axum::serve(
+                listener,
+                app_with_bus_and_tool_sessions(store, runtime_events, tool_sessions),
+            )
+            .await
+            {
                 eprintln!("NiumaNotifier Local API serve error: {error}");
             }
         });

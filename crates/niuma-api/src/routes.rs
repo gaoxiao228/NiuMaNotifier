@@ -36,6 +36,19 @@ pub fn app_with_tool_sessions(store: NiumaStore, tool_sessions: ToolSessionRegis
     )
 }
 
+pub fn app_with_bus_and_tool_sessions(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    tool_sessions: ToolSessionRegistry,
+) -> Router {
+    app_with_bus_and_plugin_dir_and_tool_sessions(
+        store,
+        runtime_events,
+        default_user_plugin_dir(),
+        tool_sessions,
+    )
+}
+
 pub fn app_with_bus(store: NiumaStore, runtime_events: RuntimeEventBus) -> Router {
     app_with_bus_and_plugin_dir_and_tool_sessions(
         store,

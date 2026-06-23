@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use niuma_core::models::ToolKind;
-use niuma_core::tool_session::ToolSessionListItem;
+use niuma_core::tool_session::{ToolSessionDetail, ToolSessionListItem};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
@@ -20,6 +20,18 @@ pub struct ToolSessionListQuery {
 #[derive(Clone, Default)]
 pub struct ToolSessionRegistry {
     snapshots: Arc<RwLock<HashMap<ToolKind, Vec<ToolSessionListItem>>>>,
+    detail_providers: Arc<RwLock<HashMap<ToolKind, Arc<dyn ToolSessionDetailProvider>>>>,
+}
+
+// detail provider 由宿主 runtime 注册，API 层只通过统一 trait 获取归一化消息。
+pub trait ToolSessionDetailProvider: Send + Sync {
+    fn detail(
+        &self,
+        tool: &ToolKind,
+        session_id: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> Result<ToolSessionDetail, String>;
 }
 
 impl ToolSessionRegistry {
@@ -41,6 +53,17 @@ impl ToolSessionRegistry {
             .write()
             .expect("tool session registry lock poisoned")
             .insert(tool, normalized);
+    }
+
+    pub fn register_detail_provider(
+        &self,
+        tool: ToolKind,
+        provider: Arc<dyn ToolSessionDetailProvider>,
+    ) {
+        self.detail_providers
+            .write()
+            .expect("tool session registry lock poisoned")
+            .insert(tool, provider);
     }
 
     pub fn list(&self, query: ToolSessionListQuery) -> Result<Vec<ToolSessionListItem>, String> {
@@ -88,6 +111,23 @@ impl ToolSessionRegistry {
                     .find(|session| session.session_id == session_id)
                     .cloned()
             })
+    }
+
+    pub fn detail(
+        &self,
+        tool: &ToolKind,
+        session_id: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> Result<ToolSessionDetail, String> {
+        let provider = self
+            .detail_providers
+            .read()
+            .expect("tool session registry lock poisoned")
+            .get(tool)
+            .cloned()
+            .ok_or_else(|| "session detail provider 尚未就绪".to_string())?;
+        provider.detail(tool, session_id, limit, cursor)
     }
 }
 

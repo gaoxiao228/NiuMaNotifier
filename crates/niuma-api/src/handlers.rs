@@ -111,6 +111,8 @@ pub(crate) struct SessionListQuery {
 pub(crate) struct SessionDetailQuery {
     tool: Option<String>,
     session_id: Option<String>,
+    limit: Option<usize>,
+    cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -282,14 +284,16 @@ pub(crate) async fn get_session_detail(
         );
     }
 
-    // Task 6 才接 provider RPC；当前只允许已有 snapshot 会话进入这里。
-    json_response(
-        200,
-        ApiResponse::fail(
-            ApiErrorCode::BusinessValidation,
-            "session detail provider 尚未就绪",
+    match state
+        .tool_sessions
+        .detail(&tool, &session_id, query.limit, query.cursor)
+    {
+        Ok(detail) => json_response(200, ApiResponse::ok(json!(detail))),
+        Err(error) => json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
         ),
-    )
+    }
 }
 
 fn required_query_value(value: Option<String>) -> Option<String> {

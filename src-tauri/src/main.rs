@@ -1,4 +1,4 @@
-use niuma_api::{local_api_addr, spawn_local_api_with_bus};
+use niuma_api::{local_api_addr, spawn_local_api_with_bus_and_tool_sessions};
 use niuma_core::runtime_event::RuntimeEventBus;
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
@@ -22,14 +22,22 @@ const CODEX_PLUGIN_BINARY_NAME: &str = "niuma-codex-plugin";
 const BARK_PLUGIN_BINARY_NAME: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_BINARY_NAME: &str = "niuma-plugin-ntfy";
 
-fn spawn_background_services(store: NiumaStore, runtime_events: RuntimeEventBus) {
+fn spawn_background_services(
+    store: NiumaStore,
+    runtime_events: RuntimeEventBus,
+    tool_sessions: niuma_api::tool_sessions::ToolSessionRegistry,
+) {
     let spawn_result = thread::Builder::new()
         .name("niuma-background-services-startup".to_string())
         .spawn(move || {
             if LOCAL_API_START_DELAY > Duration::ZERO {
                 thread::sleep(LOCAL_API_START_DELAY);
             }
-            match spawn_local_api_with_bus(store.clone(), runtime_events.clone()) {
+            match spawn_local_api_with_bus_and_tool_sessions(
+                store.clone(),
+                runtime_events.clone(),
+                tool_sessions.clone(),
+            ) {
                 Ok(_) => {
                     eprintln!("NiumaNotifier Local API started at {}", local_api_addr());
                 }
@@ -42,7 +50,11 @@ fn spawn_background_services(store: NiumaStore, runtime_events: RuntimeEventBus)
 
             // Codex session 扫描放到首屏之后，避免文件系统监听和活跃文件轮询抢首屏资源。
             thread::sleep(WATCHER_START_DELAY);
-            tools::spawn_tool_runtimes(store.clone(), runtime_events.clone());
+            tools::spawn_tool_runtimes(
+                store.clone(),
+                runtime_events.clone(),
+                tool_sessions.clone(),
+            );
         });
 
     if let Err(error) = spawn_result {
@@ -138,6 +150,7 @@ fn main() {
     let is_quitting = Arc::new(AtomicBool::new(false));
     let runtime_events = RuntimeEventBus::new();
     let store = NiumaStore::new(NiumaStore::default_path());
+    let tool_sessions = niuma_api::tool_sessions::ToolSessionRegistry::new();
     let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
 
     let app = tauri::Builder::default()
@@ -167,7 +180,11 @@ fn main() {
                     #[cfg(target_os = "macos")]
                     macos::install_terminate_guard();
                 }
-                spawn_background_services(store.clone(), runtime_events.clone());
+                spawn_background_services(
+                    store.clone(),
+                    runtime_events.clone(),
+                    tool_sessions.clone(),
+                );
                 Ok(())
             }
         })

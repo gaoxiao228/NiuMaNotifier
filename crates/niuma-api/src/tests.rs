@@ -13,13 +13,17 @@ use niuma_core::plugin::BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID;
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
-use niuma_core::tool_session::{ToolSessionListItem, ToolSessionStatus};
+use niuma_core::tool_session::{
+    ToolSessionDetail, ToolSessionListItem, ToolSessionMessage, ToolSessionMessageRole,
+    ToolSessionStatus,
+};
 use serde_json::Value;
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
 
-use crate::tool_sessions::{ToolSessionListQuery, ToolSessionRegistry};
+use crate::tool_sessions::{ToolSessionDetailProvider, ToolSessionListQuery, ToolSessionRegistry};
 use crate::{app, app_with_bus, app_with_bus_and_plugin_dir, app_with_tool_sessions};
 
 #[tokio::test]
@@ -2289,6 +2293,50 @@ async fn session_detail_existing_snapshot_provider_not_ready_business_failure() 
     assert_eq!(value["message"], "session detail provider 尚未就绪");
 }
 
+#[tokio::test]
+async fn session_detail_existing_snapshot_with_fake_provider_returns_detail() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "existing-session",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+    registry.register_detail_provider(
+        ToolKind::Codex,
+        Arc::new(FakeDetailProvider {
+            detail: sample_tool_session_detail("existing-session"),
+        }),
+    );
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_fake_provider")),
+        registry,
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail?tool=codex&session_id=existing-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["session_id"], "existing-session");
+    assert_eq!(value["data"]["messages"][0]["id"], "m2");
+    assert_eq!(value["data"]["messages"][1]["id"], "m1");
+}
+
 #[test]
 fn session_list_filters_snapshot_items() {
     let registry = ToolSessionRegistry::new();
@@ -2640,6 +2688,51 @@ fn tool_session_item(
         } else {
             ToolSessionStatus::Inactive
         },
+    }
+}
+
+struct FakeDetailProvider {
+    detail: ToolSessionDetail,
+}
+
+impl ToolSessionDetailProvider for FakeDetailProvider {
+    fn detail(
+        &self,
+        _tool: &ToolKind,
+        _session_id: &str,
+        _limit: Option<usize>,
+        _cursor: Option<String>,
+    ) -> Result<ToolSessionDetail, String> {
+        Ok(self.detail.clone())
+    }
+}
+
+fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {
+    ToolSessionDetail {
+        tool: ToolKind::Codex,
+        session_id: session_id.to_string(),
+        project_path: "/tmp/demo".to_string(),
+        project_name: "demo".to_string(),
+        is_subagent: false,
+        parent_session_id: None,
+        // provider 已经按倒序返回消息，API 不能再重排。
+        messages: vec![
+            ToolSessionMessage {
+                id: "m2".to_string(),
+                role: ToolSessionMessageRole::Assistant,
+                content: "hello".to_string(),
+                created_at: Utc.timestamp_opt(20, 0).single().unwrap(),
+                metadata: Value::Null,
+            },
+            ToolSessionMessage {
+                id: "m1".to_string(),
+                role: ToolSessionMessageRole::User,
+                content: "hi".to_string(),
+                created_at: Utc.timestamp_opt(10, 0).single().unwrap(),
+                metadata: Value::Null,
+            },
+        ],
+        next_cursor: Some("next-1".to_string()),
     }
 }
 
