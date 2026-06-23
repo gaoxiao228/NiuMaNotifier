@@ -62,6 +62,7 @@ import {
 } from './pluginRuntimeRefresh'
 import { pluginManagementSnapshotsEqual } from './pluginSnapshot'
 import { formatLocalTime } from './viewUtils'
+import { shouldReturnToDashboardForState } from './dashboardAutoReturn'
 import './styles.css'
 
 const languageChangedEvent = 'niuma-language-changed'
@@ -148,8 +149,7 @@ setupTrayLanguageSync()
 syncLanguageFromRuntime()
 
 async function refreshDashboard() {
-  latestMainState = await refreshMainState()
-  renderDashboard()
+  renderStatePayload(await refreshMainState())
 }
 
 async function refreshListenerConfig() {
@@ -493,7 +493,15 @@ function applyLanguage() {
 }
 
 function renderStatePayload(payload: MainStatePayload) {
+  const shouldReturnToDashboard = shouldReturnToDashboardForState({
+    activeView,
+    previousState: latestMainState,
+    nextState: payload
+  })
   latestMainState = payload
+  if (shouldReturnToDashboard) {
+    showDashboardView()
+  }
   renderDashboard()
 }
 
