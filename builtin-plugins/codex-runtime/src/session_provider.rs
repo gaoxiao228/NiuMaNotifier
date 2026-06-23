@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -33,8 +33,16 @@ pub struct CodexSessionProvider {
 struct SessionIndex {
     list_item: ToolSessionListItem,
     file_signature: SessionFileSignature,
-    // 只保存可分页消息的原始 JSONL 行号，不在 provider 内存中长期持有完整对话正文。
-    message_line_indexes: Vec<usize>,
+    // 只保存可分页消息的原始 JSONL 行位置，不在 provider 内存中长期持有完整对话正文。
+    message_lines: Vec<MessageLineIndex>,
+}
+
+#[derive(Clone, Copy)]
+struct MessageLineIndex {
+    line_index: usize,
+    byte_start: u64,
+    byte_end: u64,
+    content_hash: u64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -63,7 +71,7 @@ struct CodexRow {
 struct ParsedSessionFile {
     session_id: Option<String>,
     project_path: Option<String>,
-    message_line_indexes: Vec<usize>,
+    message_lines: Vec<MessageLineIndex>,
 }
 
 impl CodexSessionProvider {
@@ -217,15 +225,8 @@ impl CodexSessionProvider {
         if !self.index.contains_key(session_id) {
             self.refresh_snapshot().map_err(ProviderError::internal)?;
         }
-        let Some(index) = self.index.get(session_id).cloned() else {
+        if !self.index.contains_key(session_id) {
             return Err(ProviderError::not_found(session_id));
-        };
-        let path = PathBuf::from(&index.list_item.file_path);
-        let file_signature = session_file_signature(&path).map_err(|error| {
-            ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
-        })?;
-        if file_signature != index.file_signature {
-            self.refresh_session_index_from_file(session_id, &index)?;
         }
         Ok(())
     }
@@ -297,7 +298,7 @@ impl CodexSessionProvider {
         Ok(SessionIndex {
             list_item,
             file_signature,
-            message_line_indexes: parsed.message_line_indexes,
+            message_lines: parsed.message_lines,
         })
     }
 }
@@ -511,28 +512,28 @@ fn detail_from_index(
     let page_size = params.limit.max(1);
 
     // cursor 是稳定的行号边界；追加的新消息行号更大，不会影响旧 cursor 的下一页结果。
-    let page_line_indexes = index
-        .message_line_indexes
+    let page_lines = index
+        .message_lines
         .iter()
-        .filter(|line_index| before_line_index.is_none_or(|before| **line_index < before))
+        .filter(|line| before_line_index.is_none_or(|before| line.line_index < before))
         .rev()
         .take(page_size)
         .copied()
         .collect::<Vec<_>>();
-    let messages = read_messages_by_line_index(
+    let messages = read_messages_by_range(
         &index.list_item.file_path,
         &index.list_item.session_id,
-        &page_line_indexes,
+        &page_lines,
     )
     .map_err(DetailFromIndexError::Stale)?;
-    let next_cursor = page_line_indexes
+    let next_cursor = page_lines
         .last()
-        .copied()
+        .map(|line| line.line_index)
         .filter(|oldest_returned| {
             index
-                .message_line_indexes
+                .message_lines
                 .iter()
-                .any(|line_index| line_index < oldest_returned)
+                .any(|line| line.line_index < *oldest_returned)
         })
         .map(|oldest_returned| format!("before:{oldest_returned}"));
 
@@ -555,12 +556,26 @@ enum DetailFromIndexError {
 
 fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
     let file = File::open(path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
     let mut parsed = ParsedSessionFile::default();
-    for (line_index, line) in reader.lines().enumerate() {
-        let line = line.map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+    let mut line_index = 0usize;
+    let mut byte_start = 0u64;
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        let bytes_read = reader
+            .read_until(b'\n', &mut buffer)
+            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+        if bytes_read == 0 {
+            break;
+        }
+        let next_byte_start = byte_start + bytes_read as u64;
+        let line_bytes = trim_jsonl_line_bytes(&buffer);
+        let line = String::from_utf8_lossy(line_bytes);
         let line = line.trim_end_matches('\r');
         if line.trim().is_empty() {
+            line_index += 1;
+            byte_start = next_byte_start;
             continue;
         }
         if let Ok(row) = serde_json::from_str::<CodexRow>(line) {
@@ -584,60 +599,69 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
             }
         }
         if is_detail_message_line(line) {
-            parsed.message_line_indexes.push(line_index);
+            parsed.message_lines.push(MessageLineIndex {
+                line_index,
+                byte_start,
+                byte_end: byte_start + line_bytes.len() as u64,
+                content_hash: stable_bytes_hash(line_bytes),
+            });
         }
+        line_index += 1;
+        byte_start = next_byte_start;
     }
     Ok(parsed)
 }
 
-fn read_messages_by_line_index(
+fn read_messages_by_range(
     file_path: &str,
     session_id: &str,
-    line_indexes: &[usize],
+    message_lines: &[MessageLineIndex],
 ) -> Result<Vec<niuma_core::tool_session::ToolSessionMessage>, String> {
-    if line_indexes.is_empty() {
+    if message_lines.is_empty() {
         return Ok(Vec::new());
     }
-    let wanted = line_indexes
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>();
-    let file =
+    let mut file =
         File::open(file_path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
-    let reader = BufReader::new(file);
-    let mut messages_by_index = HashMap::new();
-    for (line_index, line) in reader.lines().enumerate() {
-        if !wanted.contains(&line_index) {
-            continue;
+    // message_lines 已经是倒序分页顺序；按 range 读取本页需要的行，避免从文件头扫描。
+    let mut messages = Vec::with_capacity(message_lines.len());
+    for line_index in message_lines {
+        if line_index.byte_end < line_index.byte_start {
+            return Err(format!(
+                "Codex session 索引已过期，第 {} 行范围非法",
+                line_index.line_index + 1
+            ));
         }
-        let line = line.map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+        let byte_len = (line_index.byte_end - line_index.byte_start) as usize;
+        file.seek(SeekFrom::Start(line_index.byte_start))
+            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+        let mut buffer = vec![0u8; byte_len];
+        file.read_exact(&mut buffer)
+            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+        if stable_bytes_hash(&buffer) != line_index.content_hash {
+            return Err(format!(
+                "Codex session 索引已过期，第 {} 行内容已变化",
+                line_index.line_index + 1
+            ));
+        }
+        let line = String::from_utf8_lossy(&buffer);
         let trimmed = line.trim_end_matches('\r');
         if !is_detail_message_line(trimmed) {
             return Err(format!(
                 "Codex session 索引已过期，第 {} 行不再是详情消息",
-                line_index + 1
+                line_index.line_index + 1
             ));
         }
-        messages_by_index.insert(
-            line_index,
-            parse_codex_message_line(session_id, line_index, trimmed),
-        );
-        if messages_by_index.len() == wanted.len() {
-            break;
-        }
-    }
-    // line_indexes 已经是倒序分页顺序，按该顺序组装消息，避免 HashMap 破坏排序。
-    let mut messages = Vec::with_capacity(line_indexes.len());
-    for line_index in line_indexes {
-        let Some(message) = messages_by_index.remove(line_index) else {
-            return Err(format!(
-                "Codex session 索引已过期，缺少第 {} 行",
-                line_index + 1
-            ));
-        };
-        messages.push(message);
+        messages.push(parse_codex_message_line(
+            session_id,
+            line_index.line_index,
+            trimmed,
+        ));
     }
     Ok(messages)
+}
+
+fn trim_jsonl_line_bytes(buffer: &[u8]) -> &[u8] {
+    buffer.strip_suffix(b"\n").unwrap_or(buffer)
 }
 
 fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SessionFileSignature)> {
