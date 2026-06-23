@@ -3,17 +3,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::codex_hook::read_codex_hook_status;
 use crate::config::codex_home;
 use crate::listener_config::ListenerConfig;
 use crate::models::ToolKind;
-use crate::state_mutation::StateMutationService;
-use crate::store::NiumaStore;
 
+mod config;
+mod enablement;
 mod runtime_state;
 
+pub use config::{
+    merge_plugin_config_with_defaults, plugin_config_defaults, resolve_plugin_config,
+    validate_plugin_config, PluginConfigField, PluginConfigFieldType,
+};
+pub use enablement::{
+    default_non_tool_plugin_enabled, default_plugin_enabled, listener_config_after_plugin_removed,
+    plugin_uses_listener_config, save_plugin_enabled_state,
+};
 pub use runtime_state::{PluginRuntimeState, PluginRuntimeStatus};
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
@@ -119,31 +126,6 @@ pub struct PluginManifest {
     pub source: PluginSource,
     #[serde(skip)]
     pub base_dir: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginConfigFieldType {
-    String,
-    Secret,
-    Url,
-    Number,
-    Boolean,
-    Select,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PluginConfigField {
-    pub key: String,
-    #[serde(rename = "type")]
-    pub field_type: PluginConfigFieldType,
-    pub label: String,
-    #[serde(default)]
-    pub required: bool,
-    #[serde(default)]
-    pub default: Value,
-    #[serde(default)]
-    pub options: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -327,7 +309,7 @@ impl PluginRegistry {
                     display_name: manifest.display_name.clone(),
                     version: manifest.version.clone(),
                     source: manifest.source.clone(),
-                    enabled: plugin_enabled(manifest, config, plugin_enabled_map),
+                    enabled: enablement::plugin_enabled(manifest, config, plugin_enabled_map),
                     runtime_status: runtime.status,
                     last_error: runtime.last_error,
                     icon_url: manifest.icon_url.clone(),
@@ -472,57 +454,6 @@ pub fn current_plugin_registry() -> PluginRegistry {
     PluginRegistry::with_builtin_plugins().discover_external_plugins(&default_user_plugin_dir())
 }
 
-pub fn plugin_config_defaults(
-    manifest: &PluginManifest,
-) -> serde_json::Map<String, serde_json::Value> {
-    manifest
-        .config_schema
-        .iter()
-        .filter(|field| !field.default.is_null())
-        .map(|field| (field.key.clone(), field.default.clone()))
-        .collect()
-}
-
-pub fn merge_plugin_config_with_defaults(
-    manifest: &PluginManifest,
-    config: serde_json::Map<String, serde_json::Value>,
-) -> serde_json::Map<String, serde_json::Value> {
-    let mut merged = plugin_config_defaults(manifest);
-    for (key, value) in config {
-        merged.insert(key, value);
-    }
-    merged
-}
-
-pub fn resolve_plugin_config(
-    manifest: &PluginManifest,
-    stored_config: Option<serde_json::Map<String, serde_json::Value>>,
-) -> serde_json::Map<String, serde_json::Value> {
-    let config = stored_config.unwrap_or_default();
-    merge_plugin_config_with_defaults(manifest, config)
-}
-
-pub fn validate_plugin_config(
-    manifest: &PluginManifest,
-    config: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), String> {
-    for field in &manifest.config_schema {
-        let Some(value) = config.get(&field.key) else {
-            if field.required {
-                return Err(format!("{} 不能为空", field.label));
-            }
-            continue;
-        };
-        if !plugin_config_value_matches(field, value) {
-            return Err(format!("{} 类型无效", field.label));
-        }
-        if field.required && plugin_config_value_is_empty(value) {
-            return Err(format!("{} 不能为空", field.label));
-        }
-    }
-    Ok(())
-}
-
 pub fn import_external_plugin_dir(
     source_dir: &Path,
     destination_root: &Path,
@@ -616,44 +547,6 @@ pub fn remove_external_plugin(
     })
 }
 
-pub fn save_plugin_enabled_state(
-    store: &NiumaStore,
-    service: &StateMutationService,
-    manifest: &PluginManifest,
-    enabled: bool,
-) -> Result<(), String> {
-    if plugin_uses_listener_config(manifest) {
-        let tool = manifest
-            .tool_id
-            .clone()
-            .ok_or_else(|| format!("工具监听插件缺少 tool_id：{}", manifest.id))?;
-        return service
-            .set_tool_listening_enabled(tool, enabled)
-            .map(|_| ());
-    }
-    let mut enabled_map = store.plugin_enabled_map()?;
-    enabled_map.insert(manifest.id.clone(), enabled);
-    store.save_plugin_enabled_map(&enabled_map)
-}
-
-pub fn listener_config_after_plugin_removed(
-    store: &NiumaStore,
-    service: &StateMutationService,
-    manifest: &PluginManifest,
-) -> Result<ListenerConfig, String> {
-    if plugin_uses_listener_config(manifest) {
-        let tool = manifest
-            .tool_id
-            .clone()
-            .ok_or_else(|| format!("工具监听插件缺少 tool_id：{}", manifest.id))?;
-        return service
-            .set_tool_listening_enabled(tool, false)
-            .map(|result| result.config);
-    }
-    // session provider 虽然有 tool_id，但不归工具监听开关管理，删除时只读取当前配置。
-    store.listener_config()
-}
-
 fn current_platform_id() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -696,22 +589,7 @@ fn validate_plugin_manifest(manifest: &PluginManifest) -> Result<(), String> {
             manifest.id
         ));
     }
-    let mut keys = std::collections::BTreeSet::new();
-    for field in &manifest.config_schema {
-        if field.key.trim().is_empty() {
-            return Err(format!("插件配置项 key 不能为空：{}", manifest.id));
-        }
-        if field.label.trim().is_empty() {
-            return Err(format!("插件配置项 label 不能为空：{}", manifest.id));
-        }
-        if !keys.insert(field.key.clone()) {
-            return Err(format!(
-                "插件配置项 key 重复：{}:{}",
-                manifest.id, field.key
-            ));
-        }
-    }
-    Ok(())
+    config::validate_config_schema(&manifest.id, &manifest.config_schema)
 }
 
 fn non_tool_forbidden_provider_capabilities(
@@ -744,63 +622,6 @@ fn plugin_capability_id(capability: &PluginCapability) -> &'static str {
         PluginCapability::ToolSessionListReader => "tool_session_list_reader",
         PluginCapability::ToolSessionDetailReader => "tool_session_detail_reader",
     }
-}
-
-fn plugin_config_value_matches(field: &PluginConfigField, value: &Value) -> bool {
-    match field.field_type {
-        PluginConfigFieldType::String
-        | PluginConfigFieldType::Secret
-        | PluginConfigFieldType::Url => value.is_string(),
-        PluginConfigFieldType::Number => value.is_number(),
-        PluginConfigFieldType::Boolean => value.is_boolean(),
-        PluginConfigFieldType::Select => {
-            let Some(value) = value.as_str() else {
-                return false;
-            };
-            field.options.is_empty() || field.options.iter().any(|option| option == value)
-        }
-    }
-}
-
-fn plugin_config_value_is_empty(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.trim().is_empty(),
-        Value::Null => true,
-        _ => false,
-    }
-}
-
-fn plugin_enabled(
-    manifest: &PluginManifest,
-    config: &ListenerConfig,
-    plugin_enabled_map: &BTreeMap<String, bool>,
-) -> bool {
-    if plugin_uses_listener_config(manifest) {
-        if let Some(tool) = &manifest.tool_id {
-            return config.is_tool_enabled(tool);
-        }
-    }
-    plugin_enabled_map
-        .get(&manifest.id)
-        .copied()
-        .unwrap_or_else(|| default_plugin_enabled(manifest))
-}
-
-pub fn plugin_uses_listener_config(manifest: &PluginManifest) -> bool {
-    // 只有 event_watcher 表示“工具监听开关”；session provider 虽然有 tool_id，也独立启用。
-    manifest.tool_id.is_some()
-        && manifest
-            .capabilities
-            .contains(&PluginCapability::EventWatcher)
-}
-
-pub fn default_plugin_enabled(manifest: &PluginManifest) -> bool {
-    manifest.source == PluginSource::Builtin
-}
-
-pub fn default_non_tool_plugin_enabled(manifest: &PluginManifest) -> bool {
-    // 保留给运行管理器使用；默认只自动开启内置插件，外置插件由导入流程写入显式状态。
-    default_plugin_enabled(manifest)
 }
 
 fn builtin_codex_plugin_command(default_command: Option<String>) -> String {
@@ -871,6 +692,8 @@ mod tests {
     use crate::listener_config::ListenerConfig;
     use crate::models::ToolId;
     use crate::runtime_event::RuntimeEventBus;
+    use crate::state_mutation::StateMutationService;
+    use crate::store::NiumaStore;
     use std::sync::{Mutex, OnceLock};
 
     #[test]
