@@ -153,6 +153,13 @@ tests/                    Frontend layout and rendering tests
 - New UI copy must include translations for all supported languages.
 - Do not commit real tokens, local SQLite databases, private logs, build artifacts, or dependency directories.
 
+Architecture references:
+
+- [Tool adapter architecture](./docs/architecture/tool-adapter-architecture.md)
+- [Platform architecture](./docs/architecture/platform-architecture.md)
+- [Main state contract](./docs/architecture/main-state-contract.md)
+- [Runtime event architecture](./docs/architecture/runtime-event-architecture.md)
+
 ## Local Data and Security Boundary
 
 - SQLite only stores notification history.
