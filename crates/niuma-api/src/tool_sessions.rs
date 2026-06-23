@@ -31,8 +31,9 @@ impl ToolSessionRegistry {
         let normalized = sessions
             .into_iter()
             .map(|mut session| {
-                // snapshot 归属以 provider 注册工具为准，避免错误 payload 污染跨工具查询。
+                // snapshot 归属和 canonical id 都由宿主生成，避免错误 payload 污染查询结果。
                 session.tool = tool.clone();
+                session.id = canonical_tool_session_id(&tool, &session.session_id);
                 session
             })
             .collect();
@@ -44,24 +45,33 @@ impl ToolSessionRegistry {
 
     pub fn list(&self, query: ToolSessionListQuery) -> Result<Vec<ToolSessionListItem>, String> {
         let limit = capped_limit(query.limit)?;
-        let snapshots = self
-            .snapshots
-            .read()
-            .expect("tool session registry lock poisoned");
-        let mut items = snapshots_for_tool(&snapshots, query.tool.as_deref())
+        let snapshot_items = {
+            let snapshots = self
+                .snapshots
+                .read()
+                .expect("tool session registry lock poisoned");
+
+            // 读锁只保护 snapshot clone，排序和截断在锁外完成，避免阻塞 provider 写入。
+            snapshots_for_tool(&snapshots, query.tool.as_deref())
+                .into_iter()
+                .flat_map(|sessions| sessions.iter().cloned())
+                .collect::<Vec<_>>()
+        };
+        let mut items = snapshot_items
             .into_iter()
-            .flatten()
             .filter(|item| query.include_subagents || !item.is_subagent)
             .filter(|item| !query.active_only || item.is_active)
-            .cloned()
             .collect::<Vec<_>>();
 
-        // 最新可见会话优先；last_seen 相同再按文件修改时间倒序。
+        // 最新可见会话优先；时间相同后使用 canonical 字段升序，保证 all + limit 稳定。
         items.sort_by(|left, right| {
             right
                 .last_seen_at
                 .cmp(&left.last_seen_at)
                 .then_with(|| right.modified_at.cmp(&left.modified_at))
+                .then_with(|| left.tool.as_str().cmp(right.tool.as_str()))
+                .then_with(|| left.session_id.cmp(&right.session_id))
+                .then_with(|| left.id.cmp(&right.id))
         });
         items.truncate(limit);
         Ok(items)
@@ -86,6 +96,10 @@ fn capped_limit(limit: Option<usize>) -> Result<usize, String> {
         0 => Err("limit 必须大于 0".to_string()),
         value => Ok(value.min(MAX_LIMIT)),
     }
+}
+
+fn canonical_tool_session_id(tool: &ToolKind, session_id: &str) -> String {
+    format!("{}:{session_id}", tool.as_str())
 }
 
 fn snapshots_for_tool<'a>(

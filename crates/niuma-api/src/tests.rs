@@ -2169,6 +2169,74 @@ fn tool_session_list_all_merges_snapshots() {
 }
 
 #[test]
+fn tool_session_replace_snapshot_normalizes_provider_tool_and_id() {
+    let registry = ToolSessionRegistry::new();
+    let mut item = tool_session_item(
+        "provider-session",
+        ToolKind::ClaudeCode,
+        100,
+        80,
+        true,
+        false,
+    );
+    item.id = "provider-supplied-id".to_string();
+
+    registry.replace_snapshot(ToolKind::Codex, vec![item]);
+
+    let items = registry
+        .list(ToolSessionListQuery {
+            tool: Some("codex".to_string()),
+            include_subagents: true,
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap();
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].tool, ToolKind::Codex);
+    assert_eq!(items[0].id, "codex:provider-session");
+}
+
+#[test]
+fn tool_session_list_uses_deterministic_tie_breakers() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![
+            tool_session_item("codex-b", ToolKind::Codex, 100, 100, true, false),
+            tool_session_item("codex-a", ToolKind::Codex, 100, 100, true, false),
+        ],
+    );
+    registry.replace_snapshot(
+        ToolKind::ClaudeCode,
+        vec![tool_session_item(
+            "claude-a",
+            ToolKind::ClaudeCode,
+            100,
+            100,
+            true,
+            false,
+        )],
+    );
+
+    let items = registry
+        .list(ToolSessionListQuery {
+            tool: Some("all".to_string()),
+            include_subagents: true,
+            limit: Some(2),
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["claude_code:claude-a", "codex:codex-a"]
+    );
+}
+
+#[test]
 fn tool_session_list_limit_is_capped_at_500() {
     let registry = ToolSessionRegistry::new();
     let sessions = (0..520)
