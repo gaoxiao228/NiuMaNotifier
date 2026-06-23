@@ -145,6 +145,13 @@ impl SessionProviderOwnership {
         }
         false
     }
+
+    fn has_owner(&self, tool: &niuma_core::models::ToolKind) -> bool {
+        self.inner
+            .lock()
+            .expect("session provider owner lock poisoned")
+            .contains_key(tool)
+    }
 }
 
 fn run_plugin_manager(
@@ -166,6 +173,7 @@ fn run_plugin_manager(
     loop {
         reconcile_managed_plugins(
             &store,
+            &runtime_events,
             &tool_sessions,
             &mut managed,
             &session_provider_ownership,
@@ -176,6 +184,7 @@ fn run_plugin_manager(
 
 fn reconcile_managed_plugins(
     store: &NiumaStore,
+    runtime_events: &RuntimeEventBus,
     tool_sessions: &ToolSessionRegistry,
     managed: &mut HashMap<String, ManagedPlugin>,
     session_provider_ownership: &SessionProviderOwnership,
@@ -213,7 +222,13 @@ fn reconcile_managed_plugins(
             entry.manifest = manifest;
             entry.next_start = Instant::now();
         }
-        tick_managed_plugin(store, tool_sessions, entry, session_provider_ownership);
+        tick_managed_plugin(
+            store,
+            runtime_events,
+            tool_sessions,
+            entry,
+            session_provider_ownership,
+        );
     }
 }
 
@@ -267,6 +282,7 @@ fn wait_for_plugin_reconcile_signal(
 
 fn tick_managed_plugin(
     store: &NiumaStore,
+    runtime_events: &RuntimeEventBus,
     tool_sessions: &ToolSessionRegistry,
     entry: &mut ManagedPlugin,
     session_provider_ownership: &SessionProviderOwnership,
@@ -335,7 +351,12 @@ fn tick_managed_plugin(
     if launch_files_ready && entry.child.is_none() && Instant::now() >= entry.next_start {
         save_runtime_state(store, &entry.manifest.id, PluginRuntimeState::starting());
         let is_session_provider = is_session_provider_manifest(&entry.manifest);
-        match spawn_plugin_process(&entry.manifest, tool_sessions, session_provider_ownership) {
+        match spawn_plugin_process(
+            &entry.manifest,
+            runtime_events,
+            tool_sessions,
+            session_provider_ownership,
+        ) {
             Ok(process) => {
                 eprintln!("NiumaNotifier plugin {} started", entry.manifest.id);
                 entry.child = Some(process.child);
@@ -480,6 +501,7 @@ fn plugin_runtime_enabled(store: &NiumaStore, manifest: &PluginManifest) -> bool
 
 fn spawn_plugin_process(
     manifest: &PluginManifest,
+    runtime_events: &RuntimeEventBus,
     tool_sessions: &ToolSessionRegistry,
     session_provider_ownership: &SessionProviderOwnership,
 ) -> Result<SpawnedPluginProcess, String> {
@@ -491,6 +513,7 @@ fn spawn_plugin_process(
         match bootstrap_session_provider(
             manifest,
             &mut child,
+            runtime_events,
             tool_sessions,
             session_provider_ownership,
         ) {
@@ -595,6 +618,7 @@ fn is_session_provider_manifest(manifest: &PluginManifest) -> bool {
 fn bootstrap_session_provider(
     manifest: &PluginManifest,
     child: &mut Child,
+    runtime_events: &RuntimeEventBus,
     tool_sessions: &ToolSessionRegistry,
     session_provider_ownership: &SessionProviderOwnership,
 ) -> Result<SessionProviderRuntimeInstance, String> {
@@ -645,6 +669,7 @@ fn bootstrap_session_provider(
     if let Err(error) = spawn_session_snapshot_bootstrap_thread(
         manifest.id.clone(),
         guard.clone(),
+        runtime_events.clone(),
         tool_sessions.clone(),
         bootstrap_sender,
         move || snapshot_client.session_snapshot(snapshot_tool),
@@ -667,6 +692,7 @@ fn bootstrap_session_provider(
 fn spawn_session_snapshot_bootstrap_thread<F>(
     plugin_id: String,
     guard: SessionProviderInstanceGuard,
+    runtime_events: RuntimeEventBus,
     tool_sessions: ToolSessionRegistry,
     result_sender: mpsc::Sender<SessionProviderBootstrapResult>,
     fetch_snapshot: F,
@@ -679,7 +705,11 @@ where
         .spawn(move || match fetch_snapshot() {
             Ok(snapshot) if snapshot.tool == guard.tool => {
                 if replace_session_provider_snapshot(&tool_sessions, &guard, snapshot) {
-                    let _ = result_sender.send(SessionProviderBootstrapResult::Ready);
+                    send_session_provider_bootstrap_result(
+                        &runtime_events,
+                        &result_sender,
+                        SessionProviderBootstrapResult::Ready,
+                    );
                 }
             }
             Ok(snapshot) => {
@@ -690,16 +720,48 @@ where
                 );
                 eprintln!("NiumaNotifier provider {plugin_id} {message}");
                 if guard.is_active() {
-                    let _ = result_sender.send(SessionProviderBootstrapResult::Failed(message));
+                    fail_session_provider_bootstrap(
+                        &runtime_events,
+                        &result_sender,
+                        &guard,
+                        message,
+                    );
                 }
             }
             Err(error) => {
                 if guard.is_active() {
-                    let _ = result_sender.send(SessionProviderBootstrapResult::Failed(error));
+                    fail_session_provider_bootstrap(&runtime_events, &result_sender, &guard, error);
                 }
             }
         })
         .map_err(|error| format!("session provider snapshot bootstrap 未启动：{error}"))
+}
+
+fn send_session_provider_bootstrap_result(
+    runtime_events: &RuntimeEventBus,
+    result_sender: &mpsc::Sender<SessionProviderBootstrapResult>,
+    result: SessionProviderBootstrapResult,
+) {
+    if result_sender.send(result).is_ok() {
+        // 复用现有配置变更事件作为 manager 唤醒信号，避免新增 enum 扩大影响面。
+        runtime_events.publish_state_changed(StateChangeReason::PluginConfigChanged);
+    }
+}
+
+fn fail_session_provider_bootstrap(
+    runtime_events: &RuntimeEventBus,
+    result_sender: &mpsc::Sender<SessionProviderBootstrapResult>,
+    guard: &SessionProviderInstanceGuard,
+    error: String,
+) {
+    // Failed 入队前先撤销当前实例写入资格，堵住 manager 清理前的 stdout 通知窗口。
+    let _ = guard.ownership.release_if_current(guard);
+    guard.invalidate();
+    send_session_provider_bootstrap_result(
+        runtime_events,
+        result_sender,
+        SessionProviderBootstrapResult::Failed(error),
+    );
 }
 
 fn spawn_provider_stdout_reader(
@@ -997,8 +1059,8 @@ fn clear_session_provider_runtime(
     };
     let owns_tool = runtime.guard.ownership.release_if_current(&runtime.guard);
     runtime.guard.invalidate();
-    if owns_tool {
-        // 只有当前 owner 能清理 registry，避免旧 provider entry 误清新 provider。
+    if owns_tool || !runtime.guard.ownership.has_owner(&runtime.tool) {
+        // 当前实例提前释放 owner 时仍要清 registry；若已有新 owner，则不能误清新 provider。
         tool_sessions.unregister_detail_provider(&runtime.tool);
         tool_sessions.clear_snapshot(&runtime.tool);
     }
@@ -1407,12 +1469,14 @@ mod tests {
     fn session_snapshot_bootstrap_returns_before_snapshot_fetch_finishes() {
         let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
         let guard = active_provider_guard("provider-async", ToolKind::Codex);
+        let runtime_events = RuntimeEventBus::new();
         let (sender, receiver) = mpsc::channel();
         let started_at = Instant::now();
 
         let handle = spawn_session_snapshot_bootstrap_thread(
             "provider-async".to_string(),
             guard,
+            runtime_events,
             registry.clone(),
             sender,
             move || {
@@ -1441,9 +1505,47 @@ mod tests {
     }
 
     #[test]
+    fn session_snapshot_bootstrap_result_wakes_plugin_manager() {
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        let guard = active_provider_guard("provider-wakeup", ToolKind::Codex);
+        let runtime_events = RuntimeEventBus::new();
+        let mut event_receiver = runtime_events.subscribe();
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = spawn_session_snapshot_bootstrap_thread(
+            "provider-wakeup".to_string(),
+            guard,
+            runtime_events,
+            registry,
+            sender,
+            || {
+                Ok(SessionSnapshotResult {
+                    tool: ToolKind::Codex,
+                    sessions: Vec::new(),
+                })
+            },
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            SessionProviderBootstrapResult::Ready
+        ));
+        assert!(matches!(
+            event_receiver.try_recv().unwrap(),
+            RuntimeEvent::StateChanged {
+                reason: StateChangeReason::PluginConfigChanged,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn failed_session_snapshot_bootstrap_reports_failure_without_clearing_registry() {
         let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
         let guard = active_provider_guard("provider-failed", ToolKind::Codex);
+        let runtime_events = RuntimeEventBus::new();
         let (sender, receiver) = mpsc::channel();
         registry.replace_snapshot(
             ToolKind::Codex,
@@ -1454,6 +1556,7 @@ mod tests {
         let handle = spawn_session_snapshot_bootstrap_thread(
             "provider-failed".to_string(),
             guard,
+            runtime_events,
             registry.clone(),
             sender,
             || Err("provider 请求超时：session_snapshot".to_string()),
@@ -1474,9 +1577,52 @@ mod tests {
     }
 
     #[test]
+    fn failed_bootstrap_guard_cannot_write_snapshot_before_manager_cleanup() {
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        let guard = active_provider_guard("provider-failed-window", ToolKind::Codex);
+        let runtime_events = RuntimeEventBus::new();
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = spawn_session_snapshot_bootstrap_thread(
+            "provider-failed-window".to_string(),
+            guard.clone(),
+            runtime_events,
+            registry.clone(),
+            sender,
+            || Err("provider 请求超时：session_snapshot".to_string()),
+        )
+        .unwrap();
+        handle.join().unwrap();
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            SessionProviderBootstrapResult::Failed(error) if error.contains("provider 请求超时")
+        ));
+
+        // manager 尚未清理时，失败实例的 stdout 线程仍可能读到通知，guard 必须先阻止写入。
+        handle_provider_stdout_line(
+            &registry,
+            None,
+            Some(&guard),
+            &serde_json::json!({
+                "method": "session_snapshot_updated",
+                "params": {
+                    "tool": "codex",
+                    "sessions": [provider_test_session("failed-window-session")]
+                }
+            })
+            .to_string(),
+        );
+
+        assert!(registry
+            .find_session(&ToolKind::Codex, "failed-window-session")
+            .is_none());
+    }
+
+    #[test]
     fn inactive_bootstrap_result_does_not_clear_new_provider_snapshot() {
         let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
         let old_guard = active_provider_guard("provider-old", ToolKind::Codex);
+        let runtime_events = RuntimeEventBus::new();
         let (sender, receiver) = mpsc::channel();
         old_guard.invalidate();
         registry.replace_snapshot(
@@ -1488,6 +1634,7 @@ mod tests {
         let handle = spawn_session_snapshot_bootstrap_thread(
             "provider-old".to_string(),
             old_guard,
+            runtime_events,
             registry.clone(),
             sender,
             || Err("provider 请求超时：session_snapshot".to_string()),
@@ -1579,6 +1726,7 @@ mod tests {
 
         tick_managed_plugin(
             &store,
+            &RuntimeEventBus::new(),
             &registry,
             &mut entry,
             &SessionProviderOwnership::default(),
