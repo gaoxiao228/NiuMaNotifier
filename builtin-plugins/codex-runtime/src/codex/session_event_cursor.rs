@@ -107,30 +107,29 @@ impl CodexSessionScanner {
     }
 
     pub(crate) fn prime_file_to_end(&mut self, path: &Path) -> Result<(), String> {
+        let cursor = CodexSessionRepository::prime_event_cursor_to_end(path)?;
         self.repository
             .lock()
             .map_err(|_| "Codex session repository lock poisoned".to_string())?
-            .prime_event_cursor_in_index(path)
+            .store_event_cursor(path, cursor);
+        Ok(())
     }
 
     pub(crate) fn scan_file(&mut self, path: &Path) -> Result<Vec<NiumaEvent>, String> {
-        let (read, mut parser) = {
-            let repository = self
-                .repository
-                .lock()
-                .map_err(|_| "Codex session repository lock poisoned".to_string())?;
-            let read = repository.read_new_event_lines_for_path(path)?;
-            let should_reset_parser =
-                read.reset_parser || read.file_replaced || read.file_truncated;
-            let parser = if should_reset_parser {
-                CodexJsonlParser::default()
-            } else {
-                repository
-                    .event_cursor(path)
-                    .map(|cursor| cursor.parser.clone())
-                    .unwrap_or_default()
-            };
-            (read, parser)
+        let previous_cursor = self
+            .repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .event_cursor_cloned(path);
+        let read = CodexSessionRepository::read_new_event_lines(path, previous_cursor.as_ref())?;
+        let should_reset_parser = read.reset_parser || read.file_replaced || read.file_truncated;
+
+        let mut parser = if should_reset_parser {
+            CodexJsonlParser::default()
+        } else {
+            previous_cursor
+                .map(|cursor| cursor.parser)
+                .unwrap_or_default()
         };
 
         let mut events = Vec::new();

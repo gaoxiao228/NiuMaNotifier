@@ -227,15 +227,13 @@ impl CodexSessionRepository {
         })
     }
 
-    pub(crate) fn read_new_event_lines_for_path(
-        &self,
-        path: &Path,
-    ) -> Result<CodexEventReadResult, String> {
-        Self::read_new_event_lines(path, self.event_cursors.get(path))
-    }
-
+    #[cfg(test)]
     pub(crate) fn event_cursor(&self, path: &Path) -> Option<&CodexEventCursor> {
         self.event_cursors.get(path)
+    }
+
+    pub(crate) fn event_cursor_cloned(&self, path: &Path) -> Option<CodexEventCursor> {
+        self.event_cursors.get(path).cloned()
     }
 
     pub(crate) fn store_event_cursor(&mut self, path: &Path, cursor: CodexEventCursor) {
@@ -256,12 +254,6 @@ impl CodexSessionRepository {
             file_identity: file_identity(&metadata),
             parser,
         })
-    }
-
-    pub(crate) fn prime_event_cursor_in_index(&mut self, path: &Path) -> Result<(), String> {
-        let cursor = Self::prime_event_cursor_to_end(path)?;
-        self.store_event_cursor(path, cursor);
-        Ok(())
     }
 
     pub(crate) fn session_detail(
