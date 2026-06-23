@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 
 pub(super) fn init_schema(connection: &Connection) -> Result<(), String> {
-    // 新库只持久化通知历史；事件、会话、关注项和配置分别由内存/JSON 负责。
+    // 新库只持久化通知历史；事件、运行态条目、关注项和配置分别由内存/JSON 负责。
     connection
         .execute_batch(
             "

@@ -149,7 +149,8 @@ tests/                    前端布局和渲染测试
 
 - SQLite 只保存通知历史。
 - 应用配置、插件配置和插件启用状态保存在本机 JSON 文件中。
-- 事件、会话、关注项、最新活动和插件运行状态是内存运行态。
+- 事件、运行态条目、关注项、最新活动和插件运行状态是内存运行态；运行态 Local API 为 `/api/v1/runtime_state_list`。
+- 工具 session 列表和消息详情通过 `/api/v1/session_list` 与 `/api/v1/session_detail` 单独暴露；reader 插件应调用宿主 Local API，不直接读取工具 session 文件。
 - 插件配置可能把 Bark device key 或 ntfy token 明文保存到本机 JSON 文件中。
 - 不要把真实 token、私有日志、用户会话文件或本机 SQLite 数据提交到仓库。
 - `public/assets/` 中的第三方服务标识仅用于展示对应通知渠道，正式扩大分发前需要再次确认商标和再分发要求。

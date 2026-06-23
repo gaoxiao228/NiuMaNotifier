@@ -2,11 +2,12 @@
 
 This document describes the NiumaNotifier plugin v1 integration model. A plugin is a local trusted executable described by `plugin.json`, started and stopped by NiumaNotifier, and connected to the main app through the Local API.
 
-NiumaNotifier currently supports three plugin types:
+NiumaNotifier currently supports these plugin shapes:
 
 | Type | `kind` | Main capabilities | Description |
 | --- | --- | --- | --- |
 | Tool watcher plugin | `tool` | `event_watcher` | Watches raw state from tools such as Codex, Claude Code, or Cursor, converts it to unified `NiumaEvent` objects, and reports them to the main app. |
+| Tool session provider plugin | `tool` | `tool_session_list_provider`, `tool_session_detail_provider` | Parses raw tool session files and provides discovered session lists and normalized message details to the host. |
 | Notification plugin | `notification` | `event_consumer`, `notification_test`, optional `approval_handler` | Consumes the main app event stream, decides whether to send external notifications such as Bark or ntfy, and can handle approval decisions only when it declares `approval_handler`. |
 | Status indicator plugin | `status_indicator` | `state_consumer` | Consumes the main state stream for external lights, status panels, desktop pets, or similar displays. |
 
@@ -76,7 +77,7 @@ NiumaNotifier periodically discovers `plugin.json` files in the plugin directory
 
 1. Discovery: the main app loads built-in plugins and external plugins from the user plugin directory.
 2. Enablement: `tool` plugins are controlled by tool listener switches. Plugins without `tool_id` are controlled by the general plugin enabled state.
-3. Startup: plugins declaring `event_watcher`, `event_consumer`, or `state_consumer` are started as long-running child processes.
+3. Startup: plugins declaring `event_watcher`, `event_consumer`, `state_consumer`, `tool_session_list_provider`, or `tool_session_detail_provider` are started as long-running child processes.
 4. Runtime: the main app injects environment variables into the plugin and sets the working directory to the directory that contains `plugin.json`.
 5. Stop: when a plugin is disabled, its manifest changes, or it is removed, the main app terminates the old process.
 6. Restart: if a plugin exits unexpectedly, the main app records the `failed` state and retries after a short backoff.
@@ -177,7 +178,7 @@ Field reference:
 | `args` | No | Startup arguments. Relative path arguments are not rewritten automatically, but the plugin working directory is set to the `plugin.json` directory. |
 | `env` | No | Extra environment variables injected into the plugin process. |
 | `platforms` | No | Supported platforms. Current values are `macos`, `windows`, and `linux`. An empty array means all platforms. |
-| `capabilities` | No | Supported values are `event_watcher`, `event_consumer`, `approval_handler`, `notification_test`, and `state_consumer`. |
+| `capabilities` | No | Supported values are `event_watcher`, `event_consumer`, `approval_handler`, `notification_test`, `state_consumer`, `tool_session_list_provider`, `tool_session_detail_provider`, `tool_session_list_reader`, and `tool_session_detail_reader`. |
 | `icon_url` | No | Icon URL or relative asset path. |
 | `config_schema` | No | Plugin configuration field definitions for the UI and configuration API. |
 
@@ -187,8 +188,26 @@ Constraints:
 - Non-`tool` plugins cannot declare `event_watcher`.
 - `event_watcher` plugins are started and stopped by the tool listener switch.
 - Plugins without `tool_id` are started and stopped by the general plugin enabled state.
-- Plugins declaring `event_watcher`, `event_consumer`, or `state_consumer` are managed by the runtime manager as long-running child processes.
+- Plugins declaring `event_watcher`, `event_consumer`, `state_consumer`, `tool_session_list_provider`, or `tool_session_detail_provider` are managed by the runtime manager as long-running child processes.
 - `approval_handler` is an extra capability for approval decisions. It must be used together with `event_consumer`; `approval_handler` alone is not a valid runtime mode.
+- `event_watcher`, `tool_session_list_provider`, and `tool_session_detail_provider` are independent capabilities. Tool watcher capability does not imply tool session provider capability.
+- For the same `tool_id`, each provider capability can be declared by only one plugin. For example, there can be only one `event_watcher`, one `tool_session_list_provider`, and one `tool_session_detail_provider`.
+- Non-`tool` plugins cannot declare provider capabilities. `tool_session_detail_provider` must be declared together with `tool_session_list_provider` in the same plugin.
+- `tool_session_detail_reader` means the plugin can read AI conversation content. The plugin management UI displays it as a sensitive capability. In v1, this declaration is a development contract and display marker, not a server-enforced authentication boundary.
+
+Capability reference:
+
+| Capability | Plugin kind | Description |
+| --- | --- | --- |
+| `event_watcher` | `tool` | Watches raw tool events and reports them through `/api/v1/plugin-events`. |
+| `event_consumer` | `notification` | Consumes the `/api/v1/events/stream` event stream. |
+| `approval_handler` | `notification`, with `event_consumer` | Can submit approval decisions. |
+| `notification_test` | `notification` | Supports the test notification button in the main UI. |
+| `state_consumer` | `status_indicator` | Consumes the `/api/v1/state/stream` main state stream. |
+| `tool_session_list_provider` | `tool` | Provides the discovered session list for the tool to the host. |
+| `tool_session_detail_provider` | `tool` | Provides normalized message details by `session_id` to the host. |
+| `tool_session_list_reader` | Any business plugin | Reads the host `session_list` API. |
+| `tool_session_detail_reader` | Any business plugin | Reads AI conversation content through the host `session_detail` API. Sensitive. |
 
 ## Configuration Schema
 
@@ -246,7 +265,7 @@ Constraints:
 
 - External plugins should not directly read or write `config.json`, `plugin-configs`, `niuma.sqlite`, or other internal main app files.
 - `NIUMA_DB_PATH` is only a diagnostic path, not a plugin extension point.
-- Events, sessions, attention items, and latest activity are in-memory runtime state in the main app. Plugins cannot depend on database queries for historical events.
+- Events, runtime state items, attention items, and latest activity are in-memory runtime state in the main app. Plugins cannot depend on database queries for historical events.
 - Notification plugins should store "already notified" local dedupe records in `NIUMA_PLUGIN_DATA_DIR`, then write the send result back through the Local API.
 
 ## Local API Contract
@@ -301,6 +320,42 @@ curl -X POST "$NIUMA_LOCAL_API_URL/api/v1/plugin-events" \
   -H "Content-Type: application/json" \
   -d '{"plugin_id":"niuma-plugin-demo","events":[]}'
 ```
+
+## Tool Session Reading
+
+Third-party reader plugins read tool sessions through the host Local API. They must not read Codex, Claude Code, or other tool directories directly, and they must not call provider plugins directly. The tool session view is separate from Niuma runtime state: `/api/v1/runtime_state_list` returns Niuma state-machine runtime items, while raw tool session lists and normalized message details use the endpoints below.
+
+```http
+GET /api/v1/session_list?tool=codex&include_subagents=false&active_only=false&limit=100
+GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=cursor-1
+```
+
+`session_list` reads the latest provider snapshot stored by the host. Reader plugins do not scan disk. Common query parameters:
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `tool` | `all` | `codex`, `claude_code`, a custom tool ID, or `all`. |
+| `include_subagents` | `false` | Whether to include subagent sessions. |
+| `active_only` | `false` | Whether to return only active sessions. |
+| `limit` | `100` | Maximum number of returned sessions. |
+
+`session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`.
+
+Successful responses still use the standard envelope:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "tool": "codex",
+    "session_id": "session-1",
+    "messages": []
+  }
+}
+```
+
+NiumaNotifier v1 does not use plugin tokens for API authentication. `tool_session_list_reader` and `tool_session_detail_reader` are development-contract capabilities, UI display markers, and future authentication hooks. `tool_session_detail_reader` covers AI conversation content and should be displayed as sensitive in plugin management. Plugins should still connect only to the trusted local Local API.
 
 ## Tool Event Reporting
 

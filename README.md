@@ -155,7 +155,8 @@ tests/                    Frontend layout and rendering tests
 
 - SQLite only stores notification history.
 - App configuration, plugin configuration, and plugin enabled state are stored as local JSON files.
-- Events, sessions, attention items, latest activity, and plugin runtime status are in-memory runtime state.
+- Events, runtime state items, attention items, latest activity, and plugin runtime status are in-memory runtime state. The runtime-state Local API is `/api/v1/runtime_state_list`.
+- Tool session lists and message details are exposed separately through `/api/v1/session_list` and `/api/v1/session_detail`; reader plugins should use the host Local API instead of reading tool session files directly.
 - Plugin configuration may contain Bark device keys or ntfy tokens in plain text local JSON files.
 - Do not commit real tokens, private logs, user session files, or local SQLite data to the repository.
 - Third-party service marks under `public/assets/` are only used to display the corresponding notification channels. Trademark and redistribution requirements should be reviewed again before broader distribution.
