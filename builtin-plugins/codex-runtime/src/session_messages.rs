@@ -12,6 +12,12 @@ struct CodexRow {
     payload: Value,
 }
 
+pub struct DetailMessageSignature {
+    pub role: ToolSessionMessageRole,
+    pub content: String,
+    pub is_structured_message: bool,
+}
+
 // 将单行 Codex JSONL 归一成统一会话消息；这里刻意只保留最小 metadata，避免泄露 raw payload。
 pub fn parse_codex_message_line(
     session_id: &str,
@@ -69,6 +75,26 @@ pub fn is_detail_message_line(line: &str) -> bool {
         return false;
     };
     matches!(row.row_type.as_str(), "event_msg" | "response_item")
+}
+
+pub fn detail_message_signature(line: &str) -> Option<DetailMessageSignature> {
+    let Ok(row) = serde_json::from_str::<CodexRow>(line) else {
+        return None;
+    };
+    if !matches!(row.row_type.as_str(), "event_msg" | "response_item") {
+        return None;
+    }
+    let item_type = row.payload.get("type").and_then(Value::as_str);
+    let role = role_for_row(&row.row_type, item_type, &row.payload);
+    let content = content_for_row(&row.row_type, item_type, &row.payload);
+    if content.is_empty() {
+        return None;
+    }
+    Some(DetailMessageSignature {
+        role,
+        content,
+        is_structured_message: row.row_type == "response_item" && item_type == Some("message"),
+    })
 }
 
 fn role_for_row(

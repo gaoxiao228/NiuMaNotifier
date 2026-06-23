@@ -1,6 +1,7 @@
 use super::*;
 use chrono::TimeZone;
 use niuma_core::listener_config::ListenerConfig;
+use niuma_core::tool_session::ToolSessionMessageRole;
 
 #[test]
 fn codex_session_runtime_accepts_only_jsonl_files() {
@@ -76,6 +77,43 @@ fn codex_session_provider_snapshot_discovers_fixture_and_detail_returns_newest_f
     );
     assert_eq!(detail.messages[0].content, "助手回答");
     assert_eq!(detail.messages[1].content, "用户问题");
+    assert_eq!(detail.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_detail_deduplicates_codex_mirrored_message_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join("rollout-2026-06-22-11111111-1111-1111-1111-111111111111.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-mirror\",\"cwd\":\"/tmp/demo\",\"thread_source\":\"user\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"同一句用户输入\"}]}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"同一句用户输入\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"同一句助手回复\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"同一句助手回复\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let detail = provider_detail(&mut provider, "session-mirror", 20, None);
+
+    assert_eq!(detail.messages.len(), 2);
+    assert_eq!(detail.messages[0].role, ToolSessionMessageRole::Assistant);
+    assert_eq!(detail.messages[0].content, "同一句助手回复");
+    assert_eq!(
+        detail.messages[0].metadata["codex_row_type"],
+        "response_item"
+    );
+    assert_eq!(detail.messages[1].role, ToolSessionMessageRole::User);
+    assert_eq!(detail.messages[1].content, "同一句用户输入");
+    assert_eq!(
+        detail.messages[1].metadata["codex_row_type"],
+        "response_item"
+    );
     assert_eq!(detail.next_cursor, None);
 }
 

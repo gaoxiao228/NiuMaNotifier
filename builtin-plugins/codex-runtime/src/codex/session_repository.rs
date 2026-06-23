@@ -20,7 +20,10 @@ use crate::codex::session_identity::{
     codex_fallback_session_id, codex_project_name, CodexSessionIdentity, CodexSessionMetadata,
 };
 use crate::codex::session_protocol::current::CodexJsonlParser;
-use crate::session_messages::{is_detail_message_line, parse_codex_message_line};
+use crate::session_messages::{
+    detail_message_signature, is_detail_message_line, parse_codex_message_line,
+    DetailMessageSignature,
+};
 
 const SNAPSHOT_FILE_LIMIT: usize = 128;
 const SESSION_DAY_DIR_LIMIT: usize = 180;
@@ -101,6 +104,11 @@ struct ParsedSessionFile {
     session_metadata: CodexSessionMetadata,
     session_meta_line: Option<MessageLineIndex>,
     message_lines: Vec<MessageLineIndex>,
+}
+
+struct DetailMessageCandidate {
+    line_index: MessageLineIndex,
+    signature: Option<DetailMessageSignature>,
 }
 
 impl CodexSessionRepository {
@@ -539,6 +547,7 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
     let mut line_index = 0usize;
     let mut byte_start = 0u64;
     let mut buffer = Vec::new();
+    let mut message_candidates = Vec::new();
     loop {
         buffer.clear();
         let bytes_read = reader
@@ -585,14 +594,61 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
             }
         }
         if is_detail_message_line(line) {
-            parsed
-                .message_lines
-                .push(MessageLineIndex::new(line_index, byte_start, line_bytes));
+            message_candidates.push(DetailMessageCandidate {
+                line_index: MessageLineIndex::new(line_index, byte_start, line_bytes),
+                signature: detail_message_signature(line),
+            });
         }
         line_index += 1;
         byte_start = next_byte_start;
     }
+    parsed.message_lines = deduplicate_mirrored_detail_messages(message_candidates);
     Ok(parsed)
+}
+
+fn deduplicate_mirrored_detail_messages(
+    candidates: Vec<DetailMessageCandidate>,
+) -> Vec<MessageLineIndex> {
+    // Codex 会把同一条对话同时写成 event_msg 和 response_item；只过滤相邻镜像，避免误删用户真实重复输入。
+    candidates
+        .iter()
+        .enumerate()
+        .filter(|(index, candidate)| !is_mirrored_event_message(&candidates, *index, candidate))
+        .map(|(_, candidate)| candidate.line_index)
+        .collect()
+}
+
+fn is_mirrored_event_message(
+    candidates: &[DetailMessageCandidate],
+    index: usize,
+    candidate: &DetailMessageCandidate,
+) -> bool {
+    let Some(signature) = candidate.signature.as_ref() else {
+        return false;
+    };
+    if signature.is_structured_message {
+        return false;
+    }
+    let previous = index
+        .checked_sub(1)
+        .and_then(|index| candidates.get(index))
+        .and_then(|candidate| candidate.signature.as_ref());
+    let next = candidates
+        .get(index + 1)
+        .and_then(|candidate| candidate.signature.as_ref());
+    [previous, next]
+        .into_iter()
+        .flatten()
+        .any(|neighbor| is_same_structured_message(signature, neighbor))
+}
+
+fn is_same_structured_message(
+    event_signature: &DetailMessageSignature,
+    neighbor: &DetailMessageSignature,
+) -> bool {
+    neighbor.is_structured_message
+        && neighbor.role == event_signature.role
+        && neighbor.content == event_signature.content
 }
 
 fn session_identity(session_id: &str, parsed: &ParsedSessionFile) -> CodexSessionIdentity {
