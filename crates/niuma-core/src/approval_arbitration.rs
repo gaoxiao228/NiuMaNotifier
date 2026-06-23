@@ -335,6 +335,7 @@ mod tests {
             source: "codex-session-file".to_string(),
             tool: crate::models::ToolKind::Codex,
             session_id: "session-1".to_string(),
+            parent_session_id: None,
             project_path: "/tmp/demo".to_string(),
             project_name: "demo".to_string(),
             event_type: crate::models::EventType::ApprovalRequested,

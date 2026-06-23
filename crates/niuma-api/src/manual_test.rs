@@ -108,6 +108,7 @@ fn manual_test_events(request: ManualTestScenarioRequest) -> Result<Vec<NiumaEve
                 source: "manual_test".to_string(),
                 tool,
                 session_id,
+                parent_session_id: None,
                 project_path,
                 project_name,
                 event_type,

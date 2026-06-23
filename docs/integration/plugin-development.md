@@ -516,6 +516,8 @@ id: event-1
 data: {"id":"event-1","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-18T12:00:00Z"}
 ```
 
+Codex subagent events may additionally include `parent_session_id`. `session_id` remains the actual event session, while `parent_session_id` only describes the parent session relationship.
+
 Test notification event format:
 
 ```text

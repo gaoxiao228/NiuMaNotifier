@@ -103,6 +103,8 @@ id: event-1
 data: {"id":"event-1","tool":"codex","session_id":"s1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-19T12:00:00Z"}
 ```
 
+Codex subagent 事件可能额外包含 `parent_session_id`。`session_id` 始终表示事件所属的真实会话；`parent_session_id` 仅表示父会话关系，消费者不应把它当作当前事件的会话 ID。
+
 ## 主状态字段
 
 `data` 是一个 `MainStatePayload`：

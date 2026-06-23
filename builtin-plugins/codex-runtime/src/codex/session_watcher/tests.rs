@@ -728,6 +728,34 @@ fn incomplete_session_meta_keeps_existing_parser_state() {
 }
 
 #[test]
+fn subagent_session_meta_exposes_parent_without_overwriting_file_session() {
+    let mut parser = CodexJsonlParser::default();
+    parser
+        .parse_line(
+            r#"{"type":"session_meta","payload":{"id":"child-session","cwd":"/tmp/demo","thread_source":"subagent","parent_thread_id":"parent-session"}}"#,
+            "rollout-child.jsonl",
+        )
+        .unwrap();
+    parser
+        .parse_line(
+            r#"{"type":"session_meta","payload":{"id":"parent-session","cwd":"/tmp/demo","thread_source":"user","source":"cli"}}"#,
+            "rollout-child.jsonl",
+        )
+        .unwrap();
+
+    let event = parser
+        .parse_line(
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#,
+            "rollout-child.jsonl",
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(event.session_id, "child-session");
+    assert_eq!(event.parent_session_id.as_deref(), Some("parent-session"));
+}
+
+#[test]
 fn invalid_json_returns_error() {
     let error = CodexJsonlParser::default()
         .parse_line("{not-json", "rollout.jsonl")

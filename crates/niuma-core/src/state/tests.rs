@@ -77,6 +77,7 @@ fn sample_event(
         source: "test".to_string(),
         tool: ToolKind::Codex,
         session_id: session_id.to_string(),
+        parent_session_id: None,
         project_path: "/tmp/demo".to_string(),
         project_name: "demo".to_string(),
         event_type,

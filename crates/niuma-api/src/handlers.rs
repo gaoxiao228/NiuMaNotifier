@@ -508,9 +508,13 @@ fn is_codex_watcher_approval(event: &NiumaEvent) -> bool {
 fn watcher_approval_fingerprint(event: &NiumaEvent) -> Option<ApprovalFingerprint> {
     let content = event.content.as_deref().unwrap_or(event.summary.as_str());
     let command = content.strip_prefix("exec_command: ").unwrap_or(content);
+    let fingerprint_session_id = event
+        .parent_session_id
+        .as_deref()
+        .unwrap_or(event.session_id.as_str());
     ApprovalFingerprint::from_parts(
         &event.project_path,
-        Some(&event.session_id),
+        Some(fingerprint_session_id),
         Some(command),
         None,
     )
@@ -584,8 +588,8 @@ fn arbitrate_watcher_approval_event(
         .approval_arbiter
         .lock()
         .expect("approval arbiter mutex poisoned")
-        .on_watcher_approval(fingerprint.clone(), event, Utc::now());
-    log_watcher_approval_arbitration(&fingerprint, &decision);
+        .on_watcher_approval(fingerprint.clone(), event.clone(), Utc::now());
+    log_watcher_approval_arbitration(&event, &fingerprint, &decision);
     match decision {
         WatcherApprovalDecision::EmitNow(event) => WatcherApprovalApiOutcome::Apply(event),
         WatcherApprovalDecision::Suppress => WatcherApprovalApiOutcome::Suppressed {
@@ -618,13 +622,16 @@ fn log_hook_approval_arbitration(
 }
 
 fn log_watcher_approval_arbitration(
+    event: &NiumaEvent,
     fingerprint: &ApprovalFingerprint,
     decision: &WatcherApprovalDecision,
 ) {
     // watcher event 已被 on_watcher_approval 消费；这里只记录指纹和决策，避免复制事件结构。
     eprintln!(
-        "NiumaNotifier approval arbiter watcher project_path={} session_id={} fingerprint_key={} fingerprint_basis={:?} decision={}",
+        "NiumaNotifier approval arbiter watcher project_path={} session_id={} parent_session_id={} fingerprint_session_id={} fingerprint_key={} fingerprint_basis={:?} decision={}",
         log_value(&fingerprint.project_path),
+        log_value(&event.session_id),
+        log_optional(event.parent_session_id.as_deref()),
         log_optional(fingerprint.session_id.as_deref()),
         fingerprint.key,
         fingerprint.basis,
@@ -997,6 +1004,7 @@ fn approval_event(
         source: source.to_string(),
         tool: request.tool.clone(),
         session_id: request.session_id.clone(),
+        parent_session_id: None,
         project_path: request.project_path.clone(),
         project_name: request.project_name.clone(),
         event_type,

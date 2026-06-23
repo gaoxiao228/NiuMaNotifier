@@ -330,6 +330,7 @@ mod tests {
             source: "test".to_string(),
             tool,
             session_id: session_id.to_string(),
+            parent_session_id: None,
             project_path: "/tmp/mutation".to_string(),
             project_name: "mutation".to_string(),
             event_type,

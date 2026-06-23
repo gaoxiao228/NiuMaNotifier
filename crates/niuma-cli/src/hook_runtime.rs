@@ -440,6 +440,7 @@ mod tests {
             source: "test".to_string(),
             tool,
             session_id: "session-hook".to_string(),
+            parent_session_id: None,
             project_path: "/tmp/hook".to_string(),
             project_name: "hook".to_string(),
             event_type: EventType::SessionStarted,

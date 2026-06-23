@@ -106,6 +106,8 @@ id: event-1
 data: {"id":"event-1","tool":"codex","session_id":"s1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-19T12:00:00Z"}
 ```
 
+Codex subagent events may include `parent_session_id`. `session_id` always identifies the actual session that produced the event; `parent_session_id` only describes the parent relationship and should not be treated as the event session ID.
+
 ## Main-State Fields
 
 `data` is a `MainStatePayload`:

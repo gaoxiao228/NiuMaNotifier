@@ -844,6 +844,7 @@ mod tests {
             source: "test".to_string(),
             tool: ToolKind::Codex,
             session_id: "tray-session".to_string(),
+            parent_session_id: None,
             project_path: "/tmp/tray".to_string(),
             project_name: "tray".to_string(),
             event_type: EventType::AssistantMessageCompleted,

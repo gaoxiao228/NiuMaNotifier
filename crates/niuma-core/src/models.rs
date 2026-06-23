@@ -258,6 +258,9 @@ pub struct NiumaEvent {
     pub source: String,
     pub tool: ToolKind,
     pub session_id: String,
+    // Codex subagent 会话会带父会话 ID；展示仍使用 session_id，跨来源仲裁可用它归一化。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
     pub project_path: String,
     pub project_name: String,
     pub event_type: EventType,

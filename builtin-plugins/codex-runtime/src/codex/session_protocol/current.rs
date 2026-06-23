@@ -13,6 +13,7 @@ use niuma_core::models::{CompletionReason, EventType, FailureReason, NiumaEvent,
 pub struct CodexJsonlParser {
     protocol_family: Option<CodexProtocolFamily>,
     session_id: Option<String>,
+    parent_session_id: Option<String>,
     cwd: Option<String>,
     last_assistant_message: Option<String>,
     pending_plan_confirmation_turn_id: Option<String>,
@@ -54,21 +55,28 @@ impl CodexJsonlParser {
         let row: CodexRow = serde_json::from_str(line)
             .map_err(|error| format!("解析 Codex JSONL 失败：{error}"))?;
         if row.row_type == "session_meta" {
-            if let Some(session_id) = row
-                .payload
-                .get("id")
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.is_empty())
-            {
-                self.session_id = Some(session_id.to_string());
+            if self.session_id.is_none() {
+                if let Some(session_id) = row
+                    .payload
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                {
+                    self.session_id = Some(session_id.to_string());
+                }
             }
-            if let Some(cwd) = row
-                .payload
-                .get("cwd")
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.is_empty())
-            {
-                self.cwd = Some(cwd.to_string());
+            if self.parent_session_id.is_none() {
+                self.parent_session_id = parent_thread_id_from_session_meta(&row.payload);
+            }
+            if self.cwd.is_none() {
+                if let Some(cwd) = row
+                    .payload
+                    .get("cwd")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                {
+                    self.cwd = Some(cwd.to_string());
+                }
             }
             return Ok(None);
         }
@@ -87,6 +95,7 @@ impl CodexJsonlParser {
             .clone()
             .unwrap_or_else(|| fallback_session_id(fallback_path));
         let project_path = self.cwd.clone().unwrap_or_default();
+        let parent_session_id = self.parent_session_id.clone();
         let project_name = project_path
             .rsplit('/')
             .find(|part| !part.is_empty())
@@ -238,6 +247,7 @@ impl CodexJsonlParser {
             source: "codex-session-file".to_string(),
             tool: ToolKind::Codex,
             session_id,
+            parent_session_id,
             project_path,
             project_name,
             event_type: event_type.clone(),
@@ -475,6 +485,23 @@ fn render_request_user_input_option(index: usize, option: &serde_json::Value) ->
         Some(description) => format!("{index}. {label}\n{description}"),
         None => format!("{index}. {label}"),
     })
+}
+
+fn parent_thread_id_from_session_meta(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("parent_thread_id")
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            payload
+                .get("source")
+                .and_then(|value| value.get("subagent"))
+                .and_then(|value| value.get("thread_spawn"))
+                .and_then(|value| value.get("parent_thread_id"))
+                .and_then(|value| value.as_str())
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn escalated_function_call(

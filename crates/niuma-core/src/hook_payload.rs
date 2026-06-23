@@ -179,6 +179,7 @@ fn build_event(
         source: "hook_helper".to_string(),
         tool,
         session_id,
+        parent_session_id: None,
         project_path,
         project_name,
         event_type,

@@ -559,6 +559,47 @@ async fn watcher_approval_after_hook_is_suppressed() {
 }
 
 #[tokio::test]
+async fn watcher_subagent_approval_after_hook_is_suppressed_by_parent_session() {
+    let store = NiumaStore::new(test_path("api_hook_first_suppresses_subagent_watcher"));
+    enable_codex_listener(&store);
+    let router = app(store);
+
+    let created = post_json(
+        &router,
+        "/api/v1/approval-requests",
+        sample_approval_request_body("approval-parent-session"),
+    )
+    .await;
+    assert_eq!(created["code"], 0);
+    assert_eq!(created["data"]["accepted"], true);
+
+    let mut watcher = sample_event_with_type(
+        "watcher-subagent-approval-after-hook",
+        "watcher-subagent-dedupe-after-hook",
+        EventType::ApprovalRequested,
+        1_001,
+    );
+    watcher.source = "codex-session-file".to_string();
+    watcher.session_id = "subagent-session".to_string();
+    watcher.parent_session_id = Some("s1".to_string());
+    watcher.summary = "exec_command: cargo test".to_string();
+    watcher.content = Some("exec_command: cargo test".to_string());
+    watcher.payload_ref = Some("codex_watcher_approval:subagent-late".to_string());
+
+    let response = post_json(
+        &router,
+        "/api/v1/events",
+        serde_json::to_value(watcher).unwrap(),
+    )
+    .await;
+
+    assert_eq!(response["code"], 0);
+    assert_eq!(response["data"]["accepted"], true);
+    assert_eq!(response["data"]["suppressed"], true);
+    assert_eq!(response["data"]["reason"], "hook_approval_already_emitted");
+}
+
+#[tokio::test]
 async fn watcher_approval_after_hook_matches_approval_description() {
     let store = NiumaStore::new(test_path("api_hook_description_suppresses_watcher"));
     enable_codex_listener(&store);
@@ -2803,6 +2844,7 @@ fn sample_event_with_type(
         source: "test".to_string(),
         tool: ToolKind::Codex,
         session_id: "s1".to_string(),
+        parent_session_id: None,
         project_path: "/tmp/demo".to_string(),
         project_name: "demo".to_string(),
         event_type,

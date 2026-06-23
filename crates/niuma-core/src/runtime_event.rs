@@ -143,6 +143,7 @@ mod tests {
             source: "test".to_string(),
             tool: ToolKind::Codex,
             session_id: "session-runtime".to_string(),
+            parent_session_id: None,
             project_path: "/tmp/runtime".to_string(),
             project_name: "runtime".to_string(),
             event_type: EventType::ApprovalRequested,

@@ -516,6 +516,8 @@ id: event-1
 data: {"id":"event-1","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-18T12:00:00Z"}
 ```
 
+Codex subagent 事件可能额外包含 `parent_session_id`。`session_id` 保持为真实事件会话，`parent_session_id` 只用于表达父会话关系。
+
 测试通知事件格式：
 
 ```text
