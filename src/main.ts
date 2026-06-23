@@ -1,6 +1,5 @@
 import {
   dismissActiveBlocker,
-  getActiveLanguage,
   getListenerConfig,
   getNotificationRecords,
   getPluginConfig,
@@ -12,22 +11,16 @@ import {
   setPluginEnabled,
   savePluginConfig,
   saveListenerConfig,
-  saveLanguagePreference,
   selectAndImportPluginDir,
   sendTestNotification,
   submitApprovalDecision,
   type ListenerToolConfig,
   type MainStatePayload,
   type NotificationRecord,
-  type PluginManagementItem,
-  type PluginRuntimeStatus
+  type PluginManagementItem
 } from './api'
-import { listen } from '@tauri-apps/api/event'
 import {
   detectInitialLanguage,
-  languageStorageKey,
-  normalizeLanguage,
-  supportedLanguages,
   translations,
   type LanguageCode
 } from './i18n'
@@ -63,6 +56,12 @@ import {
 import { pluginManagementSnapshotsEqual } from './pluginSnapshot'
 import { formatLocalTime } from './viewUtils'
 import { shouldReturnToDashboardForState } from './dashboardAutoReturn'
+import { optimisticPluginRuntimeStatus, type ActiveView } from './appState'
+import { normalizeListenerTools, portFromUrl } from './dashboardController'
+import { createLanguageController } from './languageController'
+import { collectPluginConfig, cssEscape, delay, pluginActionKey } from './pluginController'
+import { notificationPlugins } from './settingsController'
+import { createStateStreamClient, type StateStreamClient } from './sseClient'
 import './styles.css'
 
 const languageChangedEvent = 'niuma-language-changed'
@@ -79,8 +78,8 @@ if (!app) {
 
 let currentLanguage = detectInitialLanguage()
 let latestMainState: MainStatePayload | null = null
-let fallbackTimer: number | undefined
-let stream: EventSource | undefined
+let streamFallbackTimer: number | undefined
+let stateStreamClient: StateStreamClient | undefined
 let pluginRuntimeRefresh: PluginRuntimeRefreshController | undefined
 let clearBlockerConfirmTimer: number | undefined
 let clearBlockerNeedsConfirm = false
@@ -100,7 +99,7 @@ let pluginImportBusy = false
 let pluginImportResultText = ''
 let pluginActionResultText = ''
 let pluginConfigResultText = ''
-let activeView: 'dashboard' | 'settings' = 'dashboard'
+let activeView: ActiveView = 'dashboard'
 let activeSettingsPanel: SettingsPanel = 'plugins'
 let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
@@ -143,10 +142,23 @@ const approvalActionsEl = document.querySelector<HTMLElement>('#approval-actions
 const refreshButton = document.querySelector<HTMLButtonElement>('#refresh')
 const clearBlockerButton = document.querySelector<HTMLButtonElement>('#clear-blocker')
 
-setupLanguageSelect()
+const languageController = createLanguageController({
+  eventName: languageChangedEvent,
+  selectElement: languageSelectEl,
+  getLanguage: () => currentLanguage,
+  setLanguage: (language) => {
+    currentLanguage = language
+  },
+  renderLanguage: applyLanguage,
+  reportError: (error) => {
+    updatedEl!.textContent = error instanceof Error ? error.message : String(error)
+  }
+})
+
+languageController.setupSelect()
 applyLanguage()
-setupTrayLanguageSync()
-syncLanguageFromRuntime()
+languageController.setupRuntimeSync()
+languageController.syncLanguageFromRuntime()
 
 async function refreshDashboard() {
   renderStatePayload(await refreshMainState())
@@ -285,25 +297,6 @@ function renderToolListeners() {
   })
 }
 
-function normalizeListenerTools(config: {
-  codex_listening_enabled: boolean
-  tools?: ListenerToolConfig[]
-}) {
-  if (config.tools && config.tools.length > 0) {
-    return config.tools
-  }
-  return [
-    {
-      id: 'codex',
-      plugin_id: 'builtin-codex',
-      display_name: 'Codex',
-      enabled: config.codex_listening_enabled,
-      source: 'builtin',
-      icon_url: null
-    }
-  ]
-}
-
 function renderSettings() {
   if (!settingsShellEl) {
     return
@@ -389,70 +382,13 @@ function renderNotificationPage() {
     formElement: notificationFormEl,
     settingsTitleElement: notificationSettingsTitleEl,
     language: currentLanguage,
-    notificationPlugins: notificationPlugins(),
+    notificationPlugins: notificationPlugins(plugins),
     busyPluginId: pluginBusyId
   })
 }
 
-function notificationPlugins() {
-  return plugins.filter((plugin) => plugin.kind === 'notification')
-}
-
 function renderNotificationSettings() {
   renderNotificationPage()
-}
-
-function setupLanguageSelect() {
-  if (!languageSelectEl) {
-    return
-  }
-  languageSelectEl.innerHTML = supportedLanguages
-    .map((code) => `<option value="${code}">${translations[code].languageName}</option>`)
-    .join('')
-  languageSelectEl.value = currentLanguage
-  languageSelectEl.addEventListener('change', () => {
-    const nextLanguage = normalizeLanguage(languageSelectEl.value)
-    currentLanguage = nextLanguage
-    window.localStorage.setItem(languageStorageKey, nextLanguage)
-    applyLanguage()
-    saveLanguagePreference(nextLanguage)
-      .then((savedLanguage) => {
-        const normalizedSavedLanguage = normalizeLanguage(savedLanguage)
-        if (normalizedSavedLanguage !== currentLanguage) {
-          currentLanguage = normalizedSavedLanguage
-          window.localStorage.setItem(languageStorageKey, normalizedSavedLanguage)
-          applyLanguage()
-        }
-      })
-      .catch((error) => {
-        updatedEl!.textContent = error instanceof Error ? error.message : String(error)
-      })
-  })
-}
-
-function setupTrayLanguageSync() {
-  listen<string>(languageChangedEvent, () => {
-    void syncLanguageFromRuntime()
-  }).catch((error) => {
-    updatedEl!.textContent = error instanceof Error ? error.message : String(error)
-  })
-  window.addEventListener(languageChangedEvent, () => {
-    void syncLanguageFromRuntime()
-  })
-}
-
-async function syncLanguageFromRuntime() {
-  try {
-    const nextLanguage = normalizeLanguage(await getActiveLanguage())
-    if (nextLanguage === currentLanguage) {
-      return
-    }
-    currentLanguage = nextLanguage
-    window.localStorage.setItem(languageStorageKey, nextLanguage)
-    applyLanguage()
-  } catch (error) {
-    updatedEl!.textContent = error instanceof Error ? error.message : String(error)
-  }
 }
 
 function applyLanguage() {
@@ -689,10 +625,6 @@ settingsViewEl?.addEventListener('click', async (event) => {
   }
 })
 
-function pluginActionKey(pluginId: string, actionId: string) {
-  return `${pluginId}:${actionId}`
-}
-
 settingsViewEl?.addEventListener('change', async (event) => {
   const toggle = event.target instanceof HTMLInputElement ? event.target : null
   const pluginId = toggle?.dataset.pluginToggle
@@ -708,7 +640,7 @@ settingsViewEl?.addEventListener('change', async (event) => {
     ? {
         pluginId,
         desiredEnabled: nextEnabled,
-        optimisticStatus: (nextEnabled ? 'starting' : 'stopping') as PluginRuntimeStatus
+        optimisticStatus: optimisticPluginRuntimeStatus(nextEnabled)
       }
     : null
   plugins = plugins.map((plugin) =>
@@ -717,7 +649,7 @@ settingsViewEl?.addEventListener('change', async (event) => {
           ...plugin,
           enabled: nextEnabled,
           runtime_status: tracksRuntimeTransition
-            ? ((nextEnabled ? 'starting' : 'stopping') as PluginRuntimeStatus)
+            ? optimisticPluginRuntimeStatus(nextEnabled)
             : plugin.runtime_status
         }
       : plugin
@@ -774,34 +706,6 @@ async function waitForPluginTargetState(pluginId: string, desiredEnabled: boolea
   return false
 }
 
-function delay(ms: number) {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
-}
-
-function collectPluginConfig(form: HTMLFormElement) {
-  const config: Record<string, unknown> = {}
-  form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-plugin-config-field]').forEach(
-    (input) => {
-      const key = input.dataset.pluginConfigField
-      if (!key) {
-        return
-      }
-      if (input instanceof HTMLInputElement && input.type === 'checkbox') {
-        config[key] = input.checked
-      } else if (input instanceof HTMLInputElement && input.type === 'number') {
-        config[key] = input.value === '' ? null : Number(input.value)
-      } else {
-        config[key] = input.value
-      }
-    }
-  )
-  return config
-}
-
-function cssEscape(value: string) {
-  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"')
-}
-
 toolListenerListEl?.addEventListener('change', async (event) => {
   const toggle = event.target instanceof HTMLInputElement ? event.target : null
   const toolId = toggle?.dataset.toolToggle
@@ -850,14 +754,14 @@ notificationFormEl?.addEventListener('change', async (event) => {
   pendingPluginTransition = {
     pluginId,
     desiredEnabled: nextEnabled,
-    optimisticStatus: (nextEnabled ? 'starting' : 'stopping') as PluginRuntimeStatus
+    optimisticStatus: optimisticPluginRuntimeStatus(nextEnabled)
   }
   plugins = plugins.map((plugin) =>
     plugin.id === pluginId
       ? {
           ...plugin,
           enabled: nextEnabled,
-          runtime_status: (nextEnabled ? 'starting' : 'stopping') as PluginRuntimeStatus
+          runtime_status: optimisticPluginRuntimeStatus(nextEnabled)
         }
       : plugin
   )
@@ -941,58 +845,50 @@ function renderLocalSseStatus() {
     : t.loading
 }
 
-function portFromUrl(url: string) {
-  try {
-    return new URL(url).port || '-'
-  } catch {
-    return '-'
-  }
-}
-
 async function startStream() {
   try {
     const apiUrl = await getLocalApiUrl()
     localApiUrlText = apiUrl
     renderLocalSseStatus()
-    stream = new EventSource(`${apiUrl}${stateStreamPath}`)
-    stream.onopen = () => {
-      localSseConnected = true
-      renderLocalSseStatus()
-    }
-    stream.addEventListener('state', (message) => {
-      const payload = JSON.parse((message as MessageEvent<string>).data) as MainStatePayload
-      renderStatePayload(payload)
-      stopFallbackPolling()
+    stateStreamClient = createStateStreamClient<MainStatePayload>({
+      url: `${apiUrl}${stateStreamPath}`,
+      fallbackIntervalMs: 2_000,
+      onConnected: (connected) => {
+        localSseConnected = connected
+        renderLocalSseStatus()
+      },
+      onState: renderStatePayload,
+      onFallback: refreshDashboard,
+      onFallbackError: (error) => {
+        updatedEl!.textContent = error instanceof Error ? error.message : String(error)
+      }
     })
-    stream.onerror = () => {
-      localSseConnected = false
-      renderLocalSseStatus()
-      startFallbackPolling()
-    }
+    stateStreamClient.start()
+    stopStreamFallbackPolling()
   } catch {
     localSseConnected = false
     renderLocalSseStatus()
-    startFallbackPolling()
+    startStreamFallbackPolling()
   }
 }
 
-function startFallbackPolling() {
-  if (fallbackTimer !== undefined) {
+function startStreamFallbackPolling() {
+  if (streamFallbackTimer !== undefined) {
     return
   }
-  fallbackTimer = window.setInterval(() => {
+  streamFallbackTimer = window.setInterval(() => {
     refreshDashboard().catch((error) => {
       updatedEl!.textContent = error instanceof Error ? error.message : String(error)
     })
   }, 2_000)
 }
 
-function stopFallbackPolling() {
-  if (fallbackTimer === undefined) {
+function stopStreamFallbackPolling() {
+  if (streamFallbackTimer === undefined) {
     return
   }
-  window.clearInterval(fallbackTimer)
-  fallbackTimer = undefined
+  window.clearInterval(streamFallbackTimer)
+  streamFallbackTimer = undefined
 }
 
 Promise.all([refreshDashboard(), refreshListenerConfig(), refreshPlugins()])
@@ -1007,6 +903,7 @@ startStream()
 startPluginRuntimeRefresh()
 
 window.addEventListener('beforeunload', () => {
-  stream?.close()
+  stateStreamClient?.stop()
+  stopStreamFallbackPolling()
   pluginRuntimeRefresh?.stop()
 })
