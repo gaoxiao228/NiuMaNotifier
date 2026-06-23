@@ -200,6 +200,9 @@ impl CodexSessionProvider {
         params: SessionDetailParams,
     ) -> Result<ToolSessionDetail, ProviderError> {
         self.ensure_session_index(&params.session_id)?;
+        if params.cursor.is_none() {
+            self.refresh_latest_detail_index_if_file_metadata_changed(&params.session_id)?;
+        }
         let mut retried_after_stale_index = false;
         loop {
             let index = self
@@ -229,6 +232,21 @@ impl CodexSessionProvider {
         }
         if !self.index.contains_key(session_id) {
             return Err(ProviderError::not_found(session_id));
+        }
+        Ok(())
+    }
+
+    fn refresh_latest_detail_index_if_file_metadata_changed(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), ProviderError> {
+        let index = self
+            .index
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| ProviderError::not_found(session_id))?;
+        if session_file_metadata_changed(&index)? {
+            self.refresh_session_index_from_file(session_id, &index)?;
         }
         Ok(())
     }
@@ -555,7 +573,7 @@ fn detail_from_index(
 
 fn verify_session_identity(index: &SessionIndex) -> Result<(), String> {
     let Some(session_meta_line) = index.session_meta_line else {
-        return Ok(());
+        return Err("Codex session 缺少 session_meta，无法校验会话身份".to_string());
     };
     let line = read_indexed_line(&index.list_item.file_path, &session_meta_line)?;
     let row: CodexRow = serde_json::from_str(line.trim_end_matches('\r'))
@@ -802,6 +820,17 @@ fn parse_cursor(cursor: Option<&str>) -> Result<Option<usize>, ProviderError> {
             )
         })?;
     Ok(Some(value))
+}
+
+fn session_file_metadata_changed(index: &SessionIndex) -> Result<bool, ProviderError> {
+    let metadata = std::fs::metadata(&index.list_item.file_path).map_err(|error| {
+        ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
+    })?;
+    let modified = metadata.modified().map_err(|error| {
+        ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
+    })?;
+    Ok(modified != index.file_signature.modified_system_time
+        || metadata.len() != index.file_signature.size_bytes)
 }
 
 fn session_file_signature(path: &Path) -> io::Result<SessionFileSignature> {
@@ -1077,6 +1106,39 @@ mod tests {
         assert_eq!(error.code, "session_not_found");
         assert!(!provider.index.contains_key("session-alpha"));
         assert!(provider.index.contains_key("session-bravo"));
+    }
+
+    #[test]
+    fn codex_session_provider_detail_rejects_fallback_session_without_session_meta() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_test_session(
+            temp.path(),
+            concat!(
+                "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}]}}\n",
+            ),
+        );
+        let session_id = filename_session_id(&path).unwrap();
+        let mut provider = CodexSessionProvider::with_codex_home(temp.path().into());
+        let snapshot = provider
+            .handle_request(snapshot_request("req-snapshot"))
+            .result_as::<SessionSnapshotResult>()
+            .unwrap();
+        assert!(snapshot
+            .sessions
+            .iter()
+            .any(|session| session.session_id == session_id));
+
+        let response = provider.handle_request(detail_request_for_session(
+            "req-detail",
+            &session_id,
+            1,
+            None,
+        ));
+        let error = response.error.unwrap();
+
+        assert_eq!(error.code, "stale_session_file");
+        assert!(error.message.contains("缺少 session_meta"));
     }
 
     fn snapshot_request(id: &str) -> ProviderRpcRequest {

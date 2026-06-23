@@ -110,6 +110,22 @@ fn codex_session_provider_detail_cursor_ignores_appended_messages() {
 }
 
 #[test]
+fn codex_session_provider_detail_without_cursor_refreshes_appended_messages() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_codex_session_fixture(temp.path());
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+    let _ = provider_snapshot(&mut provider);
+
+    append_codex_assistant_message(&path, "追加回答");
+    let detail = provider_detail(&mut provider, "session-fixture", 1, None);
+
+    // 首屏详情应反映最新文件内容；只有带 cursor 的翻页需要保持旧边界稳定。
+    assert_eq!(detail.messages.len(), 1);
+    assert_eq!(detail.messages[0].content, "追加回答");
+    assert_eq!(detail.next_cursor.as_deref(), Some("before:3"));
+}
+
+#[test]
 fn codex_session_provider_snapshot_reuses_unchanged_file_indexes() {
     let temp = tempfile::tempdir().unwrap();
     write_codex_session_fixture(temp.path());
