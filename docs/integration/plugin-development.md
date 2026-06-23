@@ -88,6 +88,7 @@ Plugin process requirements:
 - Do not assume the process starts only once. After restart, recover local dedupe state from `NIUMA_PLUGIN_DATA_DIR`.
 - Do not write runtime state into NiumaNotifier internal persistent files.
 - `stdout` and `stderr` are not currently shown as user-visible logs. During development, write debug logs to the plugin data directory if needed.
+- Plugins declaring `tool_session_list_provider` or `tool_session_detail_provider` use `stdout` as the provider JSON Lines RPC channel. These plugins must not write normal logs to `stdout`; write normal logs to `stderr` or a log file under `NIUMA_PLUGIN_DATA_DIR`.
 
 ## Manifest
 
@@ -108,6 +109,30 @@ Tool watcher plugin example:
   "icon_url": "./assets/icon.png"
 }
 ```
+
+Tool plugin example that provides both event watching and session provider capabilities:
+
+```json
+{
+  "id": "niuma-plugin-codex",
+  "kind": "tool",
+  "tool_id": "codex",
+  "display_name": "Codex",
+  "version": "0.1.0",
+  "command": "./bin/niuma-plugin-codex",
+  "args": [],
+  "env": {},
+  "platforms": ["macos"],
+  "capabilities": [
+    "event_watcher",
+    "tool_session_list_provider",
+    "tool_session_detail_provider"
+  ],
+  "icon_url": "./assets/icon.png"
+}
+```
+
+This combined tool plugin shape is the recommended shape used by the built-in `builtin-codex` plugin. One process can watch tool events and also provide session lists and details through provider RPC. The implementation must reserve `stdout` for provider RPC only; event watcher logs, debug output, and normal runtime logs must not be written to `stdout`.
 
 Notification plugin example:
 
@@ -187,6 +212,7 @@ Constraints:
 - `tool` plugins must provide `tool_id`.
 - Non-`tool` plugins cannot declare `event_watcher`.
 - `event_watcher` plugins are started and stopped by the tool listener switch.
+- If the same `tool` plugin declares both `event_watcher` and session provider capabilities, disabling the tool listener stops the whole plugin process. The session snapshot and detail provider for that tool become unavailable as well.
 - Plugins without `tool_id` are started and stopped by the general plugin enabled state.
 - Plugins declaring `event_watcher`, `event_consumer`, `state_consumer`, `tool_session_list_provider`, or `tool_session_detail_provider` are managed by the runtime manager as long-running child processes.
 - `approval_handler` is an extra capability for approval decisions. It must be used together with `event_consumer`; `approval_handler` alone is not a valid runtime mode.
@@ -368,6 +394,103 @@ Successful responses still use the standard envelope:
 
 NiumaNotifier v1 does not use plugin tokens for API authentication. `tool_session_list_reader` and `tool_session_detail_reader` are development-contract capabilities, UI display markers, and future authentication hooks. `tool_session_detail_reader` covers AI conversation content and should be displayed as sensitive in plugin management. Plugins should still connect only to the trusted local Local API.
 
+## Tool Session Provider RPC
+
+Tool plugins that declare `tool_session_list_provider` and `tool_session_detail_provider` are managed by the host as long-running processes. The host communicates with the provider through the plugin process `stdin/stdout` using JSON Lines:
+
+- The host writes one JSON request line to plugin `stdin`.
+- The plugin writes one JSON response line to `stdout`.
+- The plugin may also write notifications without `id` to `stdout` to tell the host that the snapshot changed.
+- `stdout` must contain provider JSON Lines only. Normal logs must go to `stderr` or a log file under `NIUMA_PLUGIN_DATA_DIR`.
+- Each line must be complete JSON. Do not use pretty-printed JSON, multi-line JSON, or prefixed log text.
+
+Request shape:
+
+```json
+{
+  "id": "req-1",
+  "method": "session_snapshot",
+  "params": {}
+}
+```
+
+Response shape:
+
+```json
+{
+  "id": "req-1",
+  "result": {}
+}
+```
+
+Failure response:
+
+```json
+{
+  "id": "req-1",
+  "error": {
+    "code": "session_not_found",
+    "message": "session_id not found: session-1"
+  }
+}
+```
+
+Current provider methods:
+
+| Method | Params | Result | Description |
+| --- | --- | --- | --- |
+| `session_snapshot` | `{ "tool": "codex" }` | `{ "tool": "codex", "sessions": [...] }` | Returns the lightweight session list currently discovered by the provider. |
+| `session_detail` | `{ "tool": "codex", "session_id": "session-1", "limit": 100, "cursor": null }` | `{ "detail": {...} }` | Returns normalized message details for the given raw `session_id`. |
+
+Current provider notification:
+
+```json
+{
+  "method": "session_snapshot_updated",
+  "params": {
+    "tool": "codex",
+    "sessions": []
+  }
+}
+```
+
+After receiving `session_snapshot_updated`, the host updates its in-memory session registry. `/api/v1/session_list` and `/api/v1/session_project_groups` both read this latest snapshot. Providers should notify only when the snapshot meaningfully changes to avoid high-frequency redundant refreshes.
+
+`ToolSessionListItem` field semantics:
+
+| Field | Description |
+| --- | --- |
+| `id` | Provider-side list item ID. Recommended value is `<tool>:<session_id>`. |
+| `tool` | Tool ID. It must match the plugin manifest `tool_id`. |
+| `session_id` | Raw tool session ID. `session_detail` uses this ID to locate details. |
+| `project_path` / `project_name` | Project path and display name. Use an empty string or tool name when unknown. |
+| `file_path` | Raw session file path. If the tool has no file, use a diagnostic source identifier. |
+| `modified_at` | Raw session last modified time, or equivalent update time. |
+| `discovered_at` / `last_seen_at` | When the provider discovered and last saw the session. |
+| `is_active` / `status` | Provider active-state judgment. If unknown, `status` can be `unknown`. |
+| `is_subagent` | Whether this is a subagent session. |
+| `parent_session_id` | Raw tool parent session ID, if known. |
+| `normalized_session_id` | Niuma-computed business session ID. Subagents usually normalize to a parent or root session. |
+| `session_scope` | `main` or `subagent`. |
+| `agent_nickname` / `agent_role` | Tool-provided subagent display fields, if any. |
+| `normalization_status` | `resolved`, `parent_missing`, or `parent_unresolved`. Diagnostic only. |
+
+`ToolSessionDetail` reuses the same identity fields and adds:
+
+| Field | Description |
+| --- | --- |
+| `messages` | Current page of messages, newest-first. |
+| `next_cursor` | Cursor for older messages. Empty means there is no next page. |
+
+Provider implementation guidance:
+
+- Keep snapshot indexes lightweight. Do not keep full conversation bodies in memory long-term.
+- `session_detail` should read by `limit` pages. The host normalizes and caps `limit` before calling the provider.
+- Cursors should point to stable line numbers, message sequence numbers, or raw tool offsets, so appended messages do not cause duplicate or missing pages.
+- If a raw file is truncated, replaced, or changed, rebuild the index. Do not use an old cursor to read the wrong session.
+- Keep `session_id` as the raw session ID for subagents. Do not replace it with the parent ID. Use `normalized_session_id` for aggregation.
+- When the corresponding tool listener is disabled, the host stops the provider process and clears the tool snapshot. Reader plugins must not assume old session lists remain readable after the listener is disabled.
+
 ## Tool Event Reporting
 
 `event_watcher` tool plugins report events through the Local API:
@@ -389,6 +512,11 @@ Request body:
       "source": "plugin:niuma-plugin-codex",
       "tool": "codex",
       "session_id": "session-1",
+      "parent_session_id": null,
+      "normalized_session_id": "session-1",
+      "session_scope": "main",
+      "agent_nickname": null,
+      "agent_role": null,
       "project_path": "/path/to/project",
       "project_name": "project",
       "event_type": "approval_requested",
@@ -439,6 +567,11 @@ Constraints:
 | `source` | Yes | Source. Recommended value is `plugin:<plugin-id>`. |
 | `tool` | Yes | Tool ID. It must match the plugin `tool_id`. |
 | `session_id` | Yes | Tool-side session ID. |
+| `parent_session_id` | No | Raw tool parent session ID. Used to describe parent relationship in subagent scenarios. |
+| `normalized_session_id` | No | Niuma-computed business session ID. For main sessions this usually equals `session_id`; for subagents it usually points to a parent or root session. |
+| `session_scope` | No | Session scope. Current recommended values are `main` and `subagent`. |
+| `agent_nickname` | No | Tool-provided subagent display nickname. |
+| `agent_role` | No | Tool-provided subagent role. |
 | `project_path` | Yes | Project path. Use an empty string if unknown. |
 | `project_name` | Yes | Project name. Use a readable tool-side name if unknown. |
 | `event_type` | Yes | Event type. See the table below. |
@@ -527,7 +660,7 @@ id: event-1
 data: {"id":"event-1","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","created_at":"2026-06-18T12:00:00Z"}
 ```
 
-Codex subagent events may additionally include `parent_session_id`. `session_id` remains the actual event session, while `parent_session_id` only describes the parent session relationship.
+Codex subagent events may additionally include `parent_session_id`, `normalized_session_id`, `session_scope`, `agent_nickname`, and `agent_role`. `session_id` remains the actual source session. Business aggregation, approval arbitration, and default notification policy should prefer `normalized_session_id` and `session_scope`.
 
 Test notification event format:
 
