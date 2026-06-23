@@ -23,6 +23,7 @@ mod codex;
 mod discovery;
 mod logging;
 mod scanner;
+pub mod session_messages;
 pub mod session_provider;
 
 use self::discovery::{

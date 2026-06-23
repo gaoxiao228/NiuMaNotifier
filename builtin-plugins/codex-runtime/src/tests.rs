@@ -37,30 +37,102 @@ fn codex_session_provider_binary_target_is_declared() {
 }
 
 #[test]
-fn codex_session_provider_stub_returns_empty_snapshot() {
-    let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
-        "req-1",
-        "session_snapshot",
-        niuma_core::tool_session_rpc::SessionSnapshotParams {
-            tool: ToolKind::Codex,
-        },
-    )
-    .unwrap();
+fn codex_session_provider_snapshot_discovers_fixture_and_detail_returns_newest_first() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_codex_session_fixture(temp.path());
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
 
-    let response = session_provider::handle_session_provider_request(request);
-    let snapshot = response
-        .result_as::<niuma_core::tool_session_rpc::SessionSnapshotResult>()
-        .unwrap();
-
-    assert_eq!(response.id, "req-1");
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "session-fixture")
+        .expect("fixture session should be discovered");
     assert_eq!(snapshot.tool, ToolKind::Codex);
-    assert!(snapshot.sessions.is_empty());
+    assert_eq!(session.project_path, "/tmp/fixture-project");
+    assert_eq!(session.project_name, "fixture-project");
+    assert_eq!(session.file_path, path.to_string_lossy());
+    assert!(!session.is_subagent);
+    assert_eq!(session.parent_session_id, None);
+
+    let detail = provider_detail(&mut provider, "session-fixture", 20, None);
+
+    assert_eq!(detail.session_id, "session-fixture");
+    assert_eq!(detail.project_path, "/tmp/fixture-project");
+    assert_eq!(detail.project_name, "fixture-project");
+    assert_eq!(detail.messages[0].content, "助手回答");
+    assert_eq!(detail.messages[1].content, "用户问题");
+    assert_eq!(detail.next_cursor, None);
 }
 
 #[test]
-fn codex_session_provider_stub_returns_not_found_for_detail() {
+fn codex_session_provider_detail_paginates_with_cursor() {
+    let temp = tempfile::tempdir().unwrap();
+    write_codex_session_fixture(temp.path());
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+    let _ = provider_snapshot(&mut provider);
+
+    let first = provider_detail(&mut provider, "session-fixture", 1, None);
+    assert_eq!(first.messages.len(), 1);
+    assert_eq!(first.messages[0].content, "助手回答");
+    assert_eq!(first.next_cursor.as_deref(), Some("1"));
+
+    let second = provider_detail(
+        &mut provider,
+        "session-fixture",
+        1,
+        first.next_cursor.as_deref(),
+    );
+    assert_eq!(second.messages.len(), 1);
+    assert_eq!(second.messages[0].content, "用户问题");
+    assert_eq!(second.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_detail_does_not_leak_raw_payload_or_raw_line() {
+    let temp = tempfile::tempdir().unwrap();
+    write_codex_session_fixture(temp.path());
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+    let _ = provider_snapshot(&mut provider);
+
+    let detail = provider_detail(&mut provider, "session-fixture", 20, None);
+    let encoded = serde_json::to_string(&detail).unwrap();
+
+    assert!(!encoded.contains("raw_line"));
+    assert!(!encoded.contains("secret"));
+    assert!(!encoded.contains("不能泄露"));
+}
+
+#[test]
+fn codex_session_provider_detail_invalid_cursor_returns_provider_error() {
+    let temp = tempfile::tempdir().unwrap();
+    write_codex_session_fixture(temp.path());
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+    let _ = provider_snapshot(&mut provider);
+
     let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
-        "req-2",
+        "req-invalid-cursor",
+        "session_detail",
+        niuma_core::tool_session_rpc::SessionDetailParams {
+            tool: ToolKind::Codex,
+            session_id: "session-fixture".to_string(),
+            limit: 20,
+            cursor: Some("not-a-number".to_string()),
+        },
+    )
+    .unwrap();
+    let response = provider.handle_request(request);
+
+    assert_eq!(response.error.unwrap().code, "invalid_cursor");
+}
+
+#[test]
+fn codex_session_provider_detail_missing_session_returns_provider_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
+        "req-missing",
         "session_detail",
         niuma_core::tool_session_rpc::SessionDetailParams {
             tool: ToolKind::Codex,
@@ -70,13 +142,72 @@ fn codex_session_provider_stub_returns_not_found_for_detail() {
         },
     )
     .unwrap();
-
-    let response = session_provider::handle_session_provider_request(request);
+    let response = provider.handle_request(request);
     let error = response.error.unwrap();
 
-    assert_eq!(response.id, "req-2");
+    assert_eq!(response.id, "req-missing");
     assert_eq!(error.code, "session_not_found");
     assert_eq!(error.message, "session_id 不存在：missing-session");
+}
+
+fn provider_snapshot(
+    provider: &mut session_provider::CodexSessionProvider,
+) -> niuma_core::tool_session_rpc::SessionSnapshotResult {
+    let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
+        "req-snapshot",
+        "session_snapshot",
+        niuma_core::tool_session_rpc::SessionSnapshotParams {
+            tool: ToolKind::Codex,
+        },
+    )
+    .unwrap();
+
+    provider
+        .handle_request(request)
+        .result_as::<niuma_core::tool_session_rpc::SessionSnapshotResult>()
+        .unwrap()
+}
+
+fn provider_detail(
+    provider: &mut session_provider::CodexSessionProvider,
+    session_id: &str,
+    limit: usize,
+    cursor: Option<&str>,
+) -> niuma_core::tool_session::ToolSessionDetail {
+    let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
+        "req-detail",
+        "session_detail",
+        niuma_core::tool_session_rpc::SessionDetailParams {
+            tool: ToolKind::Codex,
+            session_id: session_id.to_string(),
+            limit,
+            cursor: cursor.map(ToString::to_string),
+        },
+    )
+    .unwrap();
+
+    provider
+        .handle_request(request)
+        .result_as::<niuma_core::tool_session_rpc::SessionDetailResult>()
+        .unwrap()
+        .detail
+}
+
+fn write_codex_session_fixture(codex_home: &std::path::Path) -> std::path::PathBuf {
+    let day_dir = codex_home.join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join("rollout-2026-06-22-00000000-0000-0000-0000-000000000000.jsonl");
+    // fixture 覆盖 session_meta、user、assistant，并带上不应出现在详情里的原始字段。
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}],\"secret\":\"不能泄露\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}],\"raw_line\":\"不能泄露\"}}\n",
+        ),
+    )
+    .unwrap();
+    path
 }
 
 fn test_sqlite_path(name: &str) -> std::path::PathBuf {
