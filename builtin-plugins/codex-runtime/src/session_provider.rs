@@ -14,9 +14,9 @@ use niuma_core::tool_session_rpc::{
     SessionDetailResult, SessionSnapshotParams, SessionSnapshotResult,
 };
 
-#[cfg(test)]
-use crate::codex::session_repository::SessionIndex;
-use crate::codex::session_repository::{CodexSessionRepository, ProviderError};
+use crate::codex::session_repository::{
+    CodexSessionRepository, DetailFromIndexError, ProviderError, SessionIndex,
+};
 
 const SNAPSHOT_NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -109,12 +109,7 @@ impl CodexSessionProvider {
                 "Codex session provider 只支持 codex",
             );
         }
-        let detail_result = match self.repository.lock() {
-            Ok(mut repository) => repository.session_detail(params),
-            Err(_) => Err(ProviderError::internal(
-                "Codex session repository lock poisoned",
-            )),
-        };
+        let detail_result = self.session_detail(params);
         match detail_result {
             Ok(detail) => ProviderRpcResponse::success(request.id, SessionDetailResult { detail })
                 .expect("session detail response must serialize"),
@@ -124,11 +119,102 @@ impl CodexSessionProvider {
         }
     }
 
-    fn refresh_snapshot(&mut self) -> Result<Vec<ToolSessionListItem>, String> {
+    fn session_detail(
+        &mut self,
+        params: SessionDetailParams,
+    ) -> Result<niuma_core::tool_session::ToolSessionDetail, ProviderError> {
+        self.ensure_session_index_available(&params.session_id)?;
+        if params.cursor.is_none() {
+            self.refresh_latest_detail_index_if_file_metadata_changed(&params.session_id)?;
+        }
+
+        let mut retried_after_stale_index = false;
+        loop {
+            let index = self.session_index(&params.session_id)?;
+            match CodexSessionRepository::detail_from_session_index(&index, &params) {
+                Ok(detail) => return Ok(detail),
+                Err(DetailFromIndexError::Provider(error)) => return Err(error),
+                Err(DetailFromIndexError::Stale(_error)) if !retried_after_stale_index => {
+                    retried_after_stale_index = true;
+                    let refreshed =
+                        CodexSessionRepository::rebuild_session_index_from_file(&index)?;
+                    self.replace_session_index(&params.session_id, refreshed)?;
+                }
+                Err(DetailFromIndexError::Stale(error)) => {
+                    return Err(ProviderError::stale_session_file(error));
+                }
+            }
+        }
+    }
+
+    fn ensure_session_index_available(&mut self, session_id: &str) -> Result<(), ProviderError> {
+        if self
+            .repository
+            .lock()
+            .map_err(|_| ProviderError::internal("Codex session repository lock poisoned"))?
+            .session_index(session_id)
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.refresh_snapshot().map_err(ProviderError::internal)?;
+        if self
+            .repository
+            .lock()
+            .map_err(|_| ProviderError::internal("Codex session repository lock poisoned"))?
+            .session_index(session_id)
+            .is_some()
+        {
+            Ok(())
+        } else {
+            Err(ProviderError::not_found(session_id))
+        }
+    }
+
+    fn refresh_latest_detail_index_if_file_metadata_changed(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), ProviderError> {
+        let index = self.session_index(session_id)?;
+        if CodexSessionRepository::session_file_metadata_changed(&index)? {
+            let refreshed = CodexSessionRepository::rebuild_session_index_from_file(&index)?;
+            self.replace_session_index(session_id, refreshed)?;
+        }
+        Ok(())
+    }
+
+    fn session_index(&self, session_id: &str) -> Result<SessionIndex, ProviderError> {
         self.repository
             .lock()
+            .map_err(|_| ProviderError::internal("Codex session repository lock poisoned"))?
+            .session_index(session_id)
+            .ok_or_else(|| ProviderError::not_found(session_id))
+    }
+
+    fn replace_session_index(
+        &self,
+        session_id: &str,
+        refreshed: SessionIndex,
+    ) -> Result<(), ProviderError> {
+        self.repository
+            .lock()
+            .map_err(|_| ProviderError::internal("Codex session repository lock poisoned"))?
+            .replace_session_index(session_id, refreshed)
+    }
+
+    fn refresh_snapshot(&mut self) -> Result<Vec<ToolSessionListItem>, String> {
+        let context = self
+            .repository
+            .lock()
             .map_err(|_| "Codex session repository lock poisoned".to_string())?
-            .refresh_snapshot()
+            .snapshot_context();
+        let refresh = CodexSessionRepository::build_snapshot_refresh(context)?;
+        let sessions = self
+            .repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .apply_snapshot_refresh(refresh);
+        Ok(sessions)
     }
 }
 

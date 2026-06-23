@@ -41,6 +41,18 @@ pub(crate) struct SessionIndex {
     pub(crate) file_index: CodexSessionFileIndex,
 }
 
+pub(crate) struct CodexSnapshotContext {
+    codex_home: PathBuf,
+    previous_by_path: HashMap<String, SessionIndex>,
+}
+
+pub(crate) struct CodexSnapshotRefresh {
+    next_index: HashMap<String, SessionIndex>,
+    sessions: Vec<ToolSessionListItem>,
+    #[cfg(test)]
+    scanned_count: usize,
+}
+
 pub(crate) struct CodexEventScanPlan {
     pub(crate) read_start: u64,
     pub(crate) file_len: u64,
@@ -117,22 +129,40 @@ impl CodexSessionRepository {
         self.index.contains_key(session_id)
     }
 
-    pub(crate) fn refresh_snapshot(&mut self) -> Result<Vec<ToolSessionListItem>, String> {
-        let now = Utc::now();
-        let mut next_index = HashMap::new();
+    pub(crate) fn snapshot_context(&self) -> CodexSnapshotContext {
         let previous_by_path = self
             .index
             .values()
             .map(|index| (index.list_item.file_path.clone(), index.clone()))
             .collect::<HashMap<_, _>>();
-        for (path, file_signature) in recent_session_files(&self.codex_home) {
+        CodexSnapshotContext {
+            codex_home: self.codex_home.clone(),
+            previous_by_path,
+        }
+    }
+
+    pub(crate) fn build_snapshot_refresh(
+        context: CodexSnapshotContext,
+    ) -> Result<CodexSnapshotRefresh, String> {
+        let now = Utc::now();
+        let mut next_index = HashMap::new();
+        #[cfg(test)]
+        let mut scanned_count = 0;
+        for (path, file_signature) in recent_session_files(&context.codex_home) {
             let file_path = path.to_string_lossy().to_string();
-            let result = previous_by_path
+            let result = context
+                .previous_by_path
                 .get(&file_path)
                 .filter(|index| index.file_index.signature == file_signature)
                 .cloned()
                 .map(|index| Ok(refresh_cached_index(index, now)))
-                .unwrap_or_else(|| self.scan_session_file(&path, file_signature, now));
+                .unwrap_or_else(|| {
+                    #[cfg(test)]
+                    {
+                        scanned_count += 1;
+                    }
+                    Self::scan_session_file_index(&path, file_signature, now)
+                });
             match result {
                 Ok(index) => {
                     next_index.insert(index.list_item.session_id.clone(), index);
@@ -151,8 +181,67 @@ impl CodexSessionRepository {
             .map(|entry| entry.list_item.clone())
             .collect::<Vec<_>>();
         sessions.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
-        self.index = next_index;
-        Ok(sessions)
+        Ok(CodexSnapshotRefresh {
+            next_index,
+            sessions,
+            #[cfg(test)]
+            scanned_count,
+        })
+    }
+
+    pub(crate) fn apply_snapshot_refresh(
+        &mut self,
+        refresh: CodexSnapshotRefresh,
+    ) -> Vec<ToolSessionListItem> {
+        #[cfg(test)]
+        {
+            self.scan_count += refresh.scanned_count;
+        }
+        self.index = refresh.next_index;
+        refresh.sessions
+    }
+
+    pub(crate) fn session_index(&self, session_id: &str) -> Option<SessionIndex> {
+        self.index.get(session_id).cloned()
+    }
+
+    pub(crate) fn session_file_metadata_changed(
+        index: &SessionIndex,
+    ) -> Result<bool, ProviderError> {
+        session_file_metadata_changed(index)
+    }
+
+    pub(crate) fn detail_from_session_index(
+        index: &SessionIndex,
+        params: &SessionDetailParams,
+    ) -> Result<ToolSessionDetail, DetailFromIndexError> {
+        detail_from_index(index, params)
+    }
+
+    pub(crate) fn rebuild_session_index_from_file(
+        index: &SessionIndex,
+    ) -> Result<SessionIndex, ProviderError> {
+        let path = PathBuf::from(&index.list_item.file_path);
+        let file_signature = session_file_signature(&path).map_err(|error| {
+            ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
+        })?;
+        Self::scan_session_file_index(&path, file_signature, Utc::now())
+            .map_err(ProviderError::internal)
+    }
+
+    pub(crate) fn replace_session_index(
+        &mut self,
+        session_id: &str,
+        refreshed: SessionIndex,
+    ) -> Result<(), ProviderError> {
+        let refreshed_session_id = refreshed.list_item.session_id.clone();
+        // 文件被截断或替换后可能属于另一个 session，旧 session_id 不能继续命中旧索引。
+        self.index.remove(session_id);
+        self.index.insert(refreshed_session_id.clone(), refreshed);
+        if refreshed_session_id != session_id {
+            return Err(ProviderError::not_found(session_id));
+        }
+        Ok(())
     }
 
     pub(crate) fn event_scan_plan(
@@ -256,94 +345,11 @@ impl CodexSessionRepository {
         })
     }
 
-    pub(crate) fn session_detail(
-        &mut self,
-        params: SessionDetailParams,
-    ) -> Result<ToolSessionDetail, ProviderError> {
-        self.ensure_session_index(&params.session_id)?;
-        if params.cursor.is_none() {
-            self.refresh_latest_detail_index_if_file_metadata_changed(&params.session_id)?;
-        }
-        let mut retried_after_stale_index = false;
-        loop {
-            let index = self
-                .index
-                .get(&params.session_id)
-                .cloned()
-                .ok_or_else(|| ProviderError::not_found(&params.session_id))?;
-            match detail_from_index(&index, &params) {
-                Ok(detail) => return Ok(detail),
-                Err(DetailFromIndexError::Provider(error)) => return Err(error),
-                Err(DetailFromIndexError::Stale(_error)) if !retried_after_stale_index => {
-                    retried_after_stale_index = true;
-                    // range 索引可能来自旧文件内容；强制重扫一次，避免用旧 session 或缺行数量推进 cursor。
-                    self.refresh_session_index_from_file(&params.session_id, &index)?;
-                    continue;
-                }
-                Err(DetailFromIndexError::Stale(error)) => {
-                    return Err(ProviderError::stale_session_file(error));
-                }
-            }
-        }
-    }
-
-    fn ensure_session_index(&mut self, session_id: &str) -> Result<(), ProviderError> {
-        if !self.index.contains_key(session_id) {
-            self.refresh_snapshot().map_err(ProviderError::internal)?;
-        }
-        if !self.index.contains_key(session_id) {
-            return Err(ProviderError::not_found(session_id));
-        }
-        Ok(())
-    }
-
-    fn refresh_latest_detail_index_if_file_metadata_changed(
-        &mut self,
-        session_id: &str,
-    ) -> Result<(), ProviderError> {
-        let index = self
-            .index
-            .get(session_id)
-            .cloned()
-            .ok_or_else(|| ProviderError::not_found(session_id))?;
-        if session_file_metadata_changed(&index)? {
-            self.refresh_session_index_from_file(session_id, &index)?;
-        }
-        Ok(())
-    }
-
-    fn refresh_session_index_from_file(
-        &mut self,
-        session_id: &str,
-        index: &SessionIndex,
-    ) -> Result<(), ProviderError> {
-        let path = PathBuf::from(&index.list_item.file_path);
-        let file_signature = session_file_signature(&path).map_err(|error| {
-            ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
-        })?;
-        let refreshed = self
-            .scan_session_file(&path, file_signature, Utc::now())
-            .map_err(ProviderError::internal)?;
-        let refreshed_session_id = refreshed.list_item.session_id.clone();
-        // 文件被截断或替换后可能属于另一个 session，旧 session_id 不能继续命中旧索引。
-        self.index.remove(session_id);
-        self.index.insert(refreshed_session_id.clone(), refreshed);
-        if refreshed_session_id != session_id {
-            return Err(ProviderError::not_found(session_id));
-        }
-        Ok(())
-    }
-
-    fn scan_session_file(
-        &mut self,
+    fn scan_session_file_index(
         path: &Path,
         file_signature: SessionFileSignature,
         discovered_at: DateTime<Utc>,
     ) -> Result<SessionIndex, String> {
-        #[cfg(test)]
-        {
-            self.scan_count += 1;
-        }
         let parsed = parse_session_file(path)?;
         let fallback_path = path.to_string_lossy();
         let session_id = parsed
@@ -516,7 +522,7 @@ fn verify_session_identity(index: &SessionIndex) -> Result<(), String> {
     Ok(())
 }
 
-enum DetailFromIndexError {
+pub(crate) enum DetailFromIndexError {
     Provider(ProviderError),
     Stale(String),
 }
@@ -753,7 +759,7 @@ impl ProviderError {
         }
     }
 
-    fn not_found(session_id: &str) -> Self {
+    pub(crate) fn not_found(session_id: &str) -> Self {
         Self::new(
             "session_not_found",
             format!("session_id 不存在：{session_id}"),
@@ -764,7 +770,7 @@ impl ProviderError {
         Self::new("provider_internal_error", message)
     }
 
-    fn stale_session_file(message: impl Into<String>) -> Self {
+    pub(crate) fn stale_session_file(message: impl Into<String>) -> Self {
         Self::new("stale_session_file", message)
     }
 }
