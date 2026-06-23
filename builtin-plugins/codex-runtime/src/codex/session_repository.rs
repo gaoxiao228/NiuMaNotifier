@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -10,6 +10,7 @@ use niuma_core::tool_session::{ToolSessionDetail, ToolSessionListItem, ToolSessi
 use niuma_core::tool_session_rpc::SessionDetailParams;
 use serde::Deserialize;
 
+use crate::codex::session_event_cursor::{file_identity, CodexEventCursor, CodexFileIdentity};
 use crate::codex::session_file_index::{
     read_indexed_line, session_file_signature, trim_jsonl_line_bytes,
     CodexMessageLineIndex as MessageLineIndex, CodexSessionFileIndex,
@@ -18,15 +19,18 @@ use crate::codex::session_file_index::{
 use crate::codex::session_identity::{
     codex_fallback_session_id, codex_project_name, CodexSessionIdentity, CodexSessionMetadata,
 };
+use crate::codex::session_protocol::current::CodexJsonlParser;
 use crate::session_messages::{is_detail_message_line, parse_codex_message_line};
 
 const SNAPSHOT_FILE_LIMIT: usize = 128;
 const SESSION_DAY_DIR_LIMIT: usize = 180;
 const ACTIVE_MODIFIED_WINDOW: Duration = Duration::from_secs(60);
+const PRIME_METADATA_MAX_BYTES: u64 = 64 * 1024;
 
 pub(crate) struct CodexSessionRepository {
     codex_home: PathBuf,
     index: HashMap<String, SessionIndex>,
+    event_cursors: HashMap<PathBuf, CodexEventCursor>,
     #[cfg(test)]
     scan_count: usize,
 }
@@ -35,6 +39,32 @@ pub(crate) struct CodexSessionRepository {
 pub(crate) struct SessionIndex {
     pub(crate) list_item: ToolSessionListItem,
     pub(crate) file_index: CodexSessionFileIndex,
+}
+
+pub(crate) struct CodexEventScanPlan {
+    pub(crate) read_start: u64,
+    pub(crate) file_len: u64,
+    pub(crate) reset_parser: bool,
+    pub(crate) file_replaced: bool,
+    pub(crate) file_truncated: bool,
+    pub(crate) file_identity: Option<CodexFileIdentity>,
+}
+
+pub(crate) struct CodexEventLine {
+    pub(crate) line: String,
+    pub(crate) byte_start: u64,
+    pub(crate) byte_end: u64,
+}
+
+pub(crate) struct CodexEventReadResult {
+    pub(crate) lines: Vec<CodexEventLine>,
+    pub(crate) next_offset: u64,
+    pub(crate) file_len: u64,
+    pub(crate) file_identity: Option<CodexFileIdentity>,
+    pub(crate) reset_parser: bool,
+    pub(crate) file_replaced: bool,
+    pub(crate) file_truncated: bool,
+    pub(crate) ended_with_partial_line: bool,
 }
 
 // 候选阶段只保留轻量 metadata；排序截断后才读取文件内容计算 hash。
@@ -66,6 +96,7 @@ impl CodexSessionRepository {
         Self {
             codex_home,
             index: HashMap::new(),
+            event_cursors: HashMap::new(),
             #[cfg(test)]
             scan_count: 0,
         }
@@ -122,6 +153,115 @@ impl CodexSessionRepository {
         sessions.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
         self.index = next_index;
         Ok(sessions)
+    }
+
+    pub(crate) fn event_scan_plan(
+        path: &Path,
+        cursor: Option<&CodexEventCursor>,
+    ) -> Result<CodexEventScanPlan, String> {
+        let metadata = std::fs::metadata(path)
+            .map_err(|error| format!("读取 Codex session 文件信息失败：{error}"))?;
+        let file_len = metadata.len();
+        let current_identity = file_identity(&metadata);
+        let (previous_offset, previous_len, previous_identity) = cursor
+            .map(|cursor| (cursor.offset, cursor.last_len, cursor.file_identity))
+            .unwrap_or((0, 0, None));
+        let file_replaced = previous_identity.is_some()
+            && current_identity.is_some()
+            && previous_identity != current_identity;
+        let file_truncated = file_len < previous_len || previous_offset > file_len;
+        let reset_parser = cursor.is_none() || file_replaced || file_truncated;
+        let read_start = if reset_parser { 0 } else { previous_offset };
+
+        Ok(CodexEventScanPlan {
+            read_start,
+            file_len,
+            reset_parser,
+            file_replaced,
+            file_truncated,
+            file_identity: current_identity,
+        })
+    }
+
+    pub(crate) fn read_new_event_lines(
+        path: &Path,
+        cursor: Option<&CodexEventCursor>,
+    ) -> Result<CodexEventReadResult, String> {
+        let plan = Self::event_scan_plan(path, cursor)?;
+        let mut file =
+            File::open(path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
+        file.seek(SeekFrom::Start(plan.read_start))
+            .map_err(|error| format!("定位 Codex session 文件失败：{error}"))?;
+
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer)
+            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+
+        let mut lines = Vec::new();
+        let mut next_offset = plan.read_start;
+        let mut ended_with_partial_line = false;
+        for segment in buffer.split_inclusive('\n') {
+            // 最后一段未落盘换行时不推进 offset，等待下次补齐后再解析。
+            if !segment.ends_with('\n') {
+                ended_with_partial_line = !segment.is_empty();
+                break;
+            }
+            let byte_start = next_offset;
+            next_offset += segment.as_bytes().len() as u64;
+            lines.push(CodexEventLine {
+                line: segment.trim_end_matches('\n').to_string(),
+                byte_start,
+                byte_end: next_offset,
+            });
+        }
+
+        Ok(CodexEventReadResult {
+            lines,
+            next_offset,
+            file_len: plan.file_len,
+            file_identity: plan.file_identity,
+            reset_parser: plan.reset_parser,
+            file_replaced: plan.file_replaced,
+            file_truncated: plan.file_truncated,
+            ended_with_partial_line,
+        })
+    }
+
+    pub(crate) fn read_new_event_lines_for_path(
+        &self,
+        path: &Path,
+    ) -> Result<CodexEventReadResult, String> {
+        Self::read_new_event_lines(path, self.event_cursors.get(path))
+    }
+
+    pub(crate) fn event_cursor(&self, path: &Path) -> Option<&CodexEventCursor> {
+        self.event_cursors.get(path)
+    }
+
+    pub(crate) fn store_event_cursor(&mut self, path: &Path, cursor: CodexEventCursor) {
+        self.event_cursors.insert(path.to_path_buf(), cursor);
+    }
+
+    pub(crate) fn prime_event_cursor_to_end(path: &Path) -> Result<CodexEventCursor, String> {
+        let metadata = std::fs::metadata(path)
+            .map_err(|error| format!("读取 Codex session 文件信息失败：{error}"))?;
+        let mut parser = CodexJsonlParser::default();
+        prime_event_parser_metadata(path, &mut parser, PRIME_METADATA_MAX_BYTES)?;
+        let file_len = metadata.len();
+
+        // 旧 session 文件首次纳入监听时跳到尾部，但保留 session_meta 中的项目上下文。
+        Ok(CodexEventCursor {
+            offset: file_len,
+            last_len: file_len,
+            file_identity: file_identity(&metadata),
+            parser,
+        })
+    }
+
+    pub(crate) fn prime_event_cursor_in_index(&mut self, path: &Path) -> Result<(), String> {
+        let cursor = Self::prime_event_cursor_to_end(path)?;
+        self.store_event_cursor(path, cursor);
+        Ok(())
     }
 
     pub(crate) fn session_detail(
@@ -274,6 +414,42 @@ fn refresh_cached_index(mut index: SessionIndex, discovered_at: DateTime<Utc>) -
         ToolSessionStatus::Inactive
     };
     index
+}
+
+fn prime_event_parser_metadata(
+    path: &Path,
+    parser: &mut CodexJsonlParser,
+    max_metadata_bytes: u64,
+) -> Result<(), String> {
+    let file = File::open(path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut read_bytes = 0_u64;
+    let fallback_path = path.to_string_lossy();
+
+    while read_bytes < max_metadata_bytes {
+        line.clear();
+        let count = reader
+            .read_line(&mut line)
+            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+        if count == 0 {
+            break;
+        }
+        read_bytes += count as u64;
+        if !line.ends_with('\n') {
+            break;
+        }
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        let _ = parser.parse_line(trimmed, &fallback_path);
+        if parser.has_session_metadata() {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn detail_from_index(
@@ -592,7 +768,7 @@ impl ProviderError {
         )
     }
 
-    fn internal(message: impl Into<String>) -> Self {
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new("provider_internal_error", message)
     }
 

@@ -1,31 +1,47 @@
-use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use niuma_core::models::NiumaEvent;
 
 use crate::codex::session_protocol::current::CodexJsonlParser;
+use crate::codex::session_repository::CodexSessionRepository;
 
-const PRIME_METADATA_MAX_BYTES: u64 = 64 * 1024;
-
-#[derive(Default)]
 pub(crate) struct CodexSessionScanner {
-    files: HashMap<PathBuf, FileScanState>,
+    repository: Arc<Mutex<CodexSessionRepository>>,
 }
 
-#[derive(Default)]
-struct FileScanState {
-    offset: u64,
-    last_len: u64,
-    identity: Option<FileIdentity>,
-    parser: CodexJsonlParser,
+impl CodexSessionScanner {
+    pub(crate) fn new(codex_home: PathBuf) -> Self {
+        Self::with_repository(Arc::new(Mutex::new(CodexSessionRepository::new(
+            codex_home,
+        ))))
+    }
+
+    pub(crate) fn with_repository(repository: Arc<Mutex<CodexSessionRepository>>) -> Self {
+        Self { repository }
+    }
+}
+
+impl Default for CodexSessionScanner {
+    fn default() -> Self {
+        Self::new(PathBuf::new())
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct CodexEventCursor {
+    pub(crate) offset: u64,
+    pub(crate) last_len: u64,
+    pub(crate) file_identity: Option<CodexFileIdentity>,
+    pub(crate) parser: CodexJsonlParser,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FileIdentity {
-    dev: u64,
-    ino: u64,
+pub(crate) struct CodexFileIdentity {
+    pub(crate) dev: u64,
+    pub(crate) ino: u64,
 }
 
 impl CodexSessionScanner {
@@ -75,123 +91,88 @@ impl CodexSessionScanner {
             }
         }
 
-        let state = self.files.entry(path.to_path_buf()).or_default();
-        state.offset = file_len;
-        state.last_len = file_len;
-        state.identity = file_identity(&metadata);
-        state.parser = parser;
+        self.repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .store_event_cursor(
+                path,
+                CodexEventCursor {
+                    offset: file_len,
+                    last_len: file_len,
+                    file_identity: file_identity(&metadata),
+                    parser,
+                },
+            );
         Ok(events)
     }
 
     pub(crate) fn prime_file_to_end(&mut self, path: &Path) -> Result<(), String> {
-        let metadata = std::fs::metadata(path)
-            .map_err(|error| format!("读取 Codex session 文件信息失败：{error}"))?;
-        let mut parser = CodexJsonlParser::default();
-        prime_parser_metadata(path, &mut parser)?;
-        let state = self.files.entry(path.to_path_buf()).or_default();
-        // 旧 session 文件首次纳入监听时跳到尾部，但保留 session_meta 中的项目上下文。
-        state.offset = metadata.len();
-        state.last_len = metadata.len();
-        state.identity = file_identity(&metadata);
-        state.parser = parser;
-        Ok(())
+        self.repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .prime_event_cursor_in_index(path)
     }
 
     pub(crate) fn scan_file(&mut self, path: &Path) -> Result<Vec<NiumaEvent>, String> {
-        let metadata = std::fs::metadata(path)
-            .map_err(|error| format!("读取 Codex session 文件信息失败：{error}"))?;
-        let identity = file_identity(&metadata);
-        let state = self.files.entry(path.to_path_buf()).or_default();
-        let file_replaced =
-            state.identity.is_some() && identity.is_some() && state.identity != identity;
-        let file_truncated = metadata.len() < state.last_len || state.offset > metadata.len();
-
-        let mut parser = if file_replaced || file_truncated {
-            CodexJsonlParser::default()
-        } else {
-            state.parser.clone()
+        let (read, mut parser) = {
+            let repository = self
+                .repository
+                .lock()
+                .map_err(|_| "Codex session repository lock poisoned".to_string())?;
+            let read = repository.read_new_event_lines_for_path(path)?;
+            let should_reset_parser =
+                read.reset_parser || read.file_replaced || read.file_truncated;
+            let parser = if should_reset_parser {
+                CodexJsonlParser::default()
+            } else {
+                repository
+                    .event_cursor(path)
+                    .map(|cursor| cursor.parser.clone())
+                    .unwrap_or_default()
+            };
+            (read, parser)
         };
-        let mut next_offset = if file_replaced || file_truncated {
-            0
-        } else {
-            state.offset
-        };
-
-        let mut file =
-            File::open(path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
-        file.seek(SeekFrom::Start(next_offset))
-            .map_err(|error| format!("定位 Codex session 文件失败：{error}"))?;
-
-        let mut buffer = String::new();
-        file.read_to_string(&mut buffer)
-            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
 
         let mut events = Vec::new();
-        for segment in buffer.split_inclusive('\n') {
-            // 最后一段未落盘换行时不推进 offset，等待下次补齐后再解析。
-            if !segment.ends_with('\n') {
-                break;
-            }
-            next_offset += segment.as_bytes().len() as u64;
-            let line = segment.trim_end_matches('\n');
+        debug_assert!(!read.ended_with_partial_line || read.next_offset <= read.file_len);
+        for event_line in read.lines {
+            debug_assert!(event_line.byte_end >= event_line.byte_start);
+            debug_assert!(event_line.byte_end <= read.next_offset);
+            let line = event_line.line;
             if line.trim().is_empty() {
                 continue;
             }
-            if let Some(event) = parser.parse_line(line, &path.to_string_lossy())? {
+            if let Some(event) = parser.parse_line(&line, &path.to_string_lossy())? {
                 events.push(event);
             }
         }
-        state.parser = parser;
-        state.offset = next_offset;
-        state.last_len = metadata.len();
-        state.identity = identity;
+        self.repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .store_event_cursor(
+                path,
+                CodexEventCursor {
+                    offset: read.next_offset,
+                    last_len: read.file_len,
+                    file_identity: read.file_identity,
+                    parser,
+                },
+            );
         Ok(events)
     }
 }
 
-fn prime_parser_metadata(path: &Path, parser: &mut CodexJsonlParser) -> Result<(), String> {
-    let file = File::open(path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    let mut read_bytes = 0_u64;
-    let fallback_path = path.to_string_lossy();
-
-    while read_bytes < PRIME_METADATA_MAX_BYTES {
-        line.clear();
-        let count = reader
-            .read_line(&mut line)
-            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
-        if count == 0 {
-            break;
-        }
-        read_bytes += count as u64;
-        if !line.ends_with('\n') {
-            break;
-        }
-        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-        if trimmed.trim().is_empty() {
-            continue;
-        }
-        let _ = parser.parse_line(trimmed, &fallback_path);
-        if parser.has_session_metadata() {
-            break;
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(unix)]
-fn file_identity(metadata: &std::fs::Metadata) -> Option<FileIdentity> {
+pub(crate) fn file_identity(metadata: &std::fs::Metadata) -> Option<CodexFileIdentity> {
     use std::os::unix::fs::MetadataExt;
 
-    Some(FileIdentity {
+    Some(CodexFileIdentity {
         dev: metadata.dev(),
         ino: metadata.ino(),
     })
 }
 
 #[cfg(not(unix))]
-fn file_identity(_metadata: &std::fs::Metadata) -> Option<FileIdentity> {
+pub(crate) fn file_identity(_metadata: &std::fs::Metadata) -> Option<CodexFileIdentity> {
     None
 }

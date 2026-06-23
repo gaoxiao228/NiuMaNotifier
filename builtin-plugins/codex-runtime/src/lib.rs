@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -8,6 +8,7 @@ use crate::codex::log_watcher::{
     codex_internal_log_path, codex_log_schema_available, CodexLogScanner,
 };
 use crate::codex::session_event_cursor::CodexSessionScanner;
+use crate::codex::session_repository::CodexSessionRepository;
 #[cfg(test)]
 use chrono::Utc;
 use niuma_core::config;
@@ -64,14 +65,14 @@ pub fn spawn_codex_session_runtime(
             let listener_store = store.clone();
             let event_sink =
                 StoreCodexEventSink::new(StateMutationService::new(store, runtime_events));
-            run_runtime(Box::new(event_sink), Some(listener_store));
+            run_runtime(Box::new(event_sink), Some(listener_store), None);
         })
 }
 
 pub fn run_from_env() {
     start_parent_watchdog_from_env();
     match LocalApiCodexEventSink::from_env() {
-        Ok(event_sink) => run_runtime(Box::new(event_sink), None),
+        Ok(event_sink) => run_runtime(Box::new(event_sink), None, None),
         Err(error) => {
             eprintln!("NiumaNotifier Codex plugin process not started: {error}");
             std::process::exit(1);
@@ -88,15 +89,18 @@ pub fn run_combined_from_env() {
             std::process::exit(1);
         }
     };
+    let codex_home = config::codex_home();
+    let session_repository = Arc::new(Mutex::new(CodexSessionRepository::new(codex_home)));
+    let watcher_repository = session_repository.clone();
     if let Err(error) = thread::Builder::new()
         .name("codex-watcher-runtime".to_string())
-        .spawn(move || run_runtime(Box::new(event_sink), None))
+        .spawn(move || run_runtime(Box::new(event_sink), None, Some(watcher_repository)))
     {
         eprintln!("NiumaNotifier Codex watcher runtime not started: {error}");
         std::process::exit(1);
     }
     // 合并插件后 stdout 是 provider JSON Lines RPC 通道，主线程专门服务 provider。
-    session_provider::run_stdio_session_provider();
+    session_provider::run_stdio_session_provider_with_repository(session_repository);
 }
 
 fn start_parent_watchdog_from_env() {
@@ -235,8 +239,14 @@ impl CodexEventSink for LocalApiCodexEventSink {
     }
 }
 
-fn run_runtime(event_sink: Box<dyn CodexEventSink>, listener_store: Option<NiumaStore>) {
+fn run_runtime(
+    event_sink: Box<dyn CodexEventSink>,
+    listener_store: Option<NiumaStore>,
+    session_repository: Option<Arc<Mutex<CodexSessionRepository>>>,
+) {
     let codex_home = config::codex_home();
+    let session_repository = session_repository
+        .unwrap_or_else(|| Arc::new(Mutex::new(CodexSessionRepository::new(codex_home.clone()))));
     if watcher_debug_enabled() {
         watcher_debug_log(format!(
             "NiumaNotifier Codex watcher runtime started: codex_home={}, fallback_scan_interval={}s",
@@ -255,7 +265,7 @@ fn run_runtime(event_sink: Box<dyn CodexEventSink>, listener_store: Option<Niuma
 
     let mut watched_dirs = HashSet::<PathBuf>::new();
 
-    let mut scanner = CodexSessionScanner::default();
+    let mut scanner = CodexSessionScanner::with_repository(session_repository.clone());
     let codex_log_path = codex_internal_log_path(&codex_home);
     let mut codex_log_scanner = CodexLogScanner::default();
     let mut pending_files = Vec::<PathBuf>::new();
@@ -280,7 +290,7 @@ fn run_runtime(event_sink: Box<dyn CodexEventSink>, listener_store: Option<Niuma
                 clear_runtime_buffers(&mut pending_files, &mut pending_dirs, &mut active_files);
                 clear_watched_dirs(&mut watcher, &mut watched_dirs);
                 dir_cache.clear();
-                scanner = CodexSessionScanner::default();
+                scanner = CodexSessionScanner::with_repository(session_repository.clone());
                 codex_log_scanner = CodexLogScanner::default();
                 runtime_initialized = false;
             }

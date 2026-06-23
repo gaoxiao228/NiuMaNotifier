@@ -21,7 +21,7 @@ use crate::codex::session_repository::{CodexSessionRepository, ProviderError};
 const SNAPSHOT_NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
 
 pub struct CodexSessionProvider {
-    repository: CodexSessionRepository,
+    repository: Arc<Mutex<CodexSessionRepository>>,
 }
 
 impl CodexSessionProvider {
@@ -30,24 +30,30 @@ impl CodexSessionProvider {
     }
 
     pub fn with_codex_home(codex_home: PathBuf) -> Self {
-        Self {
-            repository: CodexSessionRepository::new(codex_home),
-        }
+        Self::with_repository(Arc::new(Mutex::new(CodexSessionRepository::new(
+            codex_home,
+        ))))
+    }
+
+    pub(crate) fn with_repository(repository: Arc<Mutex<CodexSessionRepository>>) -> Self {
+        Self { repository }
     }
 
     #[cfg(test)]
     pub(crate) fn scan_count(&self) -> usize {
-        self.repository.scan_count()
+        self.repository.lock().unwrap().scan_count()
     }
 
     #[cfg(test)]
-    fn index_mut(&mut self, session_id: &str) -> Option<&mut SessionIndex> {
-        self.repository.index_mut(session_id)
+    fn mutate_index(&self, session_id: &str, mutate: impl FnOnce(&mut SessionIndex)) -> Option<()> {
+        let mut repository = self.repository.lock().unwrap();
+        mutate(repository.index_mut(session_id)?);
+        Some(())
     }
 
     #[cfg(test)]
     fn contains_index(&self, session_id: &str) -> bool {
-        self.repository.contains_index(session_id)
+        self.repository.lock().unwrap().contains_index(session_id)
     }
 
     pub fn handle_request(&mut self, request: ProviderRpcRequest) -> ProviderRpcResponse {
@@ -103,7 +109,13 @@ impl CodexSessionProvider {
                 "Codex session provider 只支持 codex",
             );
         }
-        match self.repository.session_detail(params) {
+        let detail_result = match self.repository.lock() {
+            Ok(mut repository) => repository.session_detail(params),
+            Err(_) => Err(ProviderError::internal(
+                "Codex session repository lock poisoned",
+            )),
+        };
+        match detail_result {
             Ok(detail) => ProviderRpcResponse::success(request.id, SessionDetailResult { detail })
                 .expect("session detail response must serialize"),
             Err(ProviderError { code, message }) => {
@@ -113,15 +125,28 @@ impl CodexSessionProvider {
     }
 
     fn refresh_snapshot(&mut self) -> Result<Vec<ToolSessionListItem>, String> {
-        self.repository.refresh_snapshot()
+        self.repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .refresh_snapshot()
     }
 }
 
 // 启动 stdio JSON Lines provider；同一进程复用 provider 实例，让 snapshot 建立的索引可服务后续 detail。
 pub fn run_stdio_session_provider() {
+    run_stdio_session_provider_with_repository(Arc::new(Mutex::new(CodexSessionRepository::new(
+        niuma_core::config::codex_home(),
+    ))));
+}
+
+pub(crate) fn run_stdio_session_provider_with_repository(
+    repository: Arc<Mutex<CodexSessionRepository>>,
+) {
     let stdin = io::stdin();
     let stdout = Arc::new(Mutex::new(io::stdout()));
-    let provider = Arc::new(Mutex::new(CodexSessionProvider::from_config()));
+    let provider = Arc::new(Mutex::new(CodexSessionProvider::with_repository(
+        repository,
+    )));
     let _snapshot_notifier =
         start_snapshot_notifier(provider.clone(), stdout.clone(), SNAPSHOT_NOTIFY_INTERVAL);
     for line in stdin.lock().lines() {
@@ -317,6 +342,7 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
+    use crate::codex::session_event_cursor::CodexSessionScanner;
     use crate::codex::session_file_index::session_file_signature;
     use crate::codex::session_identity::codex_filename_session_id;
 
@@ -342,15 +368,17 @@ mod tests {
 
         std::fs::write(&path, &session_b).unwrap();
         let replaced_signature = session_file_signature(&path).unwrap();
-        let cached_index = provider.index_mut("session-alpha").unwrap();
-        // 模拟文件系统 mtime 精度不足或 mtime 被恢复：旧缓存只剩 content_hash 与新文件不同。
-        cached_index.file_index.signature.modified_system_time =
-            replaced_signature.modified_system_time;
-        cached_index.file_index.signature.size_bytes = replaced_signature.size_bytes;
-        assert_ne!(
-            cached_index.file_index.signature.content_hash,
-            replaced_signature.content_hash
-        );
+        let mut cached_content_hash = 0;
+        provider
+            .mutate_index("session-alpha", |cached_index| {
+                // 模拟文件系统 mtime 精度不足或 mtime 被恢复：旧缓存只剩 content_hash 与新文件不同。
+                cached_index.file_index.signature.modified_system_time =
+                    replaced_signature.modified_system_time;
+                cached_index.file_index.signature.size_bytes = replaced_signature.size_bytes;
+                cached_content_hash = cached_index.file_index.signature.content_hash;
+            })
+            .unwrap();
+        assert_ne!(cached_content_hash, replaced_signature.content_hash);
 
         let second_snapshot = provider
             .handle_request(snapshot_request("req-second-snapshot"))
@@ -382,6 +410,46 @@ mod tests {
     }
 
     #[test]
+    fn codex_session_provider_and_watcher_share_repository_instance() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_test_session(
+            temp.path(),
+            &test_session_content(
+                "session-shared",
+                "/tmp/shared-project",
+                "shared question",
+                "shared answer",
+            ),
+        );
+        let repository = Arc::new(Mutex::new(CodexSessionRepository::new(temp.path().into())));
+        let mut provider = CodexSessionProvider::with_repository(repository.clone());
+        let mut scanner = CodexSessionScanner::with_repository(repository.clone());
+
+        let snapshot = provider
+            .handle_request(snapshot_request("req-shared-snapshot"))
+            .result_as::<SessionSnapshotResult>()
+            .unwrap();
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].session_id, "session-shared");
+
+        let _ = scanner.scan_file(&path).unwrap();
+        assert!(repository.lock().unwrap().event_cursor(&path).is_some());
+
+        let detail = provider
+            .handle_request(detail_request_for_session(
+                "req-shared-detail",
+                "session-shared",
+                20,
+                None,
+            ))
+            .result_as::<SessionDetailResult>()
+            .unwrap()
+            .detail;
+        assert_eq!(detail.messages[0].content, "shared answer");
+        assert_eq!(detail.messages[1].content, "shared question");
+    }
+
+    #[test]
     fn codex_session_provider_detail_refreshes_stale_index_after_file_truncate() {
         let temp = tempfile::tempdir().unwrap();
         let path = write_test_session(
@@ -404,9 +472,12 @@ mod tests {
         )
         .unwrap();
         let truncated_signature = session_file_signature(&path).unwrap();
-        let index = provider.index_mut("session-fixture").unwrap();
-        // 保留旧行号但同步文件签名，强制走“读取发现缺行后重建索引”的防护分支。
-        index.file_index.signature = truncated_signature;
+        provider
+            .mutate_index("session-fixture", |index| {
+                // 保留旧行号但同步文件签名，强制走“读取发现缺行后重建索引”的防护分支。
+                index.file_index.signature = truncated_signature;
+            })
+            .unwrap();
 
         let response = provider.handle_request(detail_request("req-detail", 2, None));
         assert!(response.error.is_none());
@@ -441,9 +512,12 @@ mod tests {
         )
         .unwrap();
         let updated_signature = session_file_signature(&path).unwrap();
-        let index = provider.index_mut("session-fixture").unwrap();
-        // 保留旧消息行号但同步文件签名，强制覆盖“行号仍存在但已不是详情消息”的防护分支。
-        index.file_index.signature = updated_signature;
+        provider
+            .mutate_index("session-fixture", |index| {
+                // 保留旧消息行号但同步文件签名，强制覆盖“行号仍存在但已不是详情消息”的防护分支。
+                index.file_index.signature = updated_signature;
+            })
+            .unwrap();
 
         let response = provider.handle_request(detail_request("req-detail", 2, None));
         assert!(response.error.is_none());
