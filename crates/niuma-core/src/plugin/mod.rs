@@ -12,6 +12,10 @@ use crate::models::ToolKind;
 use crate::state_mutation::StateMutationService;
 use crate::store::NiumaStore;
 
+mod runtime_state;
+
+pub use runtime_state::{PluginRuntimeState, PluginRuntimeStatus};
+
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
 pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
@@ -23,11 +27,11 @@ const CODEX_PLUGIN_COMMAND: &str = "niuma-codex-plugin";
 const BARK_PLUGIN_COMMAND: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_COMMAND: &str = "niuma-plugin-ntfy";
 const BUILTIN_CODEX_PLUGIN_MANIFEST_JSON: &str =
-    include_str!("../../../builtin-plugins/codex/plugin.json");
+    include_str!("../../../../builtin-plugins/codex/plugin.json");
 const BUILTIN_BARK_PLUGIN_MANIFEST_JSON: &str =
-    include_str!("../../../builtin-plugins/bark/plugin.json");
+    include_str!("../../../../builtin-plugins/bark/plugin.json");
 const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
-    include_str!("../../../builtin-plugins/ntfy/plugin.json");
+    include_str!("../../../../builtin-plugins/ntfy/plugin.json");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,16 +60,6 @@ pub enum PluginKind {
 pub enum PluginSource {
     Builtin,
     External,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginRuntimeStatus {
-    Starting,
-    Stopped,
-    Stopping,
-    Running,
-    Failed,
 }
 
 // 管理动作只描述插件管理界面上的受控操作，不等同于插件运行时 capability。
@@ -161,50 +155,6 @@ pub struct ToolPluginInfo {
     pub source: PluginSource,
     pub icon_url: Option<String>,
     pub capabilities: Vec<PluginCapability>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PluginRuntimeState {
-    pub status: PluginRuntimeStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-}
-
-impl PluginRuntimeState {
-    pub fn starting() -> Self {
-        Self {
-            status: PluginRuntimeStatus::Starting,
-            last_error: None,
-        }
-    }
-
-    pub fn stopped() -> Self {
-        Self {
-            status: PluginRuntimeStatus::Stopped,
-            last_error: None,
-        }
-    }
-
-    pub fn stopping() -> Self {
-        Self {
-            status: PluginRuntimeStatus::Stopping,
-            last_error: None,
-        }
-    }
-
-    pub fn running() -> Self {
-        Self {
-            status: PluginRuntimeStatus::Running,
-            last_error: None,
-        }
-    }
-
-    pub fn failed(error: impl Into<String>) -> Self {
-        Self {
-            status: PluginRuntimeStatus::Failed,
-            last_error: Some(error.into()),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
