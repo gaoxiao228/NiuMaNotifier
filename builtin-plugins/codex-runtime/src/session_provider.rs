@@ -25,14 +25,22 @@ const SNAPSHOT_NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
 pub struct CodexSessionProvider {
     codex_home: PathBuf,
     index: HashMap<String, SessionIndex>,
+    #[cfg(test)]
+    scan_count: usize,
 }
 
 #[derive(Clone)]
 struct SessionIndex {
     list_item: ToolSessionListItem,
-    modified_system_time: SystemTime,
+    file_signature: SessionFileSignature,
     // 只保存可分页消息的原始 JSONL 行号，不在 provider 内存中长期持有完整对话正文。
     message_line_indexes: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct SessionFileSignature {
+    modified_system_time: SystemTime,
+    size_bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -59,7 +67,14 @@ impl CodexSessionProvider {
         Self {
             codex_home,
             index: HashMap::new(),
+            #[cfg(test)]
+            scan_count: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scan_count(&self) -> usize {
+        self.scan_count
     }
 
     pub fn handle_request(&mut self, request: ProviderRpcRequest) -> ProviderRpcResponse {
@@ -127,8 +142,20 @@ impl CodexSessionProvider {
     fn refresh_snapshot(&mut self) -> Result<Vec<ToolSessionListItem>, String> {
         let now = Utc::now();
         let mut next_index = HashMap::new();
-        for (path, modified_system_time) in recent_session_files(&self.codex_home) {
-            match self.scan_session_file(&path, modified_system_time, now) {
+        let previous_by_path = self
+            .index
+            .values()
+            .map(|index| (index.list_item.file_path.clone(), index.clone()))
+            .collect::<HashMap<_, _>>();
+        for (path, file_signature) in recent_session_files(&self.codex_home) {
+            let file_path = path.to_string_lossy().to_string();
+            let result = previous_by_path
+                .get(&file_path)
+                .filter(|index| index.file_signature == file_signature)
+                .cloned()
+                .map(|index| Ok(refresh_cached_index(index, now)))
+                .unwrap_or_else(|| self.scan_session_file(&path, file_signature, now));
+            match result {
                 Ok(index) => {
                     next_index.insert(index.list_item.session_id.clone(), index);
                 }
@@ -189,7 +216,14 @@ impl CodexSessionProvider {
         let modified_system_time = file_modified_time(&path).map_err(|error| {
             ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
         })?;
-        if modified_system_time != index.modified_system_time {
+        let size_bytes = file_size(&path).map_err(|error| {
+            ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
+        })?;
+        let file_signature = SessionFileSignature {
+            modified_system_time,
+            size_bytes,
+        };
+        if file_signature != index.file_signature {
             self.refresh_session_index_from_file(session_id, &index)?;
         }
         Ok(())
@@ -201,11 +235,11 @@ impl CodexSessionProvider {
         index: &SessionIndex,
     ) -> Result<(), ProviderError> {
         let path = PathBuf::from(&index.list_item.file_path);
-        let modified_system_time = file_modified_time(&path).map_err(|error| {
+        let file_signature = session_file_signature(&path).map_err(|error| {
             ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
         })?;
         let refreshed = self
-            .scan_session_file(&path, modified_system_time, Utc::now())
+            .scan_session_file(&path, file_signature, Utc::now())
             .map_err(ProviderError::internal)?;
         let refreshed_session_id = refreshed.list_item.session_id.clone();
         // 文件被截断或替换后可能属于另一个 session，旧 session_id 不能继续命中旧索引。
@@ -218,11 +252,15 @@ impl CodexSessionProvider {
     }
 
     fn scan_session_file(
-        &self,
+        &mut self,
         path: &Path,
-        modified_system_time: SystemTime,
+        file_signature: SessionFileSignature,
         discovered_at: DateTime<Utc>,
     ) -> Result<SessionIndex, String> {
+        #[cfg(test)]
+        {
+            self.scan_count += 1;
+        }
         let parsed = parse_session_file(path)?;
         let fallback_path = path.to_string_lossy();
         let session_id = parsed
@@ -231,6 +269,7 @@ impl CodexSessionProvider {
             .unwrap_or_else(|| format!("fallback-{}", stable_hash(&fallback_path)));
         let project_path = parsed.project_path.unwrap_or_default();
         let project_name = project_name(&project_path);
+        let modified_system_time = file_signature.modified_system_time;
         let modified_at = DateTime::<Utc>::from(modified_system_time);
         let is_active = recently_modified(modified_system_time, ACTIVE_MODIFIED_WINDOW);
         let status = if is_active {
@@ -256,10 +295,25 @@ impl CodexSessionProvider {
 
         Ok(SessionIndex {
             list_item,
-            modified_system_time,
+            file_signature,
             message_line_indexes: parsed.message_line_indexes,
         })
     }
+}
+
+fn refresh_cached_index(mut index: SessionIndex, discovered_at: DateTime<Utc>) -> SessionIndex {
+    // 文件内容未变化时只刷新列表态字段，复用行号索引，避免后台 notifier 重复解析 JSONL。
+    let modified_system_time = index.file_signature.modified_system_time;
+    let is_active = recently_modified(modified_system_time, ACTIVE_MODIFIED_WINDOW);
+    index.list_item.discovered_at = discovered_at;
+    index.list_item.last_seen_at = discovered_at;
+    index.list_item.is_active = is_active;
+    index.list_item.status = if is_active {
+        ToolSessionStatus::Active
+    } else {
+        ToolSessionStatus::Inactive
+    };
+    index
 }
 
 // 启动 stdio JSON Lines provider；同一进程复用 provider 实例，让 snapshot 建立的索引可服务后续 detail。
@@ -451,17 +505,16 @@ fn detail_from_index(
     index: &SessionIndex,
     params: &SessionDetailParams,
 ) -> Result<ToolSessionDetail, DetailFromIndexError> {
-    let total = index.message_line_indexes.len();
-    let start =
-        parse_cursor(params.cursor.as_deref(), total).map_err(DetailFromIndexError::Provider)?;
+    let before_line_index =
+        parse_cursor(params.cursor.as_deref()).map_err(DetailFromIndexError::Provider)?;
     let page_size = params.limit.max(1);
 
-    // cursor 表示倒序消息列表中的起始偏移；line_indexes 本身按文件顺序保存，分页时再反向迭代。
+    // cursor 是稳定的行号边界；追加的新消息行号更大，不会影响旧 cursor 的下一页结果。
     let page_line_indexes = index
         .message_line_indexes
         .iter()
+        .filter(|line_index| before_line_index.is_none_or(|before| **line_index < before))
         .rev()
-        .skip(start)
         .take(page_size)
         .copied()
         .collect::<Vec<_>>();
@@ -471,8 +524,16 @@ fn detail_from_index(
         &page_line_indexes,
     )
     .map_err(DetailFromIndexError::Stale)?;
-    let next_offset = start + page_line_indexes.len();
-    let next_cursor = (next_offset < total).then(|| next_offset.to_string());
+    let next_cursor = page_line_indexes
+        .last()
+        .copied()
+        .filter(|oldest_returned| {
+            index
+                .message_line_indexes
+                .iter()
+                .any(|line_index| line_index < oldest_returned)
+        })
+        .map(|oldest_returned| format!("before:{oldest_returned}"));
 
     Ok(ToolSessionDetail {
         tool: ToolKind::Codex,
@@ -578,7 +639,7 @@ fn read_messages_by_line_index(
     Ok(messages)
 }
 
-fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SystemTime)> {
+fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SessionFileSignature)> {
     let mut files = Vec::new();
     for dir in session_day_dirs(codex_home) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -589,14 +650,22 @@ fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SystemTime)> {
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            let modified = entry
+            let file_signature = entry
                 .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            files.push((path, modified));
+                .and_then(|metadata| session_file_signature_from_metadata(&metadata))
+                .unwrap_or(SessionFileSignature {
+                    modified_system_time: SystemTime::UNIX_EPOCH,
+                    size_bytes: 0,
+                });
+            files.push((path, file_signature));
         }
     }
-    files.sort_by(|left, right| right.1.cmp(&left.1));
+    files.sort_by(|left, right| {
+        right
+            .1
+            .modified_system_time
+            .cmp(&left.1.modified_system_time)
+    });
     files.truncate(SNAPSHOT_FILE_LIMIT);
     files
 }
@@ -654,23 +723,40 @@ fn fallback_session_day_dirs(codex_home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn parse_cursor(cursor: Option<&str>, total: usize) -> Result<usize, ProviderError> {
+fn parse_cursor(cursor: Option<&str>) -> Result<Option<usize>, ProviderError> {
     let Some(cursor) = cursor else {
-        return Ok(0);
+        return Ok(None);
     };
-    let value = cursor.trim().parse::<usize>().map_err(|_| {
-        ProviderError::new(
-            "invalid_cursor",
-            format!("cursor 非法，必须是倒序消息偏移：{cursor}"),
-        )
-    })?;
-    if value > total {
-        return Err(ProviderError::new(
-            "invalid_cursor",
-            format!("cursor 超出消息范围：{cursor}"),
-        ));
-    }
-    Ok(value)
+    let cursor = cursor.trim();
+    let value = cursor
+        .strip_prefix("before:")
+        .unwrap_or(cursor)
+        .parse::<usize>()
+        .map_err(|_| {
+            ProviderError::new(
+                "invalid_cursor",
+                format!("cursor 非法，必须是行号边界，例如 before:42：{cursor}"),
+            )
+        })?;
+    Ok(Some(value))
+}
+
+fn session_file_signature(path: &Path) -> io::Result<SessionFileSignature> {
+    let metadata = std::fs::metadata(path)?;
+    session_file_signature_from_metadata(&metadata)
+}
+
+fn session_file_signature_from_metadata(
+    metadata: &std::fs::Metadata,
+) -> io::Result<SessionFileSignature> {
+    Ok(SessionFileSignature {
+        modified_system_time: metadata.modified()?,
+        size_bytes: metadata.len(),
+    })
+}
+
+fn file_size(path: &Path) -> io::Result<u64> {
+    std::fs::metadata(path).map(|metadata| metadata.len())
 }
 
 fn file_modified_time(path: &Path) -> io::Result<SystemTime> {
@@ -749,7 +835,6 @@ impl ProviderError {
         Self::new("stale_session_file", message)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,10 +861,10 @@ mod tests {
             ),
         )
         .unwrap();
-        let truncated_modified = file_modified_time(&path).unwrap();
+        let truncated_signature = session_file_signature(&path).unwrap();
         let index = provider.index.get_mut("session-fixture").unwrap();
-        // 保留旧行号但同步 mtime，强制走“读取发现缺行后重建索引”的防护分支。
-        index.modified_system_time = truncated_modified;
+        // 保留旧行号但同步文件签名，强制走“读取发现缺行后重建索引”的防护分支。
+        index.file_signature = truncated_signature;
 
         let response = provider.handle_request(detail_request("req-detail", 2, None));
         assert!(response.error.is_none());

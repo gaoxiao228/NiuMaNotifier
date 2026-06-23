@@ -75,7 +75,7 @@ fn codex_session_provider_detail_paginates_with_cursor() {
     let first = provider_detail(&mut provider, "session-fixture", 1, None);
     assert_eq!(first.messages.len(), 1);
     assert_eq!(first.messages[0].content, "助手回答");
-    assert_eq!(first.next_cursor.as_deref(), Some("1"));
+    assert_eq!(first.next_cursor.as_deref(), Some("before:2"));
 
     let second = provider_detail(
         &mut provider,
@@ -86,6 +86,51 @@ fn codex_session_provider_detail_paginates_with_cursor() {
     assert_eq!(second.messages.len(), 1);
     assert_eq!(second.messages[0].content, "用户问题");
     assert_eq!(second.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_detail_cursor_ignores_appended_messages() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_codex_session_fixture(temp.path());
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+    let _ = provider_snapshot(&mut provider);
+
+    let first = provider_detail(&mut provider, "session-fixture", 1, None);
+    assert_eq!(first.messages[0].content, "助手回答");
+    let cursor = first.next_cursor.as_deref();
+
+    append_codex_assistant_message(&path, "追加回答");
+    let second = provider_detail(&mut provider, "session-fixture", 1, cursor);
+
+    // 旧 cursor 基于第一页最老消息行号，追加的新消息不能进入第二页。
+    assert_eq!(second.messages.len(), 1);
+    assert_eq!(second.messages[0].content, "用户问题");
+    assert_ne!(second.messages[0].content, first.messages[0].content);
+    assert_eq!(second.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_snapshot_reuses_unchanged_file_indexes() {
+    let temp = tempfile::tempdir().unwrap();
+    write_codex_session_fixture(temp.path());
+    write_codex_session_file(
+        temp.path(),
+        "rollout-2026-06-22-11111111-1111-1111-1111-111111111111.jsonl",
+        "session-cache-2",
+        "/tmp/cache-project-2",
+        "第二个问题",
+        "第二个回答",
+    );
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let _ = provider_snapshot(&mut provider);
+    let first_scan_count = provider.scan_count();
+    assert_eq!(first_scan_count, 2);
+
+    let _ = provider_snapshot(&mut provider);
+
+    // 文件签名未变化时复用单文件索引，后台 snapshot 不应重新逐行 parse。
+    assert_eq!(provider.scan_count(), first_scan_count);
 }
 
 #[test]
@@ -251,20 +296,51 @@ fn provider_detail(
 }
 
 fn write_codex_session_fixture(codex_home: &std::path::Path) -> std::path::PathBuf {
+    write_codex_session_file(
+        codex_home,
+        "rollout-2026-06-22-00000000-0000-0000-0000-000000000000.jsonl",
+        "session-fixture",
+        "/tmp/fixture-project",
+        "用户问题",
+        "助手回答",
+    )
+}
+
+fn write_codex_session_file(
+    codex_home: &std::path::Path,
+    filename: &str,
+    session_id: &str,
+    project_path: &str,
+    user_message: &str,
+    assistant_message: &str,
+) -> std::path::PathBuf {
     let day_dir = codex_home.join("sessions/2026/06/22");
     std::fs::create_dir_all(&day_dir).unwrap();
-    let path = day_dir.join("rollout-2026-06-22-00000000-0000-0000-0000-000000000000.jsonl");
+    let path = day_dir.join(filename);
     // fixture 覆盖 session_meta、user、assistant，并带上不应出现在详情里的原始字段。
     std::fs::write(
         &path,
-        concat!(
-            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
-            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}],\"secret\":\"不能泄露\"}}\n",
-            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}],\"raw_line\":\"不能泄露\"}}\n",
+        format!(
+            "{{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{session_id}\",\"cwd\":\"{project_path}\"}}}}\n\
+             {{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{user_message}\"}}],\"secret\":\"不能泄露\"}}}}\n\
+             {{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"{assistant_message}\"}}],\"raw_line\":\"不能泄露\"}}}}\n",
         ),
     )
     .unwrap();
     path
+}
+
+fn append_codex_assistant_message(path: &std::path::Path, content: &str) {
+    use std::io::Write;
+
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    // 追加消息用于复现活跃文件增长时，旧 cursor 不应被新行扰动。
+    writeln!(
+        file,
+        "{{\"timestamp\":\"2026-06-22T01:00:03Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"{content}\"}}]}}}}"
+    )
+    .unwrap();
+    file.sync_all().unwrap();
 }
 
 fn test_sqlite_path(name: &str) -> std::path::PathBuf {
