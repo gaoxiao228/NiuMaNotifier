@@ -712,8 +712,8 @@ impl ToolSessionDetailProvider for SessionProviderDetailClient {
         let result = self.client.session_detail(SessionDetailParams {
             tool: tool.clone(),
             session_id: session_id.to_string(),
-            // API 层已经完成缺省值和上限归一化；RPC 仍按既有协议字段传给 provider。
-            limit: Some(limit),
+            // API 层已经完成缺省值和上限归一化，RPC 只把确定的分页数量传给 provider。
+            limit,
             cursor,
         })?;
         Ok(result.detail)

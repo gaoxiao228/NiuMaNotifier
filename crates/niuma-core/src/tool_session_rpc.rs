@@ -128,8 +128,8 @@ pub struct SessionSnapshotResult {
 pub struct SessionDetailParams {
     pub tool: ToolKind,
     pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
+    // 调用方在发送 RPC 前必须完成缺省值和上限归一化，provider 只接收确定的分页数量。
+    pub limit: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }

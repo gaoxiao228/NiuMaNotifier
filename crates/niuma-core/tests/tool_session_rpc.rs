@@ -14,7 +14,7 @@ fn tool_session_rpc_request_roundtrips_session_detail_params() {
         SessionDetailParams {
             tool: ToolKind::Codex,
             session_id: "s1".to_string(),
-            limit: Some(20),
+            limit: 20,
             cursor: Some("cursor-1".to_string()),
         },
     )
@@ -30,7 +30,7 @@ fn tool_session_rpc_request_roundtrips_session_detail_params() {
         SessionDetailParams {
             tool: ToolKind::Codex,
             session_id: "s1".to_string(),
-            limit: Some(20),
+            limit: 20,
             cursor: Some("cursor-1".to_string()),
         }
     );

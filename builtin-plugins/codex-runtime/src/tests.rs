@@ -65,7 +65,7 @@ fn codex_session_provider_stub_returns_not_found_for_detail() {
         niuma_core::tool_session_rpc::SessionDetailParams {
             tool: ToolKind::Codex,
             session_id: "missing-session".to_string(),
-            limit: None,
+            limit: 20,
             cursor: None,
         },
     )
