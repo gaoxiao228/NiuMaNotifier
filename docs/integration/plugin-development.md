@@ -90,6 +90,13 @@ Plugin process requirements:
 - `stdout` and `stderr` are not currently shown as user-visible logs. During development, write debug logs to the plugin data directory if needed.
 - Plugins declaring `tool_session_list_provider` or `tool_session_detail_provider` use `stdout` as the provider JSON Lines RPC channel. These plugins must not write normal logs to `stdout`; write normal logs to `stderr` or a log file under `NIUMA_PLUGIN_DATA_DIR`.
 
+Listener switch behavior:
+
+- A `tool` plugin with `event_watcher` is controlled by that tool's listener switch.
+- If the same process also declares `tool_session_list_provider` and `tool_session_detail_provider`, disabling the tool listener disables the provider as well.
+- When a tool listener is disabled, the host clears the cached session snapshot and event cursor state for that tool. Reader plugins should expect `/api/v1/session_list` and `/api/v1/session_project_groups` to return no sessions for that tool.
+- If a reader plugin asks for a detail that is no longer available because the provider is disabled or stopped, the host returns a business failure envelope instead of stale conversation content.
+
 ## Manifest
 
 Tool watcher plugin example:
@@ -366,6 +373,28 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 | `active_only` | `false` | Whether to return only active sessions. |
 | `limit` | `100` | Maximum number of returned sessions. |
 
+Successful `session_list` response:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "tool": "codex",
+        "session_id": "session-1",
+        "project_path": "/repo",
+        "project_name": "repo",
+        "is_subagent": false,
+        "normalized_session_id": "session-1",
+        "status": "active"
+      }
+    ]
+  }
+}
+```
+
 `session_project_groups` groups the provider snapshot by project path and returns project -> normalized session -> optional raw session details. Normalized sessions collect subagents under `normalized_session_id`; raw subagent details are not expanded by default, but parent session `updated_at` still includes subagent activity. Project group counters use explicit names: `normalized_session_count` is the number of normalized sessions, `raw_session_count` is the number of raw session files, and `subagent_count` is the number of raw session files produced by subagents. Common query parameters:
 
 | Parameter | Default | Description |
@@ -375,6 +404,31 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 | `include_subagents` | `false` | Whether to expand raw session details under each normalized session. |
 | `page` | `1` | Project group page number. |
 | `page_size` | `20` | Project group page size, capped at `100`. |
+
+Successful `session_project_groups` response uses the standard pagination shape:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "tool": "codex",
+        "project_path": "/repo",
+        "project_name": "repo",
+        "normalized_session_count": 1,
+        "raw_session_count": 2,
+        "subagent_count": 1,
+        "sessions": []
+      }
+    ],
+    "page": 1,
+    "page_size": 20,
+    "total": 1
+  }
+}
+```
 
 `session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`.
 
@@ -391,6 +445,12 @@ Successful responses still use the standard envelope:
   }
 }
 ```
+
+When the corresponding tool listener is disabled:
+
+- `session_list` and `session_project_groups` return successful empty lists for that tool because the host clears the provider snapshot.
+- `session_detail` returns a business failure envelope if the requested session is unavailable. Current implementations may report `session_id 不存在` after the snapshot has been cleared, or a provider-specific message such as `session_provider_disabled` while the provider process is still alive.
+- Reader plugins should treat both cases as "session content is currently unavailable" and should not fall back to reading raw tool session files.
 
 NiumaNotifier v1 does not use plugin tokens for API authentication. `tool_session_list_reader` and `tool_session_detail_reader` are development-contract capabilities, UI display markers, and future authentication hooks. `tool_session_detail_reader` covers AI conversation content and should be displayed as sensitive in plugin management. Plugins should still connect only to the trusted local Local API.
 
@@ -434,6 +494,17 @@ Failure response:
   }
 }
 ```
+
+Provider RPC failures are provider-level failures, not Local API envelopes. The host converts provider errors into the standard Local API response shape when a reader calls `/api/v1/session_detail`. Common provider error codes:
+
+| Error code | Meaning |
+| --- | --- |
+| `method_not_found` | Unknown provider method. |
+| `invalid_params` | Request parameters cannot be parsed or do not match the expected tool. |
+| `session_not_found` | The requested raw `session_id` does not exist in the provider snapshot or file index. |
+| `stale_session_file` | The raw file changed, was truncated, or no longer matches the indexed session. |
+| `session_provider_disabled` | The corresponding tool listener is disabled, so session list/detail is intentionally unavailable. |
+| `provider_internal_error` | Unexpected provider failure. |
 
 Current provider methods:
 
@@ -490,6 +561,8 @@ Provider implementation guidance:
 - If a raw file is truncated, replaced, or changed, rebuild the index. Do not use an old cursor to read the wrong session.
 - Keep `session_id` as the raw session ID for subagents. Do not replace it with the parent ID. Use `normalized_session_id` for aggregation.
 - When the corresponding tool listener is disabled, the host stops the provider process and clears the tool snapshot. Reader plugins must not assume old session lists remain readable after the listener is disabled.
+- If the provider process stays alive in a combined watcher/provider runtime while the listener is disabled, `session_snapshot` should return an empty session list and `session_detail` should fail with `session_provider_disabled`.
+- Combined watcher/provider plugins should share one file repository or equivalent cache when possible, but must keep event projection separate from session reading. Provider code should not emit `NiumaEvent` objects directly; watcher code should continue to report events through `/api/v1/plugin-events`.
 
 ## Tool Event Reporting
 

@@ -77,7 +77,9 @@ See the integration guide for endpoint details, state fields, reset behavior, an
 
 NiuMaNotifier supports local trusted plugins described by `plugin.json`. Plugins can watch external AI coding tools, consume event streams for notification delivery, or consume the main state stream for external status indicators.
 
-Plugins communicate with the main app through the Local API, for example `http://127.0.0.1:27874`, and should not directly write NiuMaNotifier persistent files. See the plugin development guides for manifest fields, startup environment variables, Local API contracts, SSE handling, notification result writeback, debugging, and development checklists:
+Plugins communicate with the main app through the Local API, for example `http://127.0.0.1:27874`, and should not directly write NiuMaNotifier persistent files. Tool plugins can also provide normalized session lists and message details through the provider JSON Lines RPC; reader plugins should read those sessions through the host APIs (`/api/v1/session_list`, `/api/v1/session_project_groups`, and `/api/v1/session_detail`) instead of reading Codex or other tool session files directly.
+
+See the plugin development guides for manifest fields, startup environment variables, Local API contracts, SSE handling, tool session provider / reader contracts, notification result writeback, debugging, and development checklists:
 
 - [English plugin development guide](./docs/integration/plugin-development.md)
 - [中文插件开发说明](./docs/integration/plugin-development_zh.md)

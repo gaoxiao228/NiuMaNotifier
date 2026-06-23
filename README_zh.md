@@ -67,7 +67,9 @@ target/release/bundle/dmg/
 
 NiuMaNotifier 提供本机 SSE 状态流，方便外部状态面板、自动化脚本和通知代理接入。默认 Local API 地址为 `http://127.0.0.1:27874`，主状态流路径为 `/api/v1/state/stream`。
 
-接口详情、状态字段、reset 行为和示例请参考：
+插件通过 Local API 与主程序通信，不应直接写 NiumaNotifier 的持久化文件。工具插件也可以通过 provider JSON Lines RPC 向宿主提供归一化 session 列表和消息详情；reader 插件应通过宿主接口（`/api/v1/session_list`、`/api/v1/session_project_groups`、`/api/v1/session_detail`）读取这些 session，不要直接读取 Codex 或其他工具的 session 文件。
+
+接口详情、状态字段、reset 行为、插件 manifest、启动环境变量、Local API、SSE、工具 session provider / reader 契约和示例请参考：
 
 - [中文 SSE 接入说明](./docs/integration/sse-external-integration_zh.md)
 - [中文插件开发说明](./docs/integration/plugin-development_zh.md)
