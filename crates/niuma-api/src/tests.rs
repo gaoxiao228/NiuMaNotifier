@@ -20,7 +20,7 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 use crate::tool_sessions::{ToolSessionListQuery, ToolSessionRegistry};
-use crate::{app, app_with_bus, app_with_bus_and_plugin_dir};
+use crate::{app, app_with_bus, app_with_bus_and_plugin_dir, app_with_tool_sessions};
 
 #[tokio::test]
 async fn post_event_then_get_main_state_returns_waiting_approval() {
@@ -2087,6 +2087,179 @@ async fn plugin_notification_test_results_rejects_non_notification_plugin() {
 
     assert_eq!(value["code"], 100101);
     assert!(value["message"].as_str().unwrap().contains("不是通知插件"));
+}
+
+#[tokio::test]
+async fn session_list_returns_snapshot_with_filters() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![
+            tool_session_item("codex-active", ToolKind::Codex, 30, 20, true, false),
+            tool_session_item("codex-inactive", ToolKind::Codex, 40, 30, false, false),
+            tool_session_item("codex-subagent", ToolKind::Codex, 50, 40, true, true),
+        ],
+    );
+    registry.replace_snapshot(
+        ToolKind::ClaudeCode,
+        vec![tool_session_item(
+            "claude-active",
+            ToolKind::ClaudeCode,
+            60,
+            50,
+            true,
+            false,
+        )],
+    );
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_list_api_filters")),
+        registry,
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_list?tool=codex&include_subagents=true&active_only=true&limit=10",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(
+        value["data"]["list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["session_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["codex-subagent", "codex-active"]
+    );
+    assert_eq!(value["data"]["list"][0]["tool"], "codex");
+}
+
+#[tokio::test]
+async fn session_list_invalid_limit_returns_standard_400() {
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_list_invalid_limit")),
+        ToolSessionRegistry::new(),
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_list?limit=abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 400);
+    assert_ne!(value["code"], 0);
+    assert!(value["data"].is_null());
+    assert!(value["message"].as_str().unwrap().contains("limit"));
+}
+
+#[tokio::test]
+async fn session_detail_missing_tool_session_id_business_failure() {
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_missing")),
+        ToolSessionRegistry::new(),
+    );
+
+    for uri in [
+        "/api/v1/session_detail?session_id=s1",
+        "/api/v1/session_detail?tool=codex",
+        "/api/v1/session_detail?tool=&session_id=s1",
+        "/api/v1/session_detail?tool=codex&session_id=",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let value = response_json(response).await;
+
+        assert_eq!(status, 200);
+        assert_eq!(value["code"], 100101);
+        assert!(value["data"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn session_detail_requires_existing_snapshot_session() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "existing-session",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_missing_snapshot")),
+        registry,
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail?tool=codex&session_id=missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("session_id 不存在"));
+}
+
+#[tokio::test]
+async fn session_detail_existing_snapshot_provider_not_ready_business_failure() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "existing-session",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_provider_not_ready")),
+        registry,
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail?tool=codex&session_id=existing-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 100101);
+    assert_eq!(value["message"], "session detail provider 尚未就绪");
 }
 
 #[test]

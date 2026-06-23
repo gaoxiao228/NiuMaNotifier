@@ -1,4 +1,5 @@
 use axum::body::Bytes;
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use chrono::Utc;
@@ -14,7 +15,7 @@ use niuma_core::dashboard::DashboardService;
 use niuma_core::main_state::MainStateService;
 use niuma_core::models::{
     ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, EventType,
-    NiumaEvent, ToolId,
+    NiumaEvent, ToolId, ToolKind,
 };
 use niuma_core::notification_store::{NotificationRecordStatus, PluginNotificationResult};
 use niuma_core::plugin::{
@@ -29,6 +30,7 @@ use serde_json::json;
 
 use crate::response::json_response;
 use crate::state::AppState;
+use crate::tool_sessions::ToolSessionListQuery;
 
 const RESET_CONFIRMATION: &str = "RESET_NIUMA_STATE";
 
@@ -95,6 +97,20 @@ pub(crate) struct ApprovalRequestsQuery {
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ApprovalDecisionQuery {
     request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct SessionListQuery {
+    tool: Option<String>,
+    include_subagents: Option<bool>,
+    active_only: Option<bool>,
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct SessionDetailQuery {
+    tool: Option<String>,
+    session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -185,6 +201,102 @@ pub(crate) async fn get_runtime_state_list(State(state): State<AppState>) -> Res
         Ok(items) => json_response(200, ApiResponse::ok(json!({ "list": items }))),
         Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
     }
+}
+
+pub(crate) async fn get_session_list(
+    State(state): State<AppState>,
+    query: Result<Query<SessionListQuery>, QueryRejection>,
+) -> Response {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterType,
+                    format!("查询参数类型错误（limit/include_subagents/active_only）：{error}"),
+                ),
+            );
+        }
+    };
+
+    let query = ToolSessionListQuery {
+        // 空 tool 等价于未传，避免生成不可见的空自定义工具过滤条件。
+        tool: query
+            .tool
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty()),
+        include_subagents: query.include_subagents.unwrap_or(false),
+        active_only: query.active_only.unwrap_or(false),
+        limit: query.limit,
+    };
+
+    match state.tool_sessions.list(query) {
+        Ok(items) => json_response(200, ApiResponse::ok(json!({ "list": items }))),
+        Err(error) => json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+        ),
+    }
+}
+
+pub(crate) async fn get_session_detail(
+    State(state): State<AppState>,
+    query: Result<Query<SessionDetailQuery>, QueryRejection>,
+) -> Response {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterType,
+                    format!("查询参数类型错误：{error}"),
+                ),
+            );
+        }
+    };
+
+    let Some(tool) = required_query_value(query.tool) else {
+        return json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, "tool 不能为空"),
+        );
+    };
+    let Some(session_id) = required_query_value(query.session_id) else {
+        return json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, "session_id 不能为空"),
+        );
+    };
+
+    let tool = ToolKind::from_id(tool);
+    if state
+        .tool_sessions
+        .find_session(&tool, &session_id)
+        .is_none()
+    {
+        return json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, "session_id 不存在"),
+        );
+    }
+
+    // Task 6 才接 provider RPC；当前只允许已有 snapshot 会话进入这里。
+    json_response(
+        200,
+        ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            "session detail provider 尚未就绪",
+        ),
+    )
+}
+
+fn required_query_value(value: Option<String>) -> Option<String> {
+    // GET 查询参数传空字符串时按业务参数缺失处理，保持 200 + 业务失败 envelope。
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) async fn post_event(State(state): State<AppState>, body: Bytes) -> Response {
