@@ -1,6 +1,8 @@
 use chrono::{TimeZone, Utc};
 use niuma_core::models::ToolKind;
-use niuma_core::tool_session::{ToolSessionListItem, ToolSessionStatus};
+use niuma_core::tool_session::{
+    ToolSessionListItem, ToolSessionNormalizationStatus, ToolSessionScope, ToolSessionStatus,
+};
 use niuma_core::tool_session_rpc::{
     ProviderRpcNotification, ProviderRpcRequest, ProviderRpcResponse, SessionDetailParams,
     SessionSnapshotResult,
@@ -87,6 +89,11 @@ fn sample_session(session_id: &str) -> ToolSessionListItem {
         is_active: true,
         is_subagent: false,
         parent_session_id: None,
+        normalized_session_id: Some(session_id.to_string()),
+        session_scope: Some(ToolSessionScope::Main),
+        agent_nickname: None,
+        agent_role: None,
+        normalization_status: Some(ToolSessionNormalizationStatus::Resolved),
         status: ToolSessionStatus::Active,
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::codex::session_protocol::{detect_session_protocol_family, CodexProtocolFamily};
-use niuma_core::models::{CompletionReason, EventType, FailureReason};
+use niuma_core::models::{CompletionReason, EventSessionScope, EventType, FailureReason};
 use std::io::Write;
 
 #[test]
@@ -732,7 +732,7 @@ fn subagent_session_meta_exposes_parent_without_overwriting_file_session() {
     let mut parser = CodexJsonlParser::default();
     parser
         .parse_line(
-            r#"{"type":"session_meta","payload":{"id":"child-session","cwd":"/tmp/demo","thread_source":"subagent","parent_thread_id":"parent-session"}}"#,
+            r#"{"type":"session_meta","payload":{"id":"child-session","cwd":"/tmp/demo","thread_source":"subagent","parent_thread_id":"parent-session","agent_nickname":"Jason","agent_role":"default"}}"#,
             "rollout-child.jsonl",
         )
         .unwrap();
@@ -753,6 +753,13 @@ fn subagent_session_meta_exposes_parent_without_overwriting_file_session() {
 
     assert_eq!(event.session_id, "child-session");
     assert_eq!(event.parent_session_id.as_deref(), Some("parent-session"));
+    assert_eq!(
+        event.normalized_session_id.as_deref(),
+        Some("parent-session")
+    );
+    assert_eq!(event.session_scope, Some(EventSessionScope::Subagent));
+    assert_eq!(event.agent_nickname.as_deref(), Some("Jason"));
+    assert_eq!(event.agent_role.as_deref(), Some("default"));
 }
 
 #[test]

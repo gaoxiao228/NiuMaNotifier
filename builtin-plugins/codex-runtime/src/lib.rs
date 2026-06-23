@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::codex::log_watcher::{
     codex_internal_log_path, codex_log_schema_available, CodexLogScanner,
 };
-use crate::codex::session_watcher::CodexSessionScanner;
+use crate::codex::session_event_cursor::CodexSessionScanner;
 #[cfg(test)]
 use chrono::Utc;
 use niuma_core::config;
@@ -77,6 +77,26 @@ pub fn run_from_env() {
             std::process::exit(1);
         }
     }
+}
+
+pub fn run_combined_from_env() {
+    start_parent_watchdog_from_env();
+    let event_sink = match LocalApiCodexEventSink::from_env() {
+        Ok(event_sink) => event_sink,
+        Err(error) => {
+            eprintln!("NiumaNotifier Codex plugin process not started: {error}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = thread::Builder::new()
+        .name("codex-watcher-runtime".to_string())
+        .spawn(move || run_runtime(Box::new(event_sink), None))
+    {
+        eprintln!("NiumaNotifier Codex watcher runtime not started: {error}");
+        std::process::exit(1);
+    }
+    // 合并插件后 stdout 是 provider JSON Lines RPC 通道，主线程专门服务 provider。
+    session_provider::run_stdio_session_provider();
 }
 
 fn start_parent_watchdog_from_env() {

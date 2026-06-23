@@ -29,11 +29,12 @@ fn fallback_scan_interval_keeps_notify_path_observable() {
 }
 
 #[test]
-fn codex_session_provider_binary_target_is_declared() {
+fn codex_plugin_binary_is_combined_runtime() {
     let cargo_toml = include_str!("../Cargo.toml");
 
-    // 内置 provider 由桌面运行时直接启动，workspace 必须声明可编译的 bin target。
-    assert!(cargo_toml.contains("name = \"niuma-codex-session-provider\""));
+    // 内置 Codex watcher 与 session provider 共用一个插件进程。
+    assert!(cargo_toml.contains("name = \"niuma-codex-plugin\""));
+    assert!(!cargo_toml.contains("name = \"niuma-codex-session-provider\""));
 }
 
 #[test]
@@ -54,15 +55,165 @@ fn codex_session_provider_snapshot_discovers_fixture_and_detail_returns_newest_f
     assert_eq!(session.file_path, path.to_string_lossy());
     assert!(!session.is_subagent);
     assert_eq!(session.parent_session_id, None);
+    assert_eq!(
+        session.normalized_session_id.as_deref(),
+        Some("session-fixture")
+    );
+    assert_eq!(
+        session.session_scope,
+        Some(niuma_core::tool_session::ToolSessionScope::Main)
+    );
 
     let detail = provider_detail(&mut provider, "session-fixture", 20, None);
 
     assert_eq!(detail.session_id, "session-fixture");
     assert_eq!(detail.project_path, "/tmp/fixture-project");
     assert_eq!(detail.project_name, "fixture-project");
+    assert!(!detail.is_subagent);
+    assert_eq!(
+        detail.normalized_session_id.as_deref(),
+        Some("session-fixture")
+    );
     assert_eq!(detail.messages[0].content, "助手回答");
     assert_eq!(detail.messages[1].content, "用户问题");
     assert_eq!(detail.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_exposes_subagent_identity_without_overwriting_child_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join("rollout-2026-06-22-11111111-1111-1111-1111-111111111111.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child-session\",\"cwd\":\"/tmp/demo\",\"thread_source\":\"subagent\",\"parent_thread_id\":\"parent-session\",\"agent_nickname\":\"Jason\",\"agent_role\":\"default\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"parent-session\",\"cwd\":\"/tmp/demo\",\"thread_source\":\"user\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"子代理回答\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "child-session")
+        .expect("subagent session should keep child identity");
+
+    assert!(session.is_subagent);
+    assert_eq!(session.parent_session_id.as_deref(), Some("parent-session"));
+    assert_eq!(
+        session.normalized_session_id.as_deref(),
+        Some("parent-session")
+    );
+    assert_eq!(
+        session.session_scope,
+        Some(niuma_core::tool_session::ToolSessionScope::Subagent)
+    );
+    assert_eq!(session.agent_nickname.as_deref(), Some("Jason"));
+    assert_eq!(session.agent_role.as_deref(), Some("default"));
+    assert_eq!(
+        session.normalization_status,
+        Some(niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved)
+    );
+
+    let detail = provider_detail(&mut provider, "child-session", 20, None);
+
+    assert!(detail.is_subagent);
+    assert_eq!(detail.parent_session_id.as_deref(), Some("parent-session"));
+    assert_eq!(
+        detail.normalized_session_id.as_deref(),
+        Some("parent-session")
+    );
+    assert_eq!(detail.agent_nickname.as_deref(), Some("Jason"));
+    assert_eq!(detail.messages[0].content, "子代理回答");
+}
+
+#[test]
+fn codex_session_provider_reads_nested_subagent_parent_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    std::fs::write(
+        day_dir.join("rollout-2026-06-22-22222222-2222-2222-2222-222222222222.jsonl"),
+        concat!(
+            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"nested-child\",\"cwd\":\"/tmp/demo\",\"thread_source\":\"subagent\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"nested-parent\"}}}}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"嵌套 parent\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "nested-child")
+        .expect("nested parent session should be discovered");
+
+    assert!(session.is_subagent);
+    assert_eq!(session.parent_session_id.as_deref(), Some("nested-parent"));
+    assert_eq!(
+        session.normalized_session_id.as_deref(),
+        Some("nested-parent")
+    );
+}
+
+#[test]
+fn watcher_and_provider_share_subagent_identity_semantics() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join("rollout-2026-06-22-shared-identity.jsonl");
+    let meta_line = r#"{"timestamp":"2026-06-22T01:00:00Z","type":"session_meta","payload":{"id":"child-session","cwd":"/tmp/demo","thread_source":"subagent","parent_thread_id":"parent-session","agent_nickname":"Jason","agent_role":"default"}}"#;
+    let event_line = r#"{"timestamp":"2026-06-22T01:00:01Z","type":"event_msg","payload":{"type":"task_started"}}"#;
+    std::fs::write(&path, format!("{meta_line}\n{event_line}\n")).unwrap();
+
+    let mut watcher_parser = codex::session_watcher::CodexJsonlParser::default();
+    assert!(watcher_parser
+        .parse_line(meta_line, &path.to_string_lossy())
+        .unwrap()
+        .is_none());
+    let watcher_event = watcher_parser
+        .parse_line(event_line, &path.to_string_lossy())
+        .unwrap()
+        .expect("task_started should produce watcher event");
+
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+    let snapshot = provider_snapshot(&mut provider);
+    let provider_session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "child-session")
+        .expect("provider should discover child session");
+
+    assert_eq!(
+        watcher_event.parent_session_id.as_deref(),
+        provider_session.parent_session_id.as_deref()
+    );
+    assert_eq!(
+        watcher_event.normalized_session_id.as_deref(),
+        provider_session.normalized_session_id.as_deref()
+    );
+    assert_eq!(
+        watcher_event.session_scope,
+        Some(niuma_core::models::EventSessionScope::Subagent)
+    );
+    assert_eq!(
+        provider_session.session_scope,
+        Some(niuma_core::tool_session::ToolSessionScope::Subagent)
+    );
+    assert_eq!(
+        watcher_event.agent_nickname.as_deref(),
+        provider_session.agent_nickname.as_deref()
+    );
+    assert_eq!(
+        watcher_event.agent_role.as_deref(),
+        provider_session.agent_role.as_deref()
+    );
 }
 
 #[test]
@@ -493,6 +644,23 @@ fn discovery_includes_recently_modified_file_from_older_session_day() {
     let files = recent_jsonl_files(&codex_home, 8);
 
     assert!(files.contains(&old_active));
+    let _ = std::fs::remove_dir_all(codex_home);
+}
+
+#[test]
+fn codex_session_day_discovery_returns_recent_dirs_first() {
+    let codex_home =
+        std::env::temp_dir().join(format!("niuma-codex-day-discovery-{}", std::process::id()));
+    let older_day = codex_home.join("sessions/2026/06/10");
+    let newer_day = codex_home.join("sessions/2026/06/12");
+    let _ = std::fs::remove_dir_all(&codex_home);
+    std::fs::create_dir_all(&older_day).unwrap();
+    std::fs::create_dir_all(&newer_day).unwrap();
+
+    let dirs = crate::codex::session_repository::codex_session_day_dirs(&codex_home);
+
+    assert_eq!(dirs.first(), Some(&newer_day));
+    assert!(dirs.contains(&older_day));
     let _ = std::fs::remove_dir_all(codex_home);
 }
 

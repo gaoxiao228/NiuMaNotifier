@@ -19,7 +19,6 @@ const LOCAL_API_START_DELAY: Duration = Duration::ZERO;
 const WATCHER_START_DELAY: Duration = Duration::from_secs(1);
 const STALE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 const CODEX_PLUGIN_BINARY_NAME: &str = "niuma-codex-plugin";
-const CODEX_SESSION_PROVIDER_BINARY_NAME: &str = "niuma-codex-session-provider";
 const BARK_PLUGIN_BINARY_NAME: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_BINARY_NAME: &str = "niuma-plugin-ntfy";
 
@@ -97,14 +96,6 @@ fn configure_builtin_codex_plugin_command(app: &tauri::App) {
     );
 }
 
-fn configure_builtin_codex_session_provider_command(app: &tauri::App) {
-    configure_builtin_plugin_command(
-        app,
-        niuma_core::plugin::CODEX_SESSION_PROVIDER_COMMAND_ENV,
-        CODEX_SESSION_PROVIDER_BINARY_NAME,
-    );
-}
-
 fn configure_builtin_bark_plugin_command(app: &tauri::App) {
     configure_builtin_plugin_command(
         app,
@@ -177,7 +168,6 @@ fn main() {
                     eprintln!("NiumaNotifier language preference not restored: {error}");
                 }
                 configure_builtin_codex_plugin_command(app);
-                configure_builtin_codex_session_provider_command(app);
                 configure_builtin_bark_plugin_command(app);
                 configure_builtin_ntfy_plugin_command(app);
                 let _tray = tray::register_tray(
@@ -367,6 +357,10 @@ mod tests {
             tool: ToolKind::Codex,
             session_id: "session-1".to_string(),
             parent_session_id: None,
+            normalized_session_id: None,
+            session_scope: None,
+            agent_nickname: None,
+            agent_role: None,
             project_path: "/tmp/demo".to_string(),
             project_name: "demo".to_string(),
             event_type: EventType::SessionStarted,

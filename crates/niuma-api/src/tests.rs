@@ -4,12 +4,12 @@ use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
 use niuma_core::listener_config::ListenerConfig;
 use niuma_core::models::{
-    ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, EventType, NiumaEvent, ToolKind,
+    ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, EventSessionScope, EventType, NiumaEvent,
+    ToolKind,
 };
 use niuma_core::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
 };
-use niuma_core::plugin::BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID;
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
@@ -559,8 +559,8 @@ async fn watcher_approval_after_hook_is_suppressed() {
 }
 
 #[tokio::test]
-async fn watcher_subagent_approval_after_hook_is_suppressed_by_parent_session() {
-    let store = NiumaStore::new(test_path("api_hook_first_suppresses_subagent_watcher"));
+async fn watcher_subagent_approval_after_hook_is_suppressed_by_normalized_session() {
+    let store = NiumaStore::new(test_path("api_hook_first_suppresses_normalized_watcher"));
     enable_codex_listener(&store);
     let router = app(store);
 
@@ -581,7 +581,9 @@ async fn watcher_subagent_approval_after_hook_is_suppressed_by_parent_session() 
     );
     watcher.source = "codex-session-file".to_string();
     watcher.session_id = "subagent-session".to_string();
-    watcher.parent_session_id = Some("s1".to_string());
+    watcher.parent_session_id = Some("intermediate-parent".to_string());
+    watcher.normalized_session_id = Some("s1".to_string());
+    watcher.session_scope = Some(EventSessionScope::Subagent);
     watcher.summary = "exec_command: cargo test".to_string();
     watcher.content = Some("exec_command: cargo test".to_string());
     watcher.payload_ref = Some("codex_watcher_approval:subagent-late".to_string());
@@ -1076,28 +1078,27 @@ async fn plugins_list_returns_builtin_plugin_status() {
             && plugin["config_schema"]
                 .as_array()
                 .is_some_and(|schema| !schema.is_empty())));
-    assert!(value["data"]["list"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|plugin| plugin["id"] == "builtin-codex-session-provider"
-            && plugin["tool_id"] == "codex"
-            && plugin["capabilities"]
-                .as_array()
-                .is_some_and(|capabilities| capabilities
-                    .iter()
-                    .any(|capability| capability == "tool_session_list_provider"))
-            && plugin["capabilities"]
-                .as_array()
-                .is_some_and(|capabilities| capabilities
-                    .iter()
-                    .any(|capability| capability == "tool_session_detail_provider"))));
     let codex = value["data"]["list"]
         .as_array()
         .unwrap()
         .iter()
         .find(|plugin| plugin["id"] == "builtin-codex")
         .unwrap();
+    assert!(codex["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities
+            .iter()
+            .any(|capability| capability == "event_watcher")));
+    assert!(codex["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities
+            .iter()
+            .any(|capability| capability == "tool_session_list_provider")));
+    assert!(codex["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities
+            .iter()
+            .any(|capability| capability == "tool_session_detail_provider")));
     assert!(codex["management_actions"]
         .as_array()
         .unwrap()
@@ -1382,21 +1383,25 @@ async fn plugin_enabled_updates_tool_listener_config() {
 }
 
 #[tokio::test]
-async fn plugin_enabled_updates_session_provider_map_without_touching_listener_config() {
+async fn plugin_enabled_updates_external_session_provider_map_without_touching_listener_config() {
     let store = NiumaStore::new(test_path("plugin_enabled_session_provider"));
     store
         .save_listener_config(&ListenerConfig::default().with_tool_enabled(&ToolKind::Codex, true))
         .unwrap();
     let bus = RuntimeEventBus::new();
     let mut receiver = bus.subscribe();
-    let router = app_with_bus_and_plugin_dir(
-        store.clone(),
-        bus,
-        test_dir("plugin_enabled_session_provider_dir"),
+    let plugin_root = test_dir("plugin_enabled_session_provider_dir");
+    let installed_dir = plugin_root.join("external-demo-session-provider");
+    std::fs::create_dir_all(&installed_dir).unwrap();
+    write_session_provider_plugin(
+        &installed_dir,
+        "external-demo-session-provider",
+        "demo_tool",
     );
+    let router = app_with_bus_and_plugin_dir(store.clone(), bus, plugin_root);
 
     let body = serde_json::json!({
-        "plugin_id": BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID,
+        "plugin_id": "external-demo-session-provider",
         "enabled": false
     });
     let response = router
@@ -1422,7 +1427,7 @@ async fn plugin_enabled_updates_session_provider_map_without_touching_listener_c
         store
             .plugin_enabled_map()
             .unwrap()
-            .get(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID),
+            .get("external-demo-session-provider"),
         Some(&false)
     );
     assert!(value["data"]["plugins"]
@@ -1430,8 +1435,7 @@ async fn plugin_enabled_updates_session_provider_map_without_touching_listener_c
         .unwrap()
         .iter()
         .any(
-            |plugin| plugin["id"] == BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID
-                && plugin["enabled"] == false
+            |plugin| plugin["id"] == "external-demo-session-provider" && plugin["enabled"] == false
         ));
     assert_eq!(
         receiver.try_recv().unwrap(),
@@ -2181,6 +2185,82 @@ async fn session_list_returns_snapshot_with_filters() {
 }
 
 #[tokio::test]
+async fn session_project_groups_returns_project_normalized_sessions() {
+    let registry = ToolSessionRegistry::new();
+    let main = tool_session_item("parent-session", ToolKind::Codex, 30, 20, false, false);
+    let mut subagent = tool_session_item("child-session", ToolKind::Codex, 50, 50, true, true);
+    subagent.agent_nickname = Some("Jason".to_string());
+    subagent.agent_role = Some("default".to_string());
+    let other_project = tool_session_item_with_project(
+        "other-session",
+        ToolKind::Codex,
+        80,
+        80,
+        true,
+        false,
+        "/tmp/other",
+        "other",
+    );
+    registry.replace_snapshot(ToolKind::Codex, vec![main, subagent, other_project]);
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_project_groups_api")),
+        registry,
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_project_groups?tool=codex&project_path=/tmp/demo&include_subagents=true&page=1&page_size=10",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["page"], 1);
+    assert_eq!(value["data"]["page_size"], 10);
+    assert_eq!(value["data"]["total"], 1);
+    assert_eq!(value["data"]["list"][0]["project_path"], "/tmp/demo");
+    assert_eq!(value["data"]["list"][0]["normalized_session_count"], 1);
+    assert_eq!(value["data"]["list"][0]["raw_session_count"], 2);
+    assert_eq!(value["data"]["list"][0]["subagent_count"], 1);
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["normalized_session_id"],
+        "parent-session"
+    );
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["primary_session_id"],
+        "parent-session"
+    );
+    assert_eq!(value["data"]["list"][0]["sessions"][0]["status"], "active");
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["raw_sessions"][1]["agent_nickname"],
+        "Jason"
+    );
+}
+
+#[tokio::test]
+async fn session_project_groups_zero_page_returns_business_failure_envelope() {
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_project_groups_zero_page")),
+        ToolSessionRegistry::new(),
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_project_groups?page=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("page"));
+}
+
+#[tokio::test]
 async fn session_list_invalid_limit_returns_standard_400() {
     let router = app_with_tool_sessions(
         NiumaStore::new(test_path("session_list_invalid_limit")),
@@ -2760,6 +2840,48 @@ fn tool_session_find_session_matches_tool_and_session_id() {
     assert_eq!(item.id, "claude_code:shared-session");
 }
 
+#[test]
+fn tool_session_project_groups_aggregates_subagents_under_normalized_session() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![
+            tool_session_item("parent-session", ToolKind::Codex, 30, 20, false, false),
+            tool_session_item("child-session", ToolKind::Codex, 50, 50, true, true),
+        ],
+    );
+
+    let page = registry
+        .project_groups(crate::tool_sessions::ToolSessionProjectGroupsQuery {
+            tool: Some("codex".to_string()),
+            include_subagents: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(page.total, 1);
+    assert_eq!(page.list[0].normalized_session_count, 1);
+    assert_eq!(page.list[0].raw_session_count, 2);
+    assert_eq!(page.list[0].subagent_count, 1);
+    assert_eq!(
+        page.list[0].sessions[0].normalized_session_id,
+        "parent-session"
+    );
+    assert_eq!(
+        page.list[0].sessions[0].primary_session_id,
+        "parent-session"
+    );
+    assert_eq!(page.list[0].sessions[0].status, ToolSessionStatus::Active);
+    assert_eq!(
+        page.list[0].sessions[0]
+            .raw_sessions
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
@@ -2845,6 +2967,10 @@ fn sample_event_with_type(
         tool: ToolKind::Codex,
         session_id: "s1".to_string(),
         parent_session_id: None,
+        normalized_session_id: None,
+        session_scope: None,
+        agent_nickname: None,
+        agent_role: None,
         project_path: "/tmp/demo".to_string(),
         project_name: "demo".to_string(),
         event_type,
@@ -2882,12 +3008,51 @@ fn tool_session_item(
         is_active,
         is_subagent,
         parent_session_id: is_subagent.then(|| "parent-session".to_string()),
+        normalized_session_id: Some(if is_subagent {
+            "parent-session".to_string()
+        } else {
+            session_id.to_string()
+        }),
+        session_scope: Some(if is_subagent {
+            niuma_core::tool_session::ToolSessionScope::Subagent
+        } else {
+            niuma_core::tool_session::ToolSessionScope::Main
+        }),
+        agent_nickname: None,
+        agent_role: None,
+        normalization_status: Some(
+            niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
+        ),
         status: if is_active {
             ToolSessionStatus::Active
         } else {
             ToolSessionStatus::Inactive
         },
     }
+}
+
+fn tool_session_item_with_project(
+    session_id: &str,
+    tool: ToolKind,
+    last_seen_at: i64,
+    modified_at: i64,
+    is_active: bool,
+    is_subagent: bool,
+    project_path: &str,
+    project_name: &str,
+) -> ToolSessionListItem {
+    let mut item = tool_session_item(
+        session_id,
+        tool,
+        last_seen_at,
+        modified_at,
+        is_active,
+        is_subagent,
+    );
+    item.project_path = project_path.to_string();
+    item.project_name = project_name.to_string();
+    item.file_path = format!("{project_path}/{session_id}.jsonl");
+    item
 }
 
 struct FakeDetailProvider {
@@ -2935,6 +3100,13 @@ fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {
         project_name: "demo".to_string(),
         is_subagent: false,
         parent_session_id: None,
+        normalized_session_id: Some(session_id.to_string()),
+        session_scope: Some(niuma_core::tool_session::ToolSessionScope::Main),
+        agent_nickname: None,
+        agent_role: None,
+        normalization_status: Some(
+            niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
+        ),
         // provider 已经按倒序返回消息，API 不能再重排。
         messages: vec![
             ToolSessionMessage {

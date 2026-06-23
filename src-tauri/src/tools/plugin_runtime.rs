@@ -1230,14 +1230,16 @@ mod tests {
         let registry = PluginRegistry::with_builtin_plugins();
         let manifests = managed_runtime_manifests(&registry);
 
-        assert_eq!(manifests.len(), 4);
-        assert!(manifests
+        assert_eq!(manifests.len(), 3);
+        let codex = manifests
             .iter()
-            .any(|manifest| manifest.id == "builtin-codex"
-                && manifest.source == PluginSource::Builtin));
-        assert!(manifests.iter().any(|manifest| manifest.id
-            == niuma_core::plugin::BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID
-            && manifest.source == PluginSource::Builtin));
+            .find(|manifest| manifest.id == "builtin-codex")
+            .unwrap();
+        assert_eq!(codex.source, PluginSource::Builtin);
+        assert!(codex.capabilities.contains(&PluginCapability::EventWatcher));
+        assert!(codex
+            .capabilities
+            .contains(&PluginCapability::ToolSessionListProvider));
         assert!(manifests
             .iter()
             .any(|manifest| manifest.id == "builtin-bark"
@@ -1989,6 +1991,20 @@ mod tests {
     }
 
     #[test]
+    fn merged_builtin_codex_uses_piped_stdio_mode() {
+        let manifest = PluginRegistry::with_builtin_plugins()
+            .plugin_by_id("builtin-codex")
+            .unwrap()
+            .clone();
+
+        // 合并后的 Codex 插件同时承载 provider RPC，stdout 不能再作为普通日志输出。
+        assert_eq!(
+            plugin_stdio_mode(&manifest),
+            PluginStdioMode::ProviderJsonLines
+        );
+    }
+
+    #[test]
     fn bark_plugin_config_payload_uses_plugin_config_store() {
         let store = NiumaStore::new(test_sqlite_path("bark_plugin_config_store"));
         let manifest = niuma_core::plugin::builtin_bark_manifest();
@@ -2183,6 +2199,13 @@ mod tests {
                 project_name: "demo".to_string(),
                 is_subagent: false,
                 parent_session_id: None,
+                normalized_session_id: Some(session_id.to_string()),
+                session_scope: Some(niuma_core::tool_session::ToolSessionScope::Main),
+                agent_nickname: None,
+                agent_role: None,
+                normalization_status: Some(
+                    niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
+                ),
                 messages: Vec::new(),
                 next_cursor: None,
             })

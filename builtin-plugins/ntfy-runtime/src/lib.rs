@@ -25,6 +25,8 @@ struct NiumaEvent {
     event_type: EventType,
     summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_scope: Option<EventSessionScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error_message: Option<String>,
@@ -48,6 +50,13 @@ enum EventType {
     ManualDismissed,
     SessionStaled,
     SessionActivity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EventSessionScope {
+    Main,
+    Subagent,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -173,6 +182,9 @@ fn notification_decision(event: &NiumaEvent) -> Option<NotificationMessage> {
             &failure_notification_body(event),
         )),
         EventType::AssistantMessageCompleted => {
+            if event.session_scope == Some(EventSessionScope::Subagent) {
+                return None;
+            }
             match event.completion_reason.as_ref() {
                 Some(CompletionReason::Interrupted) | Some(CompletionReason::RolledBack) => {
                     return None;
@@ -1032,6 +1044,26 @@ mod tests {
     }
 
     #[test]
+    fn notification_rule_skips_subagent_completion_event() {
+        let mut event = event_with_type(
+            "event-subagent-completed",
+            EventType::AssistantMessageCompleted,
+        );
+        event.completion_reason = Some(CompletionReason::Normal);
+        event.session_scope = Some(EventSessionScope::Subagent);
+
+        assert_eq!(notification_decision(&event), None);
+    }
+
+    #[test]
+    fn notification_rule_keeps_subagent_approval_event() {
+        let mut event = event_with_type("event-subagent-approval", EventType::ApprovalRequested);
+        event.session_scope = Some(EventSessionScope::Subagent);
+
+        assert!(notification_decision(&event).is_some());
+    }
+
+    #[test]
     fn notification_rule_skips_running_activity_event() {
         let event = event_with_type("event-running", EventType::SessionActivity);
 
@@ -1368,6 +1400,7 @@ mod tests {
             project_name: "project".to_string(),
             event_type,
             summary: "需要处理".to_string(),
+            session_scope: None,
             content: Some("需要处理这个事件".to_string()),
             error_message: None,
             completion_reason: None,

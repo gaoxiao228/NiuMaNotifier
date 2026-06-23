@@ -323,10 +323,11 @@ curl -X POST "$NIUMA_LOCAL_API_URL/api/v1/plugin-events" \
 
 ## Tool Session Reading
 
-Third-party reader plugins read tool sessions through the host Local API. They must not read Codex, Claude Code, or other tool directories directly, and they must not call provider plugins directly. The tool session view is separate from Niuma runtime state: `/api/v1/runtime_state_list` returns Niuma state-machine runtime items, while raw tool session lists and normalized message details use the endpoints below.
+Third-party reader plugins read tool sessions through the host Local API. They must not read Codex, Claude Code, or other tool directories directly, and they must not call provider plugins directly. The tool session view is separate from Niuma runtime state: `/api/v1/runtime_state_list` returns Niuma state-machine runtime items, while raw tool session lists, project groups, and normalized message details use the endpoints below.
 
 ```http
 GET /api/v1/session_list?tool=codex&include_subagents=false&active_only=false&limit=100
+GET /api/v1/session_project_groups?tool=codex&project_path=/repo&include_subagents=false&page=1&page_size=20
 GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=cursor-1
 ```
 
@@ -338,6 +339,16 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 | `include_subagents` | `false` | Whether to include subagent sessions. |
 | `active_only` | `false` | Whether to return only active sessions. |
 | `limit` | `100` | Maximum number of returned sessions. |
+
+`session_project_groups` groups the provider snapshot by project path and returns project -> normalized session -> optional raw session details. Normalized sessions collect subagents under `normalized_session_id`; raw subagent details are not expanded by default, but parent session `updated_at` still includes subagent activity. Project group counters use explicit names: `normalized_session_count` is the number of normalized sessions, `raw_session_count` is the number of raw session files, and `subagent_count` is the number of raw session files produced by subagents. Common query parameters:
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `tool` | `all` | `codex`, `claude_code`, a custom tool ID, or `all`. |
+| `project_path` | empty | Exact project path filter. |
+| `include_subagents` | `false` | Whether to expand raw session details under each normalized session. |
+| `page` | `1` | Project group page number. |
+| `page_size` | `20` | Project group page size, capped at `100`. |
 
 `session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`.
 
@@ -531,6 +542,7 @@ Consumption constraints:
 - `/api/v1/events/stream` only broadcasts newly applied events. It does not replay historical events.
 - Duplicate reports that are deduplicated do not enter this stream.
 - Plugins should decide which events require notification.
+- Default notification behavior should skip `assistant_message_completed` when `session_scope = "subagent"`, so a subagent finish is not reported as the main task finish. `approval_requested` should still notify because subagent approvals also need user action.
 - Plugins should store local dedupe state in `NIUMA_PLUGIN_DATA_DIR` to avoid duplicate sends after reconnecting.
 - SSE keep-alive comment lines should be ignored.
 

@@ -1,4 +1,4 @@
 fn main() {
-    // 独立插件进程只负责启动 Codex runtime，生命周期由通用插件管理器控制。
-    niuma_codex_plugin_runtime::run_from_env();
+    // 合并后的 Codex 插件同时提供事件监听和 session provider RPC。
+    niuma_codex_plugin_runtime::run_combined_from_env();
 }

@@ -3,6 +3,9 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::codex::session_identity::{
+    codex_fallback_session_id, codex_project_name, CodexSessionMetadata,
+};
 use crate::codex::session_protocol::{
     detect_session_protocol_family, CodexProtocolFamily, CodexSessionProtocolParser,
 };
@@ -13,7 +16,7 @@ use niuma_core::models::{CompletionReason, EventType, FailureReason, NiumaEvent,
 pub struct CodexJsonlParser {
     protocol_family: Option<CodexProtocolFamily>,
     session_id: Option<String>,
-    parent_session_id: Option<String>,
+    session_metadata: CodexSessionMetadata,
     cwd: Option<String>,
     last_assistant_message: Option<String>,
     pending_plan_confirmation_turn_id: Option<String>,
@@ -65,9 +68,7 @@ impl CodexJsonlParser {
                     self.session_id = Some(session_id.to_string());
                 }
             }
-            if self.parent_session_id.is_none() {
-                self.parent_session_id = parent_thread_id_from_session_meta(&row.payload);
-            }
+            self.session_metadata.merge_session_meta(&row.payload);
             if self.cwd.is_none() {
                 if let Some(cwd) = row
                     .payload
@@ -93,14 +94,10 @@ impl CodexJsonlParser {
         let session_id = self
             .session_id
             .clone()
-            .unwrap_or_else(|| fallback_session_id(fallback_path));
+            .unwrap_or_else(|| codex_fallback_session_id(fallback_path));
         let project_path = self.cwd.clone().unwrap_or_default();
-        let parent_session_id = self.parent_session_id.clone();
-        let project_name = project_path
-            .rsplit('/')
-            .find(|part| !part.is_empty())
-            .unwrap_or("Codex")
-            .to_string();
+        let identity = self.session_metadata.identity_for_session(&session_id);
+        let project_name = codex_project_name(&project_path);
 
         let mut attention_resolve_key = None;
         let mut summary = None;
@@ -247,7 +244,11 @@ impl CodexJsonlParser {
             source: "codex-session-file".to_string(),
             tool: ToolKind::Codex,
             session_id,
-            parent_session_id,
+            parent_session_id: identity.parent_session_id,
+            normalized_session_id: Some(identity.normalized_session_id),
+            session_scope: Some(identity.session_scope.as_event_scope()),
+            agent_nickname: identity.agent_nickname,
+            agent_role: identity.agent_role,
             project_path,
             project_name,
             event_type: event_type.clone(),
@@ -487,23 +488,6 @@ fn render_request_user_input_option(index: usize, option: &serde_json::Value) ->
     })
 }
 
-fn parent_thread_id_from_session_meta(payload: &serde_json::Value) -> Option<String> {
-    payload
-        .get("parent_thread_id")
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            payload
-                .get("source")
-                .and_then(|value| value.get("subagent"))
-                .and_then(|value| value.get("thread_spawn"))
-                .and_then(|value| value.get("parent_thread_id"))
-                .and_then(|value| value.as_str())
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
 fn escalated_function_call(
     payload: &serde_json::Value,
     session_id: &str,
@@ -684,42 +668,6 @@ fn summary_for_event_type(event_type: &EventType) -> &'static str {
         EventType::SessionActivity => "Codex session activity",
         _ => "Codex session updated",
     }
-}
-
-fn fallback_session_id(path: &str) -> String {
-    let basename = path
-        .rsplit('/')
-        .next()
-        .and_then(|name| name.strip_suffix(".jsonl"))
-        .filter(|name| !name.is_empty())
-        .unwrap_or("session");
-    if let Some(session_id) = rollout_filename_session_id(basename) {
-        return session_id;
-    }
-    format!("fallback-{basename}-{}", stable_hash(path))
-}
-
-fn rollout_filename_session_id(basename: &str) -> Option<String> {
-    let session_id = basename.rsplit('-').take(5).collect::<Vec<_>>();
-    if session_id.len() != 5 {
-        return None;
-    }
-    let candidate = session_id.into_iter().rev().collect::<Vec<_>>().join("-");
-    if is_uuid_like(&candidate) {
-        Some(candidate)
-    } else {
-        None
-    }
-}
-
-fn is_uuid_like(value: &str) -> bool {
-    let parts = value.split('-').collect::<Vec<_>>();
-    if parts.iter().map(|part| part.len()).collect::<Vec<_>>() != [8, 4, 4, 4, 12] {
-        return false;
-    }
-    value
-        .chars()
-        .all(|char| char == '-' || char.is_ascii_hexdigit())
 }
 
 fn stable_hash(text: &str) -> String {

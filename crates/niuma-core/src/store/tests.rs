@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::listener_config::ListenerConfig;
 use crate::models::{
     ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason,
-    EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
+    EventSessionScope, EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
 };
 use crate::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
@@ -1873,6 +1873,47 @@ fn session_activity_after_completion_does_not_reopen_session() {
 }
 
 #[test]
+fn subagent_completed_does_not_override_main_latest_activity() {
+    let store = NiumaStore::new(test_sqlite_path(
+        "subagent_completed_does_not_override_main",
+    ));
+    store
+        .append_event(sample_session_event(
+            "dedupe-main-running",
+            "main-session",
+            EventType::SessionStarted,
+            1_000,
+        ))
+        .unwrap();
+    let mut completed = sample_session_event(
+        "dedupe-subagent-completed",
+        "subagent-session",
+        EventType::AssistantMessageCompleted,
+        1_100,
+    );
+    completed.parent_session_id = Some("main-session".to_string());
+    completed.normalized_session_id = Some("main-session".to_string());
+    completed.session_scope = Some(EventSessionScope::Subagent);
+
+    let state = store.append_event(completed).unwrap();
+
+    let subagent = state
+        .runtime_states
+        .iter()
+        .find(|session| session.session_id == "subagent-session")
+        .unwrap();
+    assert_eq!(subagent.status, RuntimeStateStatus::Completed);
+    let snapshot = store.internal_status_snapshot().unwrap();
+    assert_eq!(snapshot.status, RuntimeStateStatus::Running);
+    assert_eq!(snapshot.primary_session_id.as_deref(), Some("main-session"));
+    let events = store.public_recent_events(10).unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.session_id == "subagent-session"
+            && event.event_type == EventType::AssistantMessageCompleted));
+}
+
+#[test]
 fn codex_rollback_sequence_finishes_even_with_late_token_count() {
     let store = NiumaStore::new(test_sqlite_path("rollback_sequence_late_token_count"));
     store
@@ -2107,6 +2148,10 @@ fn sample_session_event(
         tool: ToolKind::Codex,
         session_id: session_id.to_string(),
         parent_session_id: None,
+        normalized_session_id: None,
+        session_scope: None,
+        agent_nickname: None,
+        agent_role: None,
         project_path: "/tmp/demo".to_string(),
         project_name: "demo".to_string(),
         event_type,

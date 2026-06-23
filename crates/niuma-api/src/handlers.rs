@@ -30,7 +30,7 @@ use serde_json::json;
 
 use crate::response::json_response;
 use crate::state::AppState;
-use crate::tool_sessions::{capped_limit, ToolSessionListQuery};
+use crate::tool_sessions::{capped_limit, ToolSessionListQuery, ToolSessionProjectGroupsQuery};
 
 const RESET_CONFIRMATION: &str = "RESET_NIUMA_STATE";
 
@@ -105,6 +105,15 @@ pub(crate) struct SessionListQuery {
     include_subagents: Option<bool>,
     active_only: Option<bool>,
     limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct SessionProjectGroupsQuery {
+    tool: Option<String>,
+    project_path: Option<String>,
+    include_subagents: Option<bool>,
+    page: Option<usize>,
+    page_size: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -235,6 +244,46 @@ pub(crate) async fn get_session_list(
 
     match state.tool_sessions.list(query) {
         Ok(items) => json_response(200, ApiResponse::ok(json!({ "list": items }))),
+        Err(error) => json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+        ),
+    }
+}
+
+pub(crate) async fn get_session_project_groups(
+    State(state): State<AppState>,
+    query: Result<Query<SessionProjectGroupsQuery>, QueryRejection>,
+) -> Response {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterType,
+                    format!("查询参数类型错误（include_subagents/page/page_size）：{error}"),
+                ),
+            );
+        }
+    };
+
+    let query = ToolSessionProjectGroupsQuery {
+        tool: query
+            .tool
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty()),
+        project_path: query
+            .project_path
+            .map(|project_path| project_path.trim().to_string())
+            .filter(|project_path| !project_path.is_empty()),
+        include_subagents: query.include_subagents.unwrap_or(false),
+        page: query.page,
+        page_size: query.page_size,
+    };
+
+    match state.tool_sessions.project_groups(query) {
+        Ok(page) => json_response(200, ApiResponse::ok(page)),
         Err(error) => json_response(
             200,
             ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
@@ -509,8 +558,9 @@ fn watcher_approval_fingerprint(event: &NiumaEvent) -> Option<ApprovalFingerprin
     let content = event.content.as_deref().unwrap_or(event.summary.as_str());
     let command = content.strip_prefix("exec_command: ").unwrap_or(content);
     let fingerprint_session_id = event
-        .parent_session_id
+        .normalized_session_id
         .as_deref()
+        .or(event.parent_session_id.as_deref())
         .unwrap_or(event.session_id.as_str());
     ApprovalFingerprint::from_parts(
         &event.project_path,
@@ -628,10 +678,11 @@ fn log_watcher_approval_arbitration(
 ) {
     // watcher event 已被 on_watcher_approval 消费；这里只记录指纹和决策，避免复制事件结构。
     eprintln!(
-        "NiumaNotifier approval arbiter watcher project_path={} session_id={} parent_session_id={} fingerprint_session_id={} fingerprint_key={} fingerprint_basis={:?} decision={}",
+        "NiumaNotifier approval arbiter watcher project_path={} session_id={} parent_session_id={} normalized_session_id={} fingerprint_session_id={} fingerprint_key={} fingerprint_basis={:?} decision={}",
         log_value(&fingerprint.project_path),
         log_value(&event.session_id),
         log_optional(event.parent_session_id.as_deref()),
+        log_optional(event.normalized_session_id.as_deref()),
         log_optional(fingerprint.session_id.as_deref()),
         fingerprint.key,
         fingerprint.basis,
@@ -1005,6 +1056,10 @@ fn approval_event(
         tool: request.tool.clone(),
         session_id: request.session_id.clone(),
         parent_session_id: None,
+        normalized_session_id: None,
+        session_scope: None,
+        agent_nickname: None,
+        agent_role: None,
         project_path: request.project_path.clone(),
         project_name: request.project_name.clone(),
         event_type,

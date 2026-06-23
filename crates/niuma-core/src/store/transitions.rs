@@ -1,6 +1,6 @@
 use crate::models::{
-    AttentionItem, EventType, LatestActivity, NiumaEvent, RuntimeStateItem, RuntimeStateStatus,
-    ToolKind,
+    AttentionItem, EventSessionScope, EventType, LatestActivity, NiumaEvent, RuntimeStateItem,
+    RuntimeStateStatus, ToolKind,
 };
 use crate::store::StoredState;
 
@@ -108,7 +108,9 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
                 });
             }
             restore_session_attention_status(state, &event.tool, &event.session_id);
-            state.latest_activity = Some(LatestActivity::from_event(event, status));
+            if should_update_latest_activity(event) {
+                state.latest_activity = Some(LatestActivity::from_event(event, status));
+            }
         }
         RuntimeStateStatus::Stale => {
             // stale 是内部清理态：移除当前运行态身份的残留关注项，并只在命中当前活动时回到 idle。
@@ -140,6 +142,12 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
             }
         }
     }
+}
+
+fn should_update_latest_activity(event: &NiumaEvent) -> bool {
+    // subagent 完成只表示子任务结束，不能把主状态顶成 completed；事件仍保留在事件中心/SSE。
+    !(event.event_type == EventType::AssistantMessageCompleted
+        && event.session_scope == Some(EventSessionScope::Subagent))
 }
 
 fn attention_item_matches_event(item: &AttentionItem, event: &NiumaEvent) -> bool {

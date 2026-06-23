@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::codex::session_watcher::{codex_session_dirs, CodexSessionScanner};
+use crate::codex::session_event_cursor::CodexSessionScanner;
+use crate::codex::session_repository::codex_session_day_dirs;
+use crate::codex::session_watcher::codex_session_dirs;
 use chrono::Utc;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -106,44 +108,6 @@ fn recent_jsonl_files_in_dirs(dirs: Vec<PathBuf>, limit: usize) -> Vec<PathBuf> 
         .take(limit)
         .map(|(path, _)| path)
         .collect()
-}
-
-fn codex_session_day_dirs(codex_home: &Path) -> Vec<PathBuf> {
-    let sessions_dir = codex_home.join("sessions");
-    let Ok(year_entries) = std::fs::read_dir(sessions_dir) else {
-        return codex_session_dirs(codex_home, Utc::now());
-    };
-    let mut dirs = Vec::new();
-    for year_entry in year_entries.flatten() {
-        let year_path = year_entry.path();
-        if !year_path.is_dir() {
-            continue;
-        }
-        let Ok(month_entries) = std::fs::read_dir(year_path) else {
-            continue;
-        };
-        for month_entry in month_entries.flatten() {
-            let month_path = month_entry.path();
-            if !month_path.is_dir() {
-                continue;
-            }
-            let Ok(day_entries) = std::fs::read_dir(month_path) else {
-                continue;
-            };
-            for day_entry in day_entries.flatten() {
-                let day_path = day_entry.path();
-                // Codex session 文件按 sessions/YYYY/MM/DD 归档；只扫日目录避免递归进无关层级。
-                if day_path.is_dir() {
-                    dirs.push(day_path);
-                }
-            }
-        }
-    }
-    if dirs.is_empty() {
-        codex_session_dirs(codex_home, Utc::now())
-    } else {
-        dirs
-    }
 }
 
 pub(super) fn recent_jsonl_file_entries_in_dir(

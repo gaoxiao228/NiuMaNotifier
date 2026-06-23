@@ -13,22 +13,17 @@ use crate::state_mutation::StateMutationService;
 use crate::store::NiumaStore;
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
-pub const CODEX_SESSION_PROVIDER_COMMAND_ENV: &str = "NIUMA_CODEX_SESSION_PROVIDER_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
 pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
 pub const BUILTIN_CODEX_PLUGIN_ID: &str = "builtin-codex";
-pub const BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID: &str = "builtin-codex-session-provider";
 pub const BUILTIN_BARK_PLUGIN_ID: &str = "builtin-bark";
 pub const BUILTIN_NTFY_PLUGIN_ID: &str = "builtin-ntfy";
 
 const CODEX_PLUGIN_COMMAND: &str = "niuma-codex-plugin";
-const CODEX_SESSION_PROVIDER_PLUGIN_COMMAND: &str = "niuma-codex-session-provider";
 const BARK_PLUGIN_COMMAND: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_COMMAND: &str = "niuma-plugin-ntfy";
 const BUILTIN_CODEX_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../builtin-plugins/codex/plugin.json");
-const BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_MANIFEST_JSON: &str =
-    include_str!("../../../builtin-plugins/codex-session-provider/plugin.json");
 const BUILTIN_BARK_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../builtin-plugins/bark/plugin.json");
 const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
@@ -258,7 +253,6 @@ impl PluginRegistry {
     pub fn with_builtin_plugins() -> Self {
         let mut registry = Self::new();
         registry.register(builtin_codex_manifest());
-        registry.register(builtin_codex_session_provider_manifest());
         registry.register(builtin_bark_manifest());
         registry.register(builtin_ntfy_manifest());
         registry
@@ -487,20 +481,6 @@ pub fn builtin_codex_manifest() -> PluginManifest {
     manifest.source = PluginSource::Builtin;
     manifest.command = Some(builtin_codex_plugin_command(manifest.command));
     // 内置插件的 binary 路径由桌面端/环境变量解析，不使用源码目录作为运行目录。
-    manifest.base_dir = None;
-    manifest
-}
-
-pub fn builtin_codex_session_provider_manifest() -> PluginManifest {
-    let mut manifest = parse_plugin_manifest(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_MANIFEST_JSON)
-        .expect("内置 Codex session provider 插件 manifest 必须是有效 plugin.json");
-    manifest.source = PluginSource::Builtin;
-    manifest.command = Some(builtin_plugin_command(
-        CODEX_SESSION_PROVIDER_COMMAND_ENV,
-        manifest.command,
-        CODEX_SESSION_PROVIDER_PLUGIN_COMMAND,
-    ));
-    // Session provider 是独立内置进程，运行目录同样由打包后的命令解析。
     manifest.base_dir = None;
     manifest
 }
@@ -1036,7 +1016,7 @@ mod tests {
                 "tool_id": "codex",
                 "display_name": "Codex Session Provider",
                 "version": "0.1.0",
-                "command": "niuma-codex-session-provider",
+                "command": "node",
                 "capabilities": [
                     "tool_session_list_provider",
                     "tool_session_detail_provider",
@@ -1158,21 +1138,10 @@ mod tests {
         assert_eq!(plugin.kind, PluginKind::Tool);
         assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
         assert_eq!(plugin.icon_url.as_deref(), Some("/assets/codex-icon.png"));
-    }
-
-    #[test]
-    fn registry_contains_builtin_codex_session_provider_plugin() {
-        let registry = PluginRegistry::with_builtin_plugins();
-        let plugin = registry
-            .plugin_by_id("builtin-codex-session-provider")
-            .unwrap();
-
-        assert_eq!(plugin.kind, PluginKind::Tool);
-        assert_eq!(plugin.tool_id, Some(ToolKind::Codex));
-        assert_eq!(plugin.icon_url.as_deref(), Some("/assets/codex-icon.png"));
         assert_eq!(
             plugin.capabilities,
             vec![
+                PluginCapability::EventWatcher,
                 PluginCapability::ToolSessionListProvider,
                 PluginCapability::ToolSessionDetailProvider,
             ]
@@ -1314,24 +1283,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_codex_session_provider_manifest_uses_command_override_from_env() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(
-            CODEX_SESSION_PROVIDER_COMMAND_ENV,
-            "/tmp/niuma-codex-session-provider-test",
-        );
-
-        let manifest = builtin_codex_session_provider_manifest();
-
-        std::env::remove_var(CODEX_SESSION_PROVIDER_COMMAND_ENV);
-        assert_eq!(
-            manifest.command.as_deref(),
-            Some("/tmp/niuma-codex-session-provider-test")
-        );
-        assert!(manifest.args.is_empty());
-    }
-
-    #[test]
     fn external_manifest_cannot_override_builtin_codex_plugin() {
         let temp = tempfile::tempdir().unwrap();
         let plugin_dir = temp.path().join("builtin-codex");
@@ -1439,9 +1390,7 @@ mod tests {
         assert!(registry
             .plugin_by_id("external-codex-session-provider")
             .is_none());
-        assert!(registry
-            .plugin_by_id("builtin-codex-session-provider")
-            .is_some());
+        assert!(registry.plugin_by_id(BUILTIN_CODEX_PLUGIN_ID).is_some());
     }
 
     #[test]
@@ -1521,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    fn session_provider_enable_state_uses_plugin_map_without_changing_listener_config() {
+    fn external_session_provider_enable_state_uses_plugin_map_without_changing_listener_config() {
         let store = NiumaStore::new(test_sqlite_path("session_provider_enabled_map"));
         store
             .save_listener_config(
@@ -1529,7 +1478,18 @@ mod tests {
             )
             .unwrap();
         let service = StateMutationService::new(store.clone(), RuntimeEventBus::new());
-        let manifest = builtin_codex_session_provider_manifest();
+        let manifest = parse_plugin_manifest(
+            r#"{
+                "id": "external-demo-session-provider",
+                "kind": "tool",
+                "tool_id": "demo_tool",
+                "display_name": "External Demo Session Provider",
+                "version": "0.1.0",
+                "command": "node",
+                "capabilities": ["tool_session_list_provider", "tool_session_detail_provider"]
+            }"#,
+        )
+        .unwrap();
 
         // session provider 有 tool_id，但没有 event_watcher，启用状态必须独立于工具监听配置。
         save_plugin_enabled_state(&store, &service, &manifest, false).unwrap();
@@ -1542,36 +1502,26 @@ mod tests {
             store
                 .plugin_enabled_map()
                 .unwrap()
-                .get(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID),
+                .get("external-demo-session-provider"),
             Some(&false)
         );
-        let items = PluginRegistry::with_builtin_plugins().management_items(
-            &store.listener_config().unwrap(),
-            &store.plugin_enabled_map().unwrap(),
-            &HashMap::new(),
-        );
-        let provider = items
-            .iter()
-            .find(|plugin| plugin.id == BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID)
-            .unwrap();
-        assert!(!provider.enabled);
     }
 
     #[test]
-    fn builtin_tool_session_provider_defaults_enabled_until_explicitly_disabled() {
+    fn builtin_codex_provider_follows_listener_config_after_merge() {
         let registry = PluginRegistry::with_builtin_plugins();
         let items = registry.management_items(
             &ListenerConfig::default().with_tool_enabled(&ToolKind::Codex, false),
             &BTreeMap::new(),
             &HashMap::new(),
         );
-        let provider = items
+        let codex = items
             .iter()
-            .find(|plugin| plugin.id == BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_ID)
+            .find(|plugin| plugin.id == BUILTIN_CODEX_PLUGIN_ID)
             .unwrap();
 
-        // 内置 provider 默认可用，不应被 event_watcher 的 Codex listener 开关牵连。
-        assert!(provider.enabled);
+        // 合并后 provider 能力跟随 Codex listener，关闭监听也不再保留 session 列表。
+        assert!(!codex.enabled);
     }
 
     #[test]

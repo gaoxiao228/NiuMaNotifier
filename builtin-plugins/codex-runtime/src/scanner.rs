@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::codex::log_watcher::CodexLogScanner;
-use crate::codex::session_watcher::CodexSessionScanner;
+use crate::codex::session_event_cursor::CodexSessionScanner;
 
 use super::discovery::{add_active_file, discover_recent_dir_files, path_recently_modified};
 use super::logging::{watcher_trace_enabled, watcher_trace_log, MainStatusLogState};

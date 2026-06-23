@@ -14,7 +14,7 @@ pub(super) fn watcher_debug_enabled() -> bool {
 }
 
 pub(super) fn watcher_debug_log(message: String) {
-    println!("{message}");
+    eprintln!("{message}");
 }
 
 pub(super) fn watcher_trace_enabled() -> bool {
@@ -22,7 +22,7 @@ pub(super) fn watcher_trace_enabled() -> bool {
 }
 
 pub(super) fn watcher_trace_log(message: String) {
-    println!("{message}");
+    eprintln!("{message}");
 }
 
 #[derive(Default)]

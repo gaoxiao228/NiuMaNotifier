@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use crate::handlers::{
     dismiss_blocker, get_approval_decision, get_approval_requests, get_events, get_listener_config,
     get_main_state, get_notification_records, get_plugin_config, get_plugins,
-    get_runtime_state_list, get_session_detail, get_session_list, import_plugin,
-    post_approval_decision, post_approval_heartbeat, post_approval_request,
+    get_runtime_state_list, get_session_detail, get_session_list, get_session_project_groups,
+    import_plugin, post_approval_decision, post_approval_heartbeat, post_approval_request,
     post_approval_return_to_codex, post_event, post_plugin_events, post_plugin_notification_result,
     post_plugin_notification_test_result, remove_plugin, reset_state, run_plugin_action,
     save_listener_config, save_plugin_config, set_plugin_enabled,
@@ -155,6 +155,10 @@ fn app_with_bus_and_plugin_dir_and_tool_sessions(
         .route(
             "/api/v1/session_detail",
             get(get_session_detail).options(preflight),
+        )
+        .route(
+            "/api/v1/session_project_groups",
+            get(get_session_project_groups).options(preflight),
         )
         .route("/api/v1/state/stream", get(sse_stream).options(preflight))
         .route(

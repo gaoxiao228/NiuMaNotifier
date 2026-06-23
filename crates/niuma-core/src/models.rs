@@ -251,6 +251,14 @@ pub enum FailureReason {
     Unknown,
 }
 
+// 事件级会话范围用于让外部插件区分主会话与 subagent 事件。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventSessionScope {
+    Main,
+    Subagent,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NiumaEvent {
     pub id: String,
@@ -261,6 +269,14 @@ pub struct NiumaEvent {
     // Codex subagent 会话会带父会话 ID；展示仍使用 session_id，跨来源仲裁可用它归一化。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_scope: Option<EventSessionScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
     pub project_path: String,
     pub project_name: String,
     pub event_type: EventType,

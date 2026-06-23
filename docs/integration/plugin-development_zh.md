@@ -323,10 +323,11 @@ curl -X POST "$NIUMA_LOCAL_API_URL/api/v1/plugin-events" \
 
 ## 工具会话读取
 
-第三方 reader 插件通过宿主 Local API 读取工具会话，不直接读取 Codex、Claude Code 等工具目录，也不直接调用 provider 插件。工具 session 视图和 Niuma 运行态是两个概念：`/api/v1/runtime_state_list` 返回 Niuma 状态机里的运行状态，工具原始 session 列表和消息详情使用下面两个接口。
+第三方 reader 插件通过宿主 Local API 读取工具会话，不直接读取 Codex、Claude Code 等工具目录，也不直接调用 provider 插件。工具 session 视图和 Niuma 运行态是两个概念：`/api/v1/runtime_state_list` 返回 Niuma 状态机里的运行状态，工具原始 session 列表、项目分组和消息详情使用下面这些接口。
 
 ```http
 GET /api/v1/session_list?tool=codex&include_subagents=false&active_only=false&limit=100
+GET /api/v1/session_project_groups?tool=codex&project_path=/repo&include_subagents=false&page=1&page_size=20
 GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=cursor-1
 ```
 
@@ -338,6 +339,16 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 | `include_subagents` | `false` | 是否包含 subagent session。 |
 | `active_only` | `false` | 是否只返回仍活跃的 session。 |
 | `limit` | `100` | 返回数量上限。 |
+
+`session_project_groups` 按项目路径聚合 provider snapshot，返回结构是项目 -> 归一会话 -> 可选 raw session 明细。归一会话会把 subagent 归到 `normalized_session_id` 下；默认不展开 raw subagent 明细，但仍会计算父会话更新时间。项目组计数字段中，`normalized_session_count` 表示归一会话数量，`raw_session_count` 表示 raw session 文件数量，`subagent_count` 表示其中由 subagent 产生的 raw session 数量。常用查询参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `tool` | `all` | `codex`、`claude_code`、自定义工具 ID 或 `all`。 |
+| `project_path` | 空 | 精确筛选项目路径。 |
+| `include_subagents` | `false` | 是否在归一会话下展开 raw session 明细。 |
+| `page` | `1` | 项目分组分页页码。 |
+| `page_size` | `20` | 项目分组分页大小，最大 `100`。 |
 
 `session_detail` 按 `tool + session_id` 读取归一化消息详情。`messages` 倒序返回，`messages[0]` 是本页最新消息；`next_cursor` 用于继续读取更旧消息。第一版支持的消息角色包括 `user`、`assistant`、`system`、`tool_call`、`tool_result`、`event` 和 `unknown`。
 
@@ -531,6 +542,7 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 - `/api/v1/events/stream` 只广播成功写入的新事件，不补发历史事件。
 - 重复上报但被去重的事件不会进入该流。
 - 插件应自行判断哪些事件需要发送通知。
+- 默认通知策略应跳过 `session_scope = "subagent"` 的 `assistant_message_completed`，避免子代理完成被误报为主任务完成；`approval_requested` 仍应通知，因为子代理授权也需要用户处理。
 - 插件应在 `NIUMA_PLUGIN_DATA_DIR` 中保存本地去重状态，避免重连后重复发送。
 - SSE keep-alive 注释行应忽略。
 
