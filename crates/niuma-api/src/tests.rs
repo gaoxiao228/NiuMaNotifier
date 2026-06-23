@@ -2415,6 +2415,34 @@ async fn session_detail_zero_limit_fails_without_provider_call() {
     assert!(calls.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn session_detail_rejects_provider_detail_for_other_session() {
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail: sample_tool_session_detail("other-session"),
+        calls: Arc::new(StdMutex::new(Vec::new())),
+    }));
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_mismatched_provider_detail")),
+        registry,
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail?tool=codex&session_id=existing-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = response_json(response).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(value["code"], 100101);
+    assert!(value["message"].as_str().unwrap().contains("归属不匹配"));
+}
+
 #[test]
 fn tool_session_unregister_detail_provider_returns_not_ready() {
     let registry = ToolSessionRegistry::new();

@@ -143,7 +143,12 @@ impl ToolSessionRegistry {
             .get(tool)
             .cloned()
             .ok_or_else(|| "session detail provider 尚未就绪".to_string())?;
-        provider.detail(tool, session_id, limit, cursor)
+        let detail = provider.detail(tool, session_id, limit, cursor)?;
+        // provider 返回的详情归属必须与请求一致，避免错误实现造成跨工具或跨会话串读。
+        if detail.tool != *tool || detail.session_id != session_id {
+            return Err("provider 返回的 session detail 归属不匹配".to_string());
+        }
+        Ok(detail)
     }
 }
 
