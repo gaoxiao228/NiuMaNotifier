@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use niuma_core::models::ToolKind;
+use niuma_core::store::NiumaStore;
 use niuma_core::tool_session::{
     ToolSessionListItem, ToolSessionNormalizationStatus, ToolSessionScope, ToolSessionStatus,
 };
@@ -22,6 +23,7 @@ const SNAPSHOT_NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
 
 pub struct CodexSessionProvider {
     repository: Arc<Mutex<CodexSessionRepository>>,
+    listener_store: Option<NiumaStore>,
 }
 
 impl CodexSessionProvider {
@@ -36,7 +38,17 @@ impl CodexSessionProvider {
     }
 
     pub(crate) fn with_repository(repository: Arc<Mutex<CodexSessionRepository>>) -> Self {
-        Self { repository }
+        Self::with_repository_and_listener_store(repository, None)
+    }
+
+    pub(crate) fn with_repository_and_listener_store(
+        repository: Arc<Mutex<CodexSessionRepository>>,
+        listener_store: Option<NiumaStore>,
+    ) -> Self {
+        Self {
+            repository,
+            listener_store,
+        }
     }
 
     #[cfg(test)]
@@ -82,6 +94,17 @@ impl CodexSessionProvider {
                 "Codex session provider 只支持 codex",
             );
         }
+        if !self.codex_session_provider_enabled() {
+            let _ = self.clear_repository_indexes();
+            return ProviderRpcResponse::success(
+                request.id,
+                SessionSnapshotResult {
+                    tool: ToolKind::Codex,
+                    sessions: Vec::new(),
+                },
+            )
+            .expect("disabled session snapshot response must serialize");
+        }
         match self.refresh_snapshot() {
             Ok(sessions) => ProviderRpcResponse::success(
                 request.id,
@@ -108,6 +131,11 @@ impl CodexSessionProvider {
                 "unsupported_tool",
                 "Codex session provider 只支持 codex",
             );
+        }
+        if !self.codex_session_provider_enabled() {
+            let _ = self.clear_repository_indexes();
+            let ProviderError { code, message } = ProviderError::provider_disabled();
+            return ProviderRpcResponse::failure(request.id, code, message);
         }
         let detail_result = self.session_detail(params);
         match detail_result {
@@ -216,23 +244,47 @@ impl CodexSessionProvider {
             .apply_snapshot_refresh(refresh);
         Ok(sessions)
     }
+
+    fn codex_session_provider_enabled(&self) -> bool {
+        self.listener_store
+            .as_ref()
+            .map(|store| {
+                store
+                    .listener_config()
+                    .map(|config| config.is_tool_enabled(&ToolKind::Codex))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(true)
+    }
+
+    fn clear_repository_indexes(&self) -> Result<(), String> {
+        self.repository
+            .lock()
+            .map_err(|_| "Codex session repository lock poisoned".to_string())?
+            .clear_runtime_indexes();
+        Ok(())
+    }
 }
 
 // 启动 stdio JSON Lines provider；同一进程复用 provider 实例，让 snapshot 建立的索引可服务后续 detail。
 pub fn run_stdio_session_provider() {
-    run_stdio_session_provider_with_repository(Arc::new(Mutex::new(CodexSessionRepository::new(
-        niuma_core::config::codex_home(),
-    ))));
+    run_stdio_session_provider_with_repository(
+        Arc::new(Mutex::new(CodexSessionRepository::new(
+            niuma_core::config::codex_home(),
+        ))),
+        Some(NiumaStore::new(NiumaStore::default_path())),
+    );
 }
 
 pub(crate) fn run_stdio_session_provider_with_repository(
     repository: Arc<Mutex<CodexSessionRepository>>,
+    listener_store: Option<NiumaStore>,
 ) {
     let stdin = io::stdin();
     let stdout = Arc::new(Mutex::new(io::stdout()));
-    let provider = Arc::new(Mutex::new(CodexSessionProvider::with_repository(
-        repository,
-    )));
+    let provider = Arc::new(Mutex::new(
+        CodexSessionProvider::with_repository_and_listener_store(repository, listener_store),
+    ));
     let _snapshot_notifier =
         start_snapshot_notifier(provider.clone(), stdout.clone(), SNAPSHOT_NOTIFY_INTERVAL);
     for line in stdin.lock().lines() {
@@ -431,6 +483,7 @@ mod tests {
     use crate::codex::session_event_cursor::CodexSessionScanner;
     use crate::codex::session_file_index::session_file_signature;
     use crate::codex::session_identity::codex_filename_session_id;
+    use niuma_core::listener_config::ListenerConfig;
 
     #[test]
     fn codex_session_provider_snapshot_refreshes_same_size_replaced_file_by_content_hash() {
@@ -533,6 +586,46 @@ mod tests {
             .detail;
         assert_eq!(detail.messages[0].content, "shared answer");
         assert_eq!(detail.messages[1].content, "shared question");
+    }
+
+    #[test]
+    fn codex_session_provider_returns_empty_snapshot_when_listener_disabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_test_session(
+            temp.path(),
+            &test_session_content(
+                "session-disabled",
+                "/tmp/disabled-project",
+                "disabled question",
+                "disabled answer",
+            ),
+        );
+        let store = disabled_listener_store(temp.path().join("niuma.sqlite"));
+        let repository = Arc::new(Mutex::new(CodexSessionRepository::new(temp.path().into())));
+        let mut provider = CodexSessionProvider::with_repository_and_listener_store(
+            repository.clone(),
+            Some(store),
+        );
+        let cursor = CodexSessionRepository::prime_event_cursor_to_end(&path).unwrap();
+        repository.lock().unwrap().store_event_cursor(&path, cursor);
+
+        let snapshot = provider
+            .handle_request(snapshot_request("req-disabled-snapshot"))
+            .result_as::<SessionSnapshotResult>()
+            .unwrap();
+
+        assert!(snapshot.sessions.is_empty());
+        assert!(repository.lock().unwrap().event_cursor(&path).is_none());
+        let error = provider
+            .handle_request(detail_request_for_session(
+                "req-disabled-detail",
+                "session-disabled",
+                20,
+                None,
+            ))
+            .error
+            .unwrap();
+        assert_eq!(error.code, "session_provider_disabled");
     }
 
     #[test]
@@ -739,5 +832,16 @@ mod tests {
         let path = day_dir.join("rollout-2026-06-22-00000000-0000-0000-0000-000000000000.jsonl");
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    fn disabled_listener_store(path: PathBuf) -> NiumaStore {
+        let store = NiumaStore::new(path);
+        store
+            .save_listener_config(&ListenerConfig {
+                codex_listening_enabled: false,
+                ..ListenerConfig::default()
+            })
+            .unwrap();
+        store
     }
 }

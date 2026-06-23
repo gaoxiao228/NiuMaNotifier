@@ -244,6 +244,11 @@ impl CodexSessionRepository {
         Ok(())
     }
 
+    pub(crate) fn clear_runtime_indexes(&mut self) {
+        self.index.clear();
+        self.event_cursors.clear();
+    }
+
     pub(crate) fn event_scan_plan(
         path: &Path,
         cursor: Option<&CodexEventCursor>,
@@ -772,5 +777,9 @@ impl ProviderError {
 
     pub(crate) fn stale_session_file(message: impl Into<String>) -> Self {
         Self::new("stale_session_file", message)
+    }
+
+    pub(crate) fn provider_disabled() -> Self {
+        Self::new("session_provider_disabled", "Codex 监听已关闭")
     }
 }

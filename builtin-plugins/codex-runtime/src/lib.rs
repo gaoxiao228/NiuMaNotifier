@@ -72,7 +72,11 @@ pub fn spawn_codex_session_runtime(
 pub fn run_from_env() {
     start_parent_watchdog_from_env();
     match LocalApiCodexEventSink::from_env() {
-        Ok(event_sink) => run_runtime(Box::new(event_sink), None, None),
+        Ok(event_sink) => run_runtime(
+            Box::new(event_sink),
+            Some(NiumaStore::new(NiumaStore::default_path())),
+            None,
+        ),
         Err(error) => {
             eprintln!("NiumaNotifier Codex plugin process not started: {error}");
             std::process::exit(1);
@@ -90,17 +94,28 @@ pub fn run_combined_from_env() {
         }
     };
     let codex_home = config::codex_home();
+    let listener_store = NiumaStore::new(NiumaStore::default_path());
     let session_repository = Arc::new(Mutex::new(CodexSessionRepository::new(codex_home)));
     let watcher_repository = session_repository.clone();
+    let watcher_listener_store = listener_store.clone();
     if let Err(error) = thread::Builder::new()
         .name("codex-watcher-runtime".to_string())
-        .spawn(move || run_runtime(Box::new(event_sink), None, Some(watcher_repository)))
+        .spawn(move || {
+            run_runtime(
+                Box::new(event_sink),
+                Some(watcher_listener_store),
+                Some(watcher_repository),
+            )
+        })
     {
         eprintln!("NiumaNotifier Codex watcher runtime not started: {error}");
         std::process::exit(1);
     }
     // 合并插件后 stdout 是 provider JSON Lines RPC 通道，主线程专门服务 provider。
-    session_provider::run_stdio_session_provider_with_repository(session_repository);
+    session_provider::run_stdio_session_provider_with_repository(
+        session_repository,
+        Some(listener_store),
+    );
 }
 
 fn start_parent_watchdog_from_env() {
@@ -290,6 +305,9 @@ fn run_runtime(
                 clear_runtime_buffers(&mut pending_files, &mut pending_dirs, &mut active_files);
                 clear_watched_dirs(&mut watcher, &mut watched_dirs);
                 dir_cache.clear();
+                if let Ok(mut repository) = session_repository.lock() {
+                    repository.clear_runtime_indexes();
+                }
                 scanner = CodexSessionScanner::with_repository(session_repository.clone());
                 codex_log_scanner = CodexLogScanner::default();
                 runtime_initialized = false;
