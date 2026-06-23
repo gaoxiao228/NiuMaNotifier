@@ -33,6 +33,7 @@ pub struct CodexSessionProvider {
 struct SessionIndex {
     list_item: ToolSessionListItem,
     file_signature: SessionFileSignature,
+    session_meta_line: Option<MessageLineIndex>,
     // 只保存可分页消息的原始 JSONL 行位置，不在 provider 内存中长期持有完整对话正文。
     message_lines: Vec<MessageLineIndex>,
 }
@@ -71,6 +72,7 @@ struct CodexRow {
 struct ParsedSessionFile {
     session_id: Option<String>,
     project_path: Option<String>,
+    session_meta_line: Option<MessageLineIndex>,
     message_lines: Vec<MessageLineIndex>,
 }
 
@@ -210,7 +212,7 @@ impl CodexSessionProvider {
                 Err(DetailFromIndexError::Provider(error)) => return Err(error),
                 Err(DetailFromIndexError::Stale(_error)) if !retried_after_stale_index => {
                     retried_after_stale_index = true;
-                    // 行号索引可能来自旧文件内容；强制重扫一次，避免用缺行数量推进 cursor。
+                    // range 索引可能来自旧文件内容；强制重扫一次，避免用旧 session 或缺行数量推进 cursor。
                     self.refresh_session_index_from_file(&params.session_id, &index)?;
                     continue;
                 }
@@ -298,6 +300,7 @@ impl CodexSessionProvider {
         Ok(SessionIndex {
             list_item,
             file_signature,
+            session_meta_line: parsed.session_meta_line,
             message_lines: parsed.message_lines,
         })
     }
@@ -507,6 +510,7 @@ fn detail_from_index(
     index: &SessionIndex,
     params: &SessionDetailParams,
 ) -> Result<ToolSessionDetail, DetailFromIndexError> {
+    verify_session_identity(index).map_err(DetailFromIndexError::Stale)?;
     let before_line_index =
         parse_cursor(params.cursor.as_deref()).map_err(DetailFromIndexError::Provider)?;
     let page_size = params.limit.max(1);
@@ -549,6 +553,24 @@ fn detail_from_index(
     })
 }
 
+fn verify_session_identity(index: &SessionIndex) -> Result<(), String> {
+    let Some(session_meta_line) = index.session_meta_line else {
+        return Ok(());
+    };
+    let line = read_indexed_line(&index.list_item.file_path, &session_meta_line)?;
+    let row: CodexRow = serde_json::from_str(line.trim_end_matches('\r'))
+        .map_err(|error| format!("Codex session_meta 已失效：{error}"))?;
+    let current_session_id = row
+        .payload
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if row.row_type != "session_meta" || current_session_id != index.list_item.session_id {
+        return Err("Codex session_meta 已变更".to_string());
+    }
+    Ok(())
+}
+
 enum DetailFromIndexError {
     Provider(ProviderError),
     Stale(String),
@@ -580,6 +602,12 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
         }
         if let Ok(row) = serde_json::from_str::<CodexRow>(line) {
             if row.row_type == "session_meta" {
+                parsed.session_meta_line = Some(MessageLineIndex {
+                    line_index,
+                    byte_start,
+                    byte_end: byte_start + line_bytes.len() as u64,
+                    content_hash: stable_bytes_hash(line_bytes),
+                });
                 if let Some(session_id) = row
                     .payload
                     .get("id")
@@ -612,6 +640,30 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
     Ok(parsed)
 }
 
+fn read_indexed_line(file_path: &str, line_index: &MessageLineIndex) -> Result<String, String> {
+    if line_index.byte_end < line_index.byte_start {
+        return Err(format!(
+            "Codex session 索引已过期，第 {} 行范围非法",
+            line_index.line_index + 1
+        ));
+    }
+    let mut file =
+        File::open(file_path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
+    let byte_len = (line_index.byte_end - line_index.byte_start) as usize;
+    file.seek(SeekFrom::Start(line_index.byte_start))
+        .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+    let mut buffer = vec![0u8; byte_len];
+    file.read_exact(&mut buffer)
+        .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
+    if stable_bytes_hash(&buffer) != line_index.content_hash {
+        return Err(format!(
+            "Codex session 索引已过期，第 {} 行内容已变化",
+            line_index.line_index + 1
+        ));
+    }
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
 fn read_messages_by_range(
     file_path: &str,
     session_id: &str,
@@ -620,30 +672,10 @@ fn read_messages_by_range(
     if message_lines.is_empty() {
         return Ok(Vec::new());
     }
-    let mut file =
-        File::open(file_path).map_err(|error| format!("打开 Codex session 文件失败：{error}"))?;
     // message_lines 已经是倒序分页顺序；按 range 读取本页需要的行，避免从文件头扫描。
     let mut messages = Vec::with_capacity(message_lines.len());
     for line_index in message_lines {
-        if line_index.byte_end < line_index.byte_start {
-            return Err(format!(
-                "Codex session 索引已过期，第 {} 行范围非法",
-                line_index.line_index + 1
-            ));
-        }
-        let byte_len = (line_index.byte_end - line_index.byte_start) as usize;
-        file.seek(SeekFrom::Start(line_index.byte_start))
-            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
-        let mut buffer = vec![0u8; byte_len];
-        file.read_exact(&mut buffer)
-            .map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
-        if stable_bytes_hash(&buffer) != line_index.content_hash {
-            return Err(format!(
-                "Codex session 索引已过期，第 {} 行内容已变化",
-                line_index.line_index + 1
-            ));
-        }
-        let line = String::from_utf8_lossy(&buffer);
+        let line = read_indexed_line(file_path, line_index)?;
         let trimmed = line.trim_end_matches('\r');
         if !is_detail_message_line(trimmed) {
             return Err(format!(
@@ -1006,6 +1038,45 @@ mod tests {
         assert_eq!(detail.messages.len(), 1);
         assert_eq!(detail.messages[0].content, "用户问题");
         assert_eq!(detail.next_cursor, None);
+    }
+
+    #[test]
+    fn codex_session_provider_detail_rejects_same_page_content_from_replaced_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_test_session(
+            temp.path(),
+            &test_session_content(
+                "session-alpha",
+                "/tmp/project-alpha",
+                "same question",
+                "same answer",
+            ),
+        );
+        let mut provider = CodexSessionProvider::with_codex_home(temp.path().into());
+        let _ = provider.handle_request(snapshot_request("req-snapshot"));
+
+        std::fs::write(
+            &path,
+            test_session_content(
+                "session-bravo",
+                "/tmp/project-bravo",
+                "same question",
+                "same answer",
+            ),
+        )
+        .unwrap();
+
+        let response = provider.handle_request(detail_request_for_session(
+            "req-detail",
+            "session-alpha",
+            1,
+            None,
+        ));
+        let error = response.error.unwrap();
+
+        assert_eq!(error.code, "session_not_found");
+        assert!(!provider.index.contains_key("session-alpha"));
+        assert!(provider.index.contains_key("session-bravo"));
     }
 
     fn snapshot_request(id: &str) -> ProviderRpcRequest {
