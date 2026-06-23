@@ -593,10 +593,11 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
                 parsed.session_metadata.merge_session_meta(&row.payload);
             }
         }
-        if is_detail_message_line(line) {
+        if let Some(signature) = detail_message_signature(line) {
+            // 详情索引只保留有可展示正文的行，避免 reasoning/token_count 等空事件污染分页。
             message_candidates.push(DetailMessageCandidate {
                 line_index: MessageLineIndex::new(line_index, byte_start, line_bytes),
-                signature: detail_message_signature(line),
+                signature: Some(signature),
             });
         }
         line_index += 1;
