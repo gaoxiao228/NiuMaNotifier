@@ -13,6 +13,7 @@ use crate::state_mutation::StateMutationService;
 use crate::store::NiumaStore;
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
+pub const CODEX_SESSION_PROVIDER_COMMAND_ENV: &str = "NIUMA_CODEX_SESSION_PROVIDER_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
 pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
 pub const BUILTIN_CODEX_PLUGIN_ID: &str = "builtin-codex";
@@ -494,12 +495,11 @@ pub fn builtin_codex_session_provider_manifest() -> PluginManifest {
     let mut manifest = parse_plugin_manifest(BUILTIN_CODEX_SESSION_PROVIDER_PLUGIN_MANIFEST_JSON)
         .expect("内置 Codex session provider 插件 manifest 必须是有效 plugin.json");
     manifest.source = PluginSource::Builtin;
-    manifest.command = Some(
-        manifest
-            .command
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| CODEX_SESSION_PROVIDER_PLUGIN_COMMAND.to_string()),
-    );
+    manifest.command = Some(builtin_plugin_command(
+        CODEX_SESSION_PROVIDER_COMMAND_ENV,
+        manifest.command,
+        CODEX_SESSION_PROVIDER_PLUGIN_COMMAND,
+    ));
     // Session provider 是独立内置进程，运行目录同样由打包后的命令解析。
     manifest.base_dir = None;
     manifest
@@ -1309,6 +1309,24 @@ mod tests {
         assert_eq!(
             manifest.command.as_deref(),
             Some("/tmp/niuma-codex-plugin-test")
+        );
+        assert!(manifest.args.is_empty());
+    }
+
+    #[test]
+    fn builtin_codex_session_provider_manifest_uses_command_override_from_env() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(
+            CODEX_SESSION_PROVIDER_COMMAND_ENV,
+            "/tmp/niuma-codex-session-provider-test",
+        );
+
+        let manifest = builtin_codex_session_provider_manifest();
+
+        std::env::remove_var(CODEX_SESSION_PROVIDER_COMMAND_ENV);
+        assert_eq!(
+            manifest.command.as_deref(),
+            Some("/tmp/niuma-codex-session-provider-test")
         );
         assert!(manifest.args.is_empty());
     }

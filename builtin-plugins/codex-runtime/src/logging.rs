@@ -78,24 +78,15 @@ pub(super) fn log_main_status(
         &state.events,
     );
     let primary_session_id = snapshot.primary_session_id.as_deref().unwrap_or("-");
-    let session_status = snapshot
-        .primary_session_id
-        .as_deref()
-        .and_then(|id| state.sessions.iter().find(|session| session.id == id))
-        .map(|session| format!("{:?}", session.status))
-        .unwrap_or_else(|| "-".to_string());
-    let status_key = format!(
-        "{:?}|{}|{}",
-        snapshot.status, primary_session_id, session_status
-    );
+    // StoredState 已不保存独立 session 列表，debug key 只跟随聚合后的主状态变化。
+    let status_key = format!("{:?}|{}", snapshot.status, primary_session_id);
     if !log_state.should_log(status_key, snapshot.updated_at, Instant::now()) {
         return;
     }
     watcher_debug_log(format!(
-        "NiumaNotifier main status update reason={reason}, main_status={:?}, primary_session_id={}, session_status={}, updated_at={}",
+        "NiumaNotifier main status update reason={reason}, main_status={:?}, primary_session_id={}, updated_at={}",
         snapshot.status,
         primary_session_id,
-        session_status,
         snapshot
             .updated_at
             .map(|value| value.to_rfc3339())

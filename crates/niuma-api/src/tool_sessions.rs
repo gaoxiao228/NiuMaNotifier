@@ -55,6 +55,14 @@ impl ToolSessionRegistry {
             .insert(tool, normalized);
     }
 
+    pub fn clear_snapshot(&self, tool: &ToolKind) {
+        // provider 生命周期结束时只清理当前 tool，避免影响其他工具的会话缓存。
+        self.snapshots
+            .write()
+            .expect("tool session registry lock poisoned")
+            .remove(tool);
+    }
+
     pub fn register_detail_provider(
         &self,
         tool: ToolKind,
@@ -64,6 +72,14 @@ impl ToolSessionRegistry {
             .write()
             .expect("tool session registry lock poisoned")
             .insert(tool, provider);
+    }
+
+    pub fn unregister_detail_provider(&self, tool: &ToolKind) {
+        // 当前 registry 保证同一 tool 只有一个 detail provider，可按 tool 精确注销。
+        self.detail_providers
+            .write()
+            .expect("tool session registry lock poisoned")
+            .remove(tool);
     }
 
     pub fn list(&self, query: ToolSessionListQuery) -> Result<Vec<ToolSessionListItem>, String> {

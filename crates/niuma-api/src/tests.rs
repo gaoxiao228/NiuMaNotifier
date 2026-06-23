@@ -2338,6 +2338,25 @@ async fn session_detail_existing_snapshot_with_fake_provider_returns_detail() {
 }
 
 #[test]
+fn tool_session_unregister_detail_provider_returns_not_ready() {
+    let registry = ToolSessionRegistry::new();
+    registry.register_detail_provider(
+        ToolKind::Codex,
+        Arc::new(FakeDetailProvider {
+            detail: sample_tool_session_detail("existing-session"),
+        }),
+    );
+
+    // provider 进程退出或被禁用时，宿主必须移除旧 client，避免请求打到失效 stdin。
+    registry.unregister_detail_provider(&ToolKind::Codex);
+
+    let error = registry
+        .detail(&ToolKind::Codex, "existing-session", None, None)
+        .unwrap_err();
+    assert_eq!(error, "session detail provider 尚未就绪");
+}
+
+#[test]
 fn session_list_filters_snapshot_items() {
     let registry = ToolSessionRegistry::new();
     registry.replace_snapshot(
@@ -2371,6 +2390,37 @@ fn session_list_filters_snapshot_items() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].session_id, "codex-active");
     assert_eq!(items[0].tool, ToolKind::Codex);
+}
+
+#[test]
+fn tool_session_clear_snapshot_removes_provider_sessions() {
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "existing-session",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+
+    // provider 生命周期结束后应清掉该 tool 的列表缓存，但不能影响其他 tool。
+    registry.clear_snapshot(&ToolKind::Codex);
+
+    let items = registry
+        .list(ToolSessionListQuery {
+            tool: Some("codex".to_string()),
+            include_subagents: true,
+            ..ToolSessionListQuery::default()
+        })
+        .unwrap();
+    assert!(items.is_empty());
+    assert!(registry
+        .find_session(&ToolKind::Codex, "existing-session")
+        .is_none());
 }
 
 #[test]

@@ -28,6 +28,57 @@ fn fallback_scan_interval_keeps_notify_path_observable() {
     assert_eq!(FALLBACK_SCAN_INTERVAL, Duration::from_secs(120));
 }
 
+#[test]
+fn codex_session_provider_binary_target_is_declared() {
+    let cargo_toml = include_str!("../Cargo.toml");
+
+    // 内置 provider 由桌面运行时直接启动，workspace 必须声明可编译的 bin target。
+    assert!(cargo_toml.contains("name = \"niuma-codex-session-provider\""));
+}
+
+#[test]
+fn codex_session_provider_stub_returns_empty_snapshot() {
+    let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
+        "req-1",
+        "session_snapshot",
+        niuma_core::tool_session_rpc::SessionSnapshotParams {
+            tool: ToolKind::Codex,
+        },
+    )
+    .unwrap();
+
+    let response = session_provider::handle_session_provider_request(request);
+    let snapshot = response
+        .result_as::<niuma_core::tool_session_rpc::SessionSnapshotResult>()
+        .unwrap();
+
+    assert_eq!(response.id, "req-1");
+    assert_eq!(snapshot.tool, ToolKind::Codex);
+    assert!(snapshot.sessions.is_empty());
+}
+
+#[test]
+fn codex_session_provider_stub_returns_not_found_for_detail() {
+    let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
+        "req-2",
+        "session_detail",
+        niuma_core::tool_session_rpc::SessionDetailParams {
+            tool: ToolKind::Codex,
+            session_id: "missing-session".to_string(),
+            limit: None,
+            cursor: None,
+        },
+    )
+    .unwrap();
+
+    let response = session_provider::handle_session_provider_request(request);
+    let error = response.error.unwrap();
+
+    assert_eq!(response.id, "req-2");
+    assert_eq!(error.code, "session_not_found");
+    assert_eq!(error.message, "session_id 不存在：missing-session");
+}
+
 fn test_sqlite_path(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "niuma-codex-runtime-{name}-{}-{}",

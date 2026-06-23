@@ -23,6 +23,7 @@ mod codex;
 mod discovery;
 mod logging;
 mod scanner;
+pub mod session_provider;
 
 use self::discovery::{
     collect_event_paths, discover_recent_files, refresh_watched_dirs, SessionDayDirCache,
