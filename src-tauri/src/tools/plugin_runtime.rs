@@ -217,11 +217,7 @@ fn reconcile_managed_plugins(
                 next_start: Instant::now(),
                 session_provider: None,
             });
-        if entry.manifest != manifest {
-            stop_child(store, tool_sessions, entry);
-            entry.manifest = manifest;
-            entry.next_start = Instant::now();
-        }
+        reconcile_managed_plugin_manifest(store, tool_sessions, entry, manifest);
         tick_managed_plugin(
             store,
             runtime_events,
@@ -229,6 +225,19 @@ fn reconcile_managed_plugins(
             entry,
             session_provider_ownership,
         );
+    }
+}
+
+fn reconcile_managed_plugin_manifest(
+    store: &NiumaStore,
+    tool_sessions: &ToolSessionRegistry,
+    entry: &mut ManagedPlugin,
+    manifest: PluginManifest,
+) {
+    if entry.manifest != manifest {
+        stop_child(store, tool_sessions, entry);
+        entry.manifest = manifest;
+        entry.next_start = Instant::now();
     }
 }
 
@@ -1542,6 +1551,38 @@ mod tests {
     }
 
     #[test]
+    fn failed_session_snapshot_bootstrap_result_wakes_plugin_manager() {
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        let guard = active_provider_guard("provider-failed-wakeup", ToolKind::Codex);
+        let runtime_events = RuntimeEventBus::new();
+        let mut event_receiver = runtime_events.subscribe();
+        let (sender, receiver) = mpsc::channel();
+
+        let handle = spawn_session_snapshot_bootstrap_thread(
+            "provider-failed-wakeup".to_string(),
+            guard,
+            runtime_events,
+            registry,
+            sender,
+            || Err("provider 请求超时：session_snapshot".to_string()),
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            SessionProviderBootstrapResult::Failed(error) if error.contains("provider 请求超时")
+        ));
+        assert!(matches!(
+            event_receiver.try_recv().unwrap(),
+            RuntimeEvent::StateChanged {
+                reason: StateChangeReason::PluginConfigChanged,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn failed_session_snapshot_bootstrap_reports_failure_without_clearing_registry() {
         let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
         let guard = active_provider_guard("provider-failed", ToolKind::Codex);
@@ -1756,6 +1797,108 @@ mod tests {
     }
 
     #[test]
+    fn disabled_provider_runtime_clears_snapshot_and_detail_provider() {
+        let store = NiumaStore::new(test_sqlite_path("provider_disabled_cleanup"));
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        seed_codex_session_provider_registry(&registry, "disabled-session");
+        let mut enabled = BTreeMap::new();
+        enabled.insert("codex-session-provider".to_string(), false);
+        store.save_plugin_enabled_map(&enabled).unwrap();
+        let mut entry = managed_provider_entry(
+            "codex-session-provider",
+            sleep_child(),
+            SessionProviderOwnership::default(),
+        );
+
+        // 直接进入 disabled 分支，验证 stop_child 会清理 provider runtime 持有的缓存。
+        tick_managed_plugin(
+            &store,
+            &RuntimeEventBus::new(),
+            &registry,
+            &mut entry,
+            &SessionProviderOwnership::default(),
+        );
+
+        assert!(entry.child.is_none());
+        assert!(entry.session_provider.is_none());
+        assert_codex_session_provider_cleared(&registry, "disabled-session");
+        let state = store
+            .plugin_runtime_states()
+            .unwrap()
+            .remove("codex-session-provider")
+            .unwrap();
+        assert_eq!(
+            state.status,
+            niuma_core::plugin::PluginRuntimeStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn manifest_change_stops_old_provider_and_clears_session_registry() {
+        let store = NiumaStore::new(test_sqlite_path("provider_manifest_change_cleanup"));
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        seed_codex_session_provider_registry(&registry, "manifest-session");
+        let mut entry = managed_provider_entry(
+            "codex-session-provider",
+            sleep_child(),
+            SessionProviderOwnership::default(),
+        );
+        let replacement = notification_consumer_manifest("codex-session-provider");
+
+        // 抽出的 manifest reconcile helper 覆盖生产路径里的旧 entry stop 行为。
+        reconcile_managed_plugin_manifest(&store, &registry, &mut entry, replacement.clone());
+
+        assert!(entry.child.is_none());
+        assert!(entry.session_provider.is_none());
+        assert_eq!(entry.manifest, replacement);
+        assert_codex_session_provider_cleared(&registry, "manifest-session");
+    }
+
+    #[test]
+    fn exited_provider_child_clears_snapshot_and_detail_provider() {
+        let store = NiumaStore::new(test_sqlite_path("provider_child_exit_cleanup"));
+        let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        seed_codex_session_provider_registry(&registry, "exited-session");
+        let mut enabled = BTreeMap::new();
+        enabled.insert("codex-session-provider".to_string(), true);
+        store.save_plugin_enabled_map(&enabled).unwrap();
+        let mut entry = managed_provider_entry(
+            "codex-session-provider",
+            true_child(),
+            SessionProviderOwnership::default(),
+        );
+        let started_before_tick = Instant::now();
+
+        // /bin/sh -c true 很快退出；循环 tick 直到覆盖 try_wait Some(status) 分支。
+        while entry.child.is_some() && started_before_tick.elapsed() < Duration::from_secs(1) {
+            tick_managed_plugin(
+                &store,
+                &RuntimeEventBus::new(),
+                &registry,
+                &mut entry,
+                &SessionProviderOwnership::default(),
+            );
+            if entry.child.is_some() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        assert!(entry.child.is_none());
+        assert!(entry.session_provider.is_none());
+        assert!(entry.next_start > started_before_tick);
+        assert_codex_session_provider_cleared(&registry, "exited-session");
+        let state = store
+            .plugin_runtime_states()
+            .unwrap()
+            .remove("codex-session-provider")
+            .unwrap();
+        assert_eq!(
+            state.status,
+            niuma_core::plugin::PluginRuntimeStatus::Failed
+        );
+    }
+
+    #[test]
     fn spawn_plugin_runtimes_requires_shared_store_from_main_app() {
         let _spawn: fn(NiumaStore, RuntimeEventBus, ToolSessionRegistry) = spawn_plugin_runtimes;
     }
@@ -1926,6 +2069,74 @@ mod tests {
             source: PluginSource::External,
             base_dir: None,
         }
+    }
+
+    fn managed_provider_entry(
+        id: &str,
+        child: Child,
+        ownership: SessionProviderOwnership,
+    ) -> ManagedPlugin {
+        let guard = SessionProviderInstanceGuard::new(id.to_string(), ToolKind::Codex, ownership);
+        ManagedPlugin {
+            manifest: session_provider_manifest(id),
+            child: Some(child),
+            next_start: Instant::now() + Duration::from_secs(60),
+            session_provider: Some(SessionProviderRuntimeInstance {
+                tool: ToolKind::Codex,
+                guard,
+                bootstrap_result: None,
+            }),
+        }
+    }
+
+    fn sleep_child() -> Child {
+        // 长命进程用于证明 stop_child 会 kill/wait，并把 entry.child 置空。
+        Command::new("/bin/sleep")
+            .arg("5")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn true_child() -> Child {
+        // 短命进程用于稳定触发 manager 的 try_wait Some(status) 清理分支。
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn seed_codex_session_provider_registry(
+        registry: &niuma_api::tool_sessions::ToolSessionRegistry,
+        session_id: &str,
+    ) {
+        registry.replace_snapshot(
+            ToolKind::Codex,
+            vec![provider_test_session_item(session_id)],
+        );
+        registry.register_detail_provider(ToolKind::Codex, Arc::new(FakeToolSessionDetailProvider));
+    }
+
+    fn assert_codex_session_provider_cleared(
+        registry: &niuma_api::tool_sessions::ToolSessionRegistry,
+        session_id: &str,
+    ) {
+        // snapshot 和 detail provider 必须同时消失，才算 manager 入口完成 provider 清理。
+        assert!(registry
+            .find_session(&ToolKind::Codex, session_id)
+            .is_none());
+        assert_eq!(
+            registry
+                .detail(&ToolKind::Codex, session_id, 100, None)
+                .unwrap_err(),
+            "session detail provider 尚未就绪"
+        );
     }
 
     fn active_provider_guard(id: &str, tool: ToolKind) -> SessionProviderInstanceGuard {
