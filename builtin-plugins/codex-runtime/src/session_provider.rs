@@ -41,6 +41,7 @@ struct SessionIndex {
 struct SessionFileSignature {
     modified_system_time: SystemTime,
     size_bytes: u64,
+    content_hash: u64,
 }
 
 #[derive(Deserialize)]
@@ -213,16 +214,9 @@ impl CodexSessionProvider {
             return Err(ProviderError::not_found(session_id));
         };
         let path = PathBuf::from(&index.list_item.file_path);
-        let modified_system_time = file_modified_time(&path).map_err(|error| {
+        let file_signature = session_file_signature(&path).map_err(|error| {
             ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
         })?;
-        let size_bytes = file_size(&path).map_err(|error| {
-            ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
-        })?;
-        let file_signature = SessionFileSignature {
-            modified_system_time,
-            size_bytes,
-        };
         if file_signature != index.file_signature {
             self.refresh_session_index_from_file(session_id, &index)?;
         }
@@ -652,10 +646,11 @@ fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SessionFileSignature
             }
             let file_signature = entry
                 .metadata()
-                .and_then(|metadata| session_file_signature_from_metadata(&metadata))
+                .and_then(|metadata| session_file_signature_from_metadata(&path, &metadata))
                 .unwrap_or(SessionFileSignature {
                     modified_system_time: SystemTime::UNIX_EPOCH,
                     size_bytes: 0,
+                    content_hash: 0,
                 });
             files.push((path, file_signature));
         }
@@ -743,24 +738,20 @@ fn parse_cursor(cursor: Option<&str>) -> Result<Option<usize>, ProviderError> {
 
 fn session_file_signature(path: &Path) -> io::Result<SessionFileSignature> {
     let metadata = std::fs::metadata(path)?;
-    session_file_signature_from_metadata(&metadata)
+    session_file_signature_from_metadata(path, &metadata)
 }
 
 fn session_file_signature_from_metadata(
+    path: &Path,
     metadata: &std::fs::Metadata,
 ) -> io::Result<SessionFileSignature> {
+    // 签名只读取原始字节，不解析 JSONL，避免把缓存校验退化成重复逐行索引。
+    let content = std::fs::read(path)?;
     Ok(SessionFileSignature {
         modified_system_time: metadata.modified()?,
         size_bytes: metadata.len(),
+        content_hash: stable_bytes_hash(&content),
     })
-}
-
-fn file_size(path: &Path) -> io::Result<u64> {
-    std::fs::metadata(path).map(|metadata| metadata.len())
-}
-
-fn file_modified_time(path: &Path) -> io::Result<SystemTime> {
-    std::fs::metadata(path).and_then(|metadata| metadata.modified())
 }
 
 fn recently_modified(modified: SystemTime, max_age: Duration) -> bool {
@@ -807,6 +798,15 @@ fn stable_hash(text: &str) -> String {
     format!("{hash:x}")
 }
 
+fn stable_bytes_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 14_695_981_039_346_656_037;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(1_099_511_628_211);
+    }
+    hash
+}
+
 struct ProviderError {
     code: &'static str,
     message: String,
@@ -838,6 +838,66 @@ impl ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_session_provider_snapshot_refreshes_same_size_replaced_file_by_content_hash() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_a =
+            test_session_content("session-alpha", "/tmp/project-a", "question A", "answer A");
+        let session_b =
+            test_session_content("session-bravo", "/tmp/project-b", "question B", "answer B");
+        assert_eq!(session_a.len(), session_b.len());
+        let path = write_test_session(temp.path(), &session_a);
+        let mut provider = CodexSessionProvider::with_codex_home(temp.path().into());
+        let first_snapshot = provider
+            .handle_request(snapshot_request("req-first-snapshot"))
+            .result_as::<SessionSnapshotResult>()
+            .unwrap();
+        assert!(first_snapshot
+            .sessions
+            .iter()
+            .any(|session| session.session_id == "session-alpha"));
+        let first_scan_count = provider.scan_count();
+
+        std::fs::write(&path, &session_b).unwrap();
+        let replaced_signature = session_file_signature(&path).unwrap();
+        let cached_index = provider.index.get_mut("session-alpha").unwrap();
+        // 模拟文件系统 mtime 精度不足或 mtime 被恢复：旧缓存只剩 content_hash 与新文件不同。
+        cached_index.file_signature.modified_system_time = replaced_signature.modified_system_time;
+        cached_index.file_signature.size_bytes = replaced_signature.size_bytes;
+        assert_ne!(
+            cached_index.file_signature.content_hash,
+            replaced_signature.content_hash
+        );
+
+        let second_snapshot = provider
+            .handle_request(snapshot_request("req-second-snapshot"))
+            .result_as::<SessionSnapshotResult>()
+            .unwrap();
+        assert!(second_snapshot
+            .sessions
+            .iter()
+            .any(|session| session.session_id == "session-bravo"));
+        assert!(!second_snapshot
+            .sessions
+            .iter()
+            .any(|session| session.session_id == "session-alpha"));
+        assert_eq!(provider.scan_count(), first_scan_count + 1);
+
+        let detail = provider
+            .handle_request(detail_request_for_session(
+                "req-detail",
+                "session-bravo",
+                20,
+                None,
+            ))
+            .result_as::<SessionDetailResult>()
+            .unwrap()
+            .detail;
+        assert_eq!(detail.session_id, "session-bravo");
+        assert_eq!(detail.messages[0].content, "answer B");
+        assert_eq!(detail.messages[1].content, "question B");
+    }
 
     #[test]
     fn codex_session_provider_detail_refreshes_stale_index_after_file_truncate() {
@@ -887,17 +947,39 @@ mod tests {
     }
 
     fn detail_request(id: &str, limit: usize, cursor: Option<&str>) -> ProviderRpcRequest {
+        detail_request_for_session(id, "session-fixture", limit, cursor)
+    }
+
+    fn detail_request_for_session(
+        id: &str,
+        session_id: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> ProviderRpcRequest {
         ProviderRpcRequest::new(
             id,
             "session_detail",
             SessionDetailParams {
                 tool: ToolKind::Codex,
-                session_id: "session-fixture".to_string(),
+                session_id: session_id.to_string(),
                 limit,
                 cursor: cursor.map(ToString::to_string),
             },
         )
         .unwrap()
+    }
+
+    fn test_session_content(
+        session_id: &str,
+        project_path: &str,
+        user_message: &str,
+        assistant_message: &str,
+    ) -> String {
+        format!(
+            "{{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{session_id}\",\"cwd\":\"{project_path}\"}}}}\n\
+             {{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{user_message}\"}}]}}}}\n\
+             {{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"{assistant_message}\"}}]}}}}\n",
+        )
     }
 
     fn write_test_session(codex_home: &Path, content: &str) -> PathBuf {
