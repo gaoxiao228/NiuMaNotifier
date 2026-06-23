@@ -150,6 +150,63 @@ fn codex_session_provider_detail_missing_session_returns_provider_error() {
     assert_eq!(error.message, "session_id 不存在：missing-session");
 }
 
+#[test]
+fn codex_session_provider_snapshot_notifier_emits_update_and_keeps_response_writer() {
+    let temp = tempfile::tempdir().unwrap();
+    let provider = std::sync::Arc::new(std::sync::Mutex::new(
+        session_provider::CodexSessionProvider::with_codex_home(temp.path().into()),
+    ));
+    let writer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let mut notifier_state = session_provider::SnapshotNotifierState::default();
+
+    assert!(!session_provider::notify_snapshot_update_once(
+        &provider,
+        &writer,
+        &mut notifier_state
+    )
+    .unwrap());
+
+    let response = {
+        let request = niuma_core::tool_session_rpc::ProviderRpcRequest::new(
+            "req-snapshot",
+            "session_snapshot",
+            niuma_core::tool_session_rpc::SessionSnapshotParams {
+                tool: ToolKind::Codex,
+            },
+        )
+        .unwrap();
+        provider.lock().unwrap().handle_request(request)
+    };
+    // response 与后台 notification 共用 helper，测试覆盖 JSONL 写出仍保持完整行。
+    session_provider::write_provider_message(&writer, &response).unwrap();
+
+    write_codex_session_fixture(temp.path());
+    assert!(
+        session_provider::notify_snapshot_update_once(&provider, &writer, &mut notifier_state)
+            .unwrap()
+    );
+
+    let output = String::from_utf8(writer.lock().unwrap().clone()).unwrap();
+    let lines = output.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+
+    let response: niuma_core::tool_session_rpc::ProviderRpcResponse =
+        serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(response.id, "req-snapshot");
+    assert!(response.error.is_none());
+
+    let notification: niuma_core::tool_session_rpc::ProviderRpcNotification =
+        serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(notification.method, "session_snapshot_updated");
+    let params = notification
+        .params_as::<niuma_core::tool_session_rpc::SessionSnapshotResult>()
+        .unwrap();
+    assert!(params
+        .sessions
+        .iter()
+        .any(|session| session.session_id == "session-fixture"));
+}
+
 fn provider_snapshot(
     provider: &mut session_provider::CodexSessionProvider,
 ) -> niuma_core::tool_session_rpc::SessionSnapshotResult {

@@ -2,14 +2,16 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{ToolSessionDetail, ToolSessionListItem, ToolSessionStatus};
 use niuma_core::tool_session_rpc::{
-    ProviderRpcRequest, ProviderRpcResponse, SessionDetailParams, SessionDetailResult,
-    SessionSnapshotParams, SessionSnapshotResult,
+    ProviderRpcNotification, ProviderRpcRequest, ProviderRpcResponse, SessionDetailParams,
+    SessionDetailResult, SessionSnapshotParams, SessionSnapshotResult,
 };
 use serde::Deserialize;
 
@@ -18,6 +20,7 @@ use crate::session_messages::{is_detail_message_line, parse_codex_message_line};
 const SNAPSHOT_FILE_LIMIT: usize = 128;
 const SESSION_DAY_DIR_LIMIT: usize = 180;
 const ACTIVE_MODIFIED_WINDOW: Duration = Duration::from_secs(60);
+const SNAPSHOT_NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
 
 pub struct CodexSessionProvider {
     codex_home: PathBuf,
@@ -152,43 +155,27 @@ impl CodexSessionProvider {
         params: SessionDetailParams,
     ) -> Result<ToolSessionDetail, ProviderError> {
         self.ensure_session_index(&params.session_id)?;
-        let index = self
-            .index
-            .get(&params.session_id)
-            .cloned()
-            .ok_or_else(|| ProviderError::not_found(&params.session_id))?;
-        let total = index.message_line_indexes.len();
-        let start = parse_cursor(params.cursor.as_deref(), total)?;
-        let page_size = params.limit.max(1);
-
-        // cursor 表示倒序消息列表中的起始偏移；line_indexes 本身按文件顺序保存，分页时再反向迭代。
-        let page_line_indexes = index
-            .message_line_indexes
-            .iter()
-            .rev()
-            .skip(start)
-            .take(page_size)
-            .copied()
-            .collect::<Vec<_>>();
-        let messages = read_messages_by_line_index(
-            &index.list_item.file_path,
-            &index.list_item.session_id,
-            &page_line_indexes,
-        )
-        .map_err(|error| ProviderError::internal(error))?;
-        let next_offset = start + messages.len();
-        let next_cursor = (next_offset < total).then(|| next_offset.to_string());
-
-        Ok(ToolSessionDetail {
-            tool: ToolKind::Codex,
-            session_id: index.list_item.session_id,
-            project_path: index.list_item.project_path,
-            project_name: index.list_item.project_name,
-            is_subagent: false,
-            parent_session_id: None,
-            messages,
-            next_cursor,
-        })
+        let mut retried_after_stale_index = false;
+        loop {
+            let index = self
+                .index
+                .get(&params.session_id)
+                .cloned()
+                .ok_or_else(|| ProviderError::not_found(&params.session_id))?;
+            match detail_from_index(&index, &params) {
+                Ok(detail) => return Ok(detail),
+                Err(DetailFromIndexError::Provider(error)) => return Err(error),
+                Err(DetailFromIndexError::Stale(_error)) if !retried_after_stale_index => {
+                    retried_after_stale_index = true;
+                    // 行号索引可能来自旧文件内容；强制重扫一次，避免用缺行数量推进 cursor。
+                    self.refresh_session_index_from_file(&params.session_id, &index)?;
+                    continue;
+                }
+                Err(DetailFromIndexError::Stale(error)) => {
+                    return Err(ProviderError::stale_session_file(error));
+                }
+            }
+        }
     }
 
     fn ensure_session_index(&mut self, session_id: &str) -> Result<(), ProviderError> {
@@ -203,16 +190,29 @@ impl CodexSessionProvider {
             ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
         })?;
         if modified_system_time != index.modified_system_time {
-            let refreshed = self
-                .scan_session_file(&path, modified_system_time, Utc::now())
-                .map_err(ProviderError::internal)?;
-            let refreshed_session_id = refreshed.list_item.session_id.clone();
-            // 文件被截断或替换后可能属于另一个 session，旧 session_id 不能继续命中旧索引。
-            self.index.remove(session_id);
-            self.index.insert(refreshed_session_id.clone(), refreshed);
-            if refreshed_session_id != session_id {
-                return Err(ProviderError::not_found(session_id));
-            }
+            self.refresh_session_index_from_file(session_id, &index)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_session_index_from_file(
+        &mut self,
+        session_id: &str,
+        index: &SessionIndex,
+    ) -> Result<(), ProviderError> {
+        let path = PathBuf::from(&index.list_item.file_path);
+        let modified_system_time = file_modified_time(&path).map_err(|error| {
+            ProviderError::internal(format!("读取 Codex session 文件失败：{error}"))
+        })?;
+        let refreshed = self
+            .scan_session_file(&path, modified_system_time, Utc::now())
+            .map_err(ProviderError::internal)?;
+        let refreshed_session_id = refreshed.list_item.session_id.clone();
+        // 文件被截断或替换后可能属于另一个 session，旧 session_id 不能继续命中旧索引。
+        self.index.remove(session_id);
+        self.index.insert(refreshed_session_id.clone(), refreshed);
+        if refreshed_session_id != session_id {
+            return Err(ProviderError::not_found(session_id));
         }
         Ok(())
     }
@@ -265,8 +265,10 @@ impl CodexSessionProvider {
 // 启动 stdio JSON Lines provider；同一进程复用 provider 实例，让 snapshot 建立的索引可服务后续 detail。
 pub fn run_stdio_session_provider() {
     let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    let mut provider = CodexSessionProvider::from_config();
+    let stdout = Arc::new(Mutex::new(io::stdout()));
+    let provider = Arc::new(Mutex::new(CodexSessionProvider::from_config()));
+    let _snapshot_notifier =
+        start_snapshot_notifier(provider.clone(), stdout.clone(), SNAPSHOT_NOTIFY_INTERVAL);
     for line in stdin.lock().lines() {
         let Ok(line) = line else {
             eprintln!("NiumaNotifier Codex session provider stdin read failed");
@@ -279,15 +281,14 @@ pub fn run_stdio_session_provider() {
                 continue;
             }
         };
-        let response = provider.handle_request(request);
-        let Ok(encoded) = serde_json::to_string(&response) else {
-            eprintln!("NiumaNotifier Codex session provider response serialize failed");
-            continue;
+        let response = match provider.lock() {
+            Ok(mut provider) => provider.handle_request(request),
+            Err(_) => {
+                eprintln!("NiumaNotifier Codex session provider state lock poisoned");
+                break;
+            }
         };
-        if writeln!(stdout, "{encoded}")
-            .and_then(|_| stdout.flush())
-            .is_err()
-        {
+        if write_provider_message(&stdout, &response).is_err() {
             break;
         }
     }
@@ -295,6 +296,199 @@ pub fn run_stdio_session_provider() {
 
 pub fn handle_session_provider_request(request: ProviderRpcRequest) -> ProviderRpcResponse {
     CodexSessionProvider::from_config().handle_request(request)
+}
+
+struct SnapshotNotifierHandle {
+    stop_tx: Option<mpsc::Sender<()>>,
+    join_handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for SnapshotNotifierHandle {
+    fn drop(&mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        if let Some(join_handle) = self.join_handle.take() {
+            let _ = join_handle.join();
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SnapshotNotifierState {
+    fingerprint: Option<SnapshotFingerprint>,
+}
+
+fn start_snapshot_notifier<W>(
+    provider: Arc<Mutex<CodexSessionProvider>>,
+    writer: Arc<Mutex<W>>,
+    interval: Duration,
+) -> SnapshotNotifierHandle
+where
+    W: Write + Send + 'static,
+{
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let join_handle = thread::Builder::new()
+        .name("codex-session-snapshot-notifier".to_string())
+        .spawn(move || {
+            let mut state = SnapshotNotifierState::default();
+            loop {
+                if let Err(error) = notify_snapshot_update_once(&provider, &writer, &mut state) {
+                    eprintln!(
+                        "NiumaNotifier Codex session provider snapshot notify failed: {error}"
+                    );
+                }
+                if stop_rx.recv_timeout(interval).is_ok() {
+                    break;
+                }
+            }
+        })
+        .ok();
+
+    SnapshotNotifierHandle {
+        stop_tx: Some(stop_tx),
+        join_handle,
+    }
+}
+
+pub(crate) fn notify_snapshot_update_once<W>(
+    provider: &Arc<Mutex<CodexSessionProvider>>,
+    writer: &Arc<Mutex<W>>,
+    state: &mut SnapshotNotifierState,
+) -> Result<bool, String>
+where
+    W: Write,
+{
+    let sessions = provider
+        .lock()
+        .map_err(|_| "Codex session provider state lock poisoned".to_string())?
+        .refresh_snapshot()?;
+    let next_fingerprint = SnapshotFingerprint::from_sessions(&sessions);
+    let changed = state
+        .fingerprint
+        .as_ref()
+        .is_some_and(|fingerprint| fingerprint != &next_fingerprint);
+    state.fingerprint = Some(next_fingerprint);
+    if !changed {
+        return Ok(false);
+    }
+
+    let notification = ProviderRpcNotification::new(
+        "session_snapshot_updated",
+        SessionSnapshotResult {
+            tool: ToolKind::Codex,
+            sessions,
+        },
+    )?;
+    write_provider_message(writer, &notification)?;
+    Ok(true)
+}
+
+pub(crate) fn write_provider_message<W, T>(
+    writer: &Arc<Mutex<W>>,
+    message: &T,
+) -> Result<(), String>
+where
+    W: Write,
+    T: serde::Serialize,
+{
+    let encoded = serde_json::to_string(message)
+        .map_err(|error| format!("序列化 provider RPC 消息失败：{error}"))?;
+    // notification 与 response 共用 stdout；单点加锁写入，避免两个线程交错输出 JSONL。
+    let mut writer = writer
+        .lock()
+        .map_err(|_| "Codex session provider stdout lock poisoned".to_string())?;
+    writeln!(writer, "{encoded}").map_err(|error| format!("写入 provider stdout 失败：{error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("刷新 provider stdout 失败：{error}"))
+}
+
+#[derive(Eq, PartialEq)]
+struct SnapshotFingerprint(Vec<SnapshotSessionFingerprint>);
+
+impl SnapshotFingerprint {
+    fn from_sessions(sessions: &[ToolSessionListItem]) -> Self {
+        let mut entries = sessions
+            .iter()
+            .map(SnapshotSessionFingerprint::from)
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        Self(entries)
+    }
+}
+
+#[derive(Eq, PartialEq)]
+struct SnapshotSessionFingerprint {
+    session_id: String,
+    project_path: String,
+    project_name: String,
+    file_path: String,
+    modified_at: DateTime<Utc>,
+    is_active: bool,
+    is_subagent: bool,
+    parent_session_id: Option<String>,
+    status: ToolSessionStatus,
+}
+
+impl From<&ToolSessionListItem> for SnapshotSessionFingerprint {
+    fn from(session: &ToolSessionListItem) -> Self {
+        Self {
+            session_id: session.session_id.clone(),
+            project_path: session.project_path.clone(),
+            project_name: session.project_name.clone(),
+            file_path: session.file_path.clone(),
+            modified_at: session.modified_at,
+            is_active: session.is_active,
+            is_subagent: session.is_subagent,
+            parent_session_id: session.parent_session_id.clone(),
+            status: session.status.clone(),
+        }
+    }
+}
+
+fn detail_from_index(
+    index: &SessionIndex,
+    params: &SessionDetailParams,
+) -> Result<ToolSessionDetail, DetailFromIndexError> {
+    let total = index.message_line_indexes.len();
+    let start =
+        parse_cursor(params.cursor.as_deref(), total).map_err(DetailFromIndexError::Provider)?;
+    let page_size = params.limit.max(1);
+
+    // cursor 表示倒序消息列表中的起始偏移；line_indexes 本身按文件顺序保存，分页时再反向迭代。
+    let page_line_indexes = index
+        .message_line_indexes
+        .iter()
+        .rev()
+        .skip(start)
+        .take(page_size)
+        .copied()
+        .collect::<Vec<_>>();
+    let messages = read_messages_by_line_index(
+        &index.list_item.file_path,
+        &index.list_item.session_id,
+        &page_line_indexes,
+    )
+    .map_err(DetailFromIndexError::Stale)?;
+    let next_offset = start + page_line_indexes.len();
+    let next_cursor = (next_offset < total).then(|| next_offset.to_string());
+
+    Ok(ToolSessionDetail {
+        tool: ToolKind::Codex,
+        session_id: index.list_item.session_id.clone(),
+        project_path: index.list_item.project_path.clone(),
+        project_name: index.list_item.project_name.clone(),
+        is_subagent: false,
+        parent_session_id: None,
+        messages,
+        next_cursor,
+    })
+}
+
+enum DetailFromIndexError {
+    Provider(ProviderError),
+    Stale(String),
 }
 
 fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
@@ -339,6 +533,9 @@ fn read_messages_by_line_index(
     session_id: &str,
     line_indexes: &[usize],
 ) -> Result<Vec<niuma_core::tool_session::ToolSessionMessage>, String> {
+    if line_indexes.is_empty() {
+        return Ok(Vec::new());
+    }
     let wanted = line_indexes
         .iter()
         .copied()
@@ -353,6 +550,12 @@ fn read_messages_by_line_index(
         }
         let line = line.map_err(|error| format!("读取 Codex session 文件失败：{error}"))?;
         let trimmed = line.trim_end_matches('\r');
+        if !is_detail_message_line(trimmed) {
+            return Err(format!(
+                "Codex session 索引已过期，第 {} 行不再是详情消息",
+                line_index + 1
+            ));
+        }
         messages_by_index.insert(
             line_index,
             parse_codex_message_line(session_id, line_index, trimmed),
@@ -362,10 +565,17 @@ fn read_messages_by_line_index(
         }
     }
     // line_indexes 已经是倒序分页顺序，按该顺序组装消息，避免 HashMap 破坏排序。
-    Ok(line_indexes
-        .iter()
-        .filter_map(|line_index| messages_by_index.remove(line_index))
-        .collect())
+    let mut messages = Vec::with_capacity(line_indexes.len());
+    for line_index in line_indexes {
+        let Some(message) = messages_by_index.remove(line_index) else {
+            return Err(format!(
+                "Codex session 索引已过期，缺少第 {} 行",
+                line_index + 1
+            ));
+        };
+        messages.push(message);
+    }
+    Ok(messages)
 }
 
 fn recent_session_files(codex_home: &Path) -> Vec<(PathBuf, SystemTime)> {
@@ -533,5 +743,83 @@ impl ProviderError {
 
     fn internal(message: impl Into<String>) -> Self {
         Self::new("provider_internal_error", message)
+    }
+
+    fn stale_session_file(message: impl Into<String>) -> Self {
+        Self::new("stale_session_file", message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_session_provider_detail_refreshes_stale_index_after_file_truncate() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_test_session(
+            temp.path(),
+            concat!(
+                "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}]}}\n",
+            ),
+        );
+        let mut provider = CodexSessionProvider::with_codex_home(temp.path().into());
+        let _ = provider.handle_request(snapshot_request("req-snapshot"));
+
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-fixture\",\"cwd\":\"/tmp/fixture-project\"}}\n",
+                "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let truncated_modified = file_modified_time(&path).unwrap();
+        let index = provider.index.get_mut("session-fixture").unwrap();
+        // 保留旧行号但同步 mtime，强制走“读取发现缺行后重建索引”的防护分支。
+        index.modified_system_time = truncated_modified;
+
+        let response = provider.handle_request(detail_request("req-detail", 2, None));
+        assert!(response.error.is_none());
+        let detail = response.result_as::<SessionDetailResult>().unwrap().detail;
+
+        assert_eq!(detail.messages.len(), 1);
+        assert_eq!(detail.messages[0].content, "用户问题");
+        assert_eq!(detail.next_cursor, None);
+    }
+
+    fn snapshot_request(id: &str) -> ProviderRpcRequest {
+        ProviderRpcRequest::new(
+            id,
+            "session_snapshot",
+            SessionSnapshotParams {
+                tool: ToolKind::Codex,
+            },
+        )
+        .unwrap()
+    }
+
+    fn detail_request(id: &str, limit: usize, cursor: Option<&str>) -> ProviderRpcRequest {
+        ProviderRpcRequest::new(
+            id,
+            "session_detail",
+            SessionDetailParams {
+                tool: ToolKind::Codex,
+                session_id: "session-fixture".to_string(),
+                limit,
+                cursor: cursor.map(ToString::to_string),
+            },
+        )
+        .unwrap()
+    }
+
+    fn write_test_session(codex_home: &Path, content: &str) -> PathBuf {
+        let day_dir = codex_home.join("sessions/2026/06/22");
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let path = day_dir.join("rollout-2026-06-22-00000000-0000-0000-0000-000000000000.jsonl");
+        std::fs::write(&path, content).unwrap();
+        path
     }
 }
