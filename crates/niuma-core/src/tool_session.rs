@@ -56,6 +56,11 @@ pub struct ToolSessionListItem {
     pub agent_role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normalization_status: Option<ToolSessionNormalizationStatus>,
+    // 列表摘要只保留首条用户消息预览，避免 session 列表接口携带完整对话内容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user_message_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user_message_at: Option<DateTime<Utc>>,
     pub status: ToolSessionStatus,
 }
 

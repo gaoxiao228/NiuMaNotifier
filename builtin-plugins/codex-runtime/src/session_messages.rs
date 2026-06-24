@@ -15,6 +15,7 @@ struct CodexRow {
 pub struct DetailMessageSignature {
     pub role: ToolSessionMessageRole,
     pub content: String,
+    pub created_at: DateTime<Utc>,
     pub is_structured_message: bool,
 }
 
@@ -93,6 +94,7 @@ pub fn detail_message_signature(line: &str) -> Option<DetailMessageSignature> {
     Some(DetailMessageSignature {
         role,
         content,
+        created_at: parse_timestamp(row.timestamp.as_deref()).unwrap_or_else(epoch),
         is_structured_message: row.row_type == "response_item" && item_type == Some("message"),
     })
 }

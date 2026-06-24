@@ -395,7 +395,7 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 }
 ```
 
-`session_project_groups` 按项目路径聚合 provider snapshot，返回结构是项目 -> 归一会话 -> 可选 raw session 明细。归一会话会把 subagent 归到 `normalized_session_id` 下；默认不展开 raw subagent 明细，但仍会计算父会话更新时间。项目组计数字段中，`normalized_session_count` 表示归一会话数量，`raw_session_count` 表示 raw session 文件数量，`subagent_count` 表示其中由 subagent 产生的 raw session 数量。常用查询参数：
+`session_project_groups` 按项目路径聚合 provider snapshot，返回结构是项目 -> 归一会话 -> 可选 raw session 明细。归一会话会把 subagent 归到 `normalized_session_id` 下；默认不展开 raw subagent 明细，但仍会计算父会话更新时间。每个归一会话里的 `updated_at` 表示最近 raw session 更新时间；如果 provider 已知首条用户消息，还会返回 `first_user_message_preview` / `first_user_message_at`。项目组计数字段中，`normalized_session_count` 表示归一会话数量，`raw_session_count` 表示 raw session 文件数量，`subagent_count` 表示其中由 subagent 产生的 raw session 数量。常用查询参数：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -420,7 +420,19 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
         "normalized_session_count": 1,
         "raw_session_count": 2,
         "subagent_count": 1,
-        "sessions": []
+        "sessions": [
+          {
+            "normalized_session_id": "session-1",
+            "primary_session_id": "session-1",
+            "title": "session-session",
+            "status": "active",
+            "updated_at": "2026-06-24T10:00:00Z",
+            "first_user_message_preview": "总结这个项目",
+            "first_user_message_at": "2026-06-24T09:30:00Z",
+            "latest_event_summary": null,
+            "subagent_count": 1
+          }
+        ]
       }
     ],
     "page": 1,
@@ -545,6 +557,8 @@ Provider RPC 失败属于 provider 层失败，不是 Local API envelope。reade
 | `session_scope` | `main` 或 `subagent`。 |
 | `agent_nickname` / `agent_role` | 工具提供的 subagent 展示信息，可为空。 |
 | `normalization_status` | `resolved`、`parent_missing` 或 `parent_unresolved`，只用于诊断。 |
+| `first_user_message_preview` | 首条用户消息摘要，可为空。provider 应保持短文本；内置 Codex provider 限制为 200 字符。 |
+| `first_user_message_at` | `first_user_message_preview` 对应的消息时间，可为空。 |
 
 `ToolSessionDetail` 复用同一套 identity 字段，并额外包含：
 

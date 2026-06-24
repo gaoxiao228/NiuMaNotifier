@@ -2187,10 +2187,14 @@ async fn session_list_returns_snapshot_with_filters() {
 #[tokio::test]
 async fn session_project_groups_returns_project_normalized_sessions() {
     let registry = ToolSessionRegistry::new();
-    let main = tool_session_item("parent-session", ToolKind::Codex, 30, 20, false, false);
+    let mut main = tool_session_item("parent-session", ToolKind::Codex, 30, 20, false, false);
+    main.first_user_message_preview = Some("主会话第一条用户消息".to_string());
+    main.first_user_message_at = Some(Utc.timestamp_opt(10, 0).single().unwrap());
     let mut subagent = tool_session_item("child-session", ToolKind::Codex, 50, 50, true, true);
     subagent.agent_nickname = Some("Jason".to_string());
     subagent.agent_role = Some("default".to_string());
+    subagent.first_user_message_preview = Some("子代理第一条用户消息".to_string());
+    subagent.first_user_message_at = Some(Utc.timestamp_opt(40, 0).single().unwrap());
     let other_project = tool_session_item_with_project(
         "other-session",
         ToolKind::Codex,
@@ -2230,6 +2234,14 @@ async fn session_project_groups_returns_project_normalized_sessions() {
         "parent-session"
     );
     assert_eq!(value["data"]["list"][0]["sessions"][0]["status"], "active");
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["first_user_message_preview"],
+        "主会话第一条用户消息"
+    );
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["first_user_message_at"],
+        "1970-01-01T00:00:10Z"
+    );
     assert_eq!(
         value["data"]["list"][0]["sessions"][0]["raw_sessions"][1]["agent_nickname"],
         "Jason"
@@ -3023,6 +3035,8 @@ fn tool_session_item(
         normalization_status: Some(
             niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
         ),
+        first_user_message_preview: None,
+        first_user_message_at: None,
         status: if is_active {
             ToolSessionStatus::Active
         } else {

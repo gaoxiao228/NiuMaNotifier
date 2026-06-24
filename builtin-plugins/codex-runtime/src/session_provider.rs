@@ -451,6 +451,8 @@ struct SnapshotSessionFingerprint {
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     normalization_status: Option<ToolSessionNormalizationStatus>,
+    first_user_message_preview: Option<String>,
+    first_user_message_at: Option<DateTime<Utc>>,
     status: ToolSessionStatus,
 }
 
@@ -470,6 +472,8 @@ impl From<&ToolSessionListItem> for SnapshotSessionFingerprint {
             agent_nickname: session.agent_nickname.clone(),
             agent_role: session.agent_role.clone(),
             normalization_status: session.normalization_status.clone(),
+            first_user_message_preview: session.first_user_message_preview.clone(),
+            first_user_message_at: session.first_user_message_at,
             status: session.status.clone(),
         }
     }

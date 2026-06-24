@@ -6,7 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use niuma_core::models::ToolKind;
-use niuma_core::tool_session::{ToolSessionDetail, ToolSessionListItem, ToolSessionStatus};
+use niuma_core::tool_session::{
+    ToolSessionDetail, ToolSessionListItem, ToolSessionMessageRole, ToolSessionStatus,
+};
 use niuma_core::tool_session_rpc::SessionDetailParams;
 use serde::Deserialize;
 
@@ -29,6 +31,7 @@ const SNAPSHOT_FILE_LIMIT: usize = 128;
 const SESSION_DAY_DIR_LIMIT: usize = 180;
 const ACTIVE_MODIFIED_WINDOW: Duration = Duration::from_secs(60);
 const PRIME_METADATA_MAX_BYTES: u64 = 64 * 1024;
+const FIRST_USER_MESSAGE_PREVIEW_CHARS: usize = 200;
 
 pub(crate) struct CodexSessionRepository {
     codex_home: PathBuf,
@@ -103,7 +106,14 @@ struct ParsedSessionFile {
     project_path: Option<String>,
     session_metadata: CodexSessionMetadata,
     session_meta_line: Option<MessageLineIndex>,
+    first_user_message: Option<FirstUserMessage>,
     message_lines: Vec<MessageLineIndex>,
+}
+
+#[derive(Clone)]
+struct FirstUserMessage {
+    preview: String,
+    created_at: DateTime<Utc>,
 }
 
 struct DetailMessageCandidate {
@@ -398,6 +408,14 @@ impl CodexSessionRepository {
             agent_nickname: identity.agent_nickname,
             agent_role: identity.agent_role,
             normalization_status: Some(identity.normalization_status),
+            first_user_message_preview: parsed
+                .first_user_message
+                .as_ref()
+                .map(|message| message.preview.clone()),
+            first_user_message_at: parsed
+                .first_user_message
+                .as_ref()
+                .map(|message| message.created_at),
             status,
         };
 
@@ -594,6 +612,7 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
             }
         }
         if let Some(signature) = detail_message_signature(line) {
+            remember_first_user_message(&mut parsed, &signature);
             // 详情索引只保留有可展示正文的行，避免 reasoning/token_count 等空事件污染分页。
             message_candidates.push(DetailMessageCandidate {
                 line_index: MessageLineIndex::new(line_index, byte_start, line_bytes),
@@ -605,6 +624,30 @@ fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
     }
     parsed.message_lines = deduplicate_mirrored_detail_messages(message_candidates);
     Ok(parsed)
+}
+
+fn remember_first_user_message(parsed: &mut ParsedSessionFile, signature: &DetailMessageSignature) {
+    if signature.role != ToolSessionMessageRole::User {
+        return;
+    }
+    if parsed
+        .first_user_message
+        .as_ref()
+        .is_some_and(|message| message.created_at <= signature.created_at)
+    {
+        return;
+    }
+    parsed.first_user_message = Some(FirstUserMessage {
+        preview: message_preview(&signature.content),
+        created_at: signature.created_at,
+    });
+}
+
+fn message_preview(content: &str) -> String {
+    content
+        .chars()
+        .take(FIRST_USER_MESSAGE_PREVIEW_CHARS)
+        .collect()
 }
 
 fn deduplicate_mirrored_detail_messages(

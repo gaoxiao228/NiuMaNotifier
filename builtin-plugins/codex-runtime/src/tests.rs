@@ -64,6 +64,14 @@ fn codex_session_provider_snapshot_discovers_fixture_and_detail_returns_newest_f
         session.session_scope,
         Some(niuma_core::tool_session::ToolSessionScope::Main)
     );
+    assert_eq!(
+        session.first_user_message_preview.as_deref(),
+        Some("用户问题")
+    );
+    assert_eq!(
+        session.first_user_message_at,
+        Some(Utc.with_ymd_and_hms(2026, 6, 22, 1, 0, 1).unwrap())
+    );
 
     let detail = provider_detail(&mut provider, "session-fixture", 20, None);
 
@@ -78,6 +86,37 @@ fn codex_session_provider_snapshot_discovers_fixture_and_detail_returns_newest_f
     assert_eq!(detail.messages[0].content, "助手回答");
     assert_eq!(detail.messages[1].content, "用户问题");
     assert_eq!(detail.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_snapshot_uses_earliest_user_message_timestamp() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    std::fs::write(
+        day_dir.join("rollout-2026-06-22-11111111-1111-1111-1111-111111111111.jsonl"),
+        "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-out-of-order\",\"cwd\":\"/tmp/fixture-project\"}}\n\
+         {\"timestamp\":\"2026-06-22T01:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"较晚的用户消息\"}]}}\n\
+         {\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"真正最早的用户消息\"}]}}\n",
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "session-out-of-order")
+        .expect("out-of-order session should be discovered");
+
+    assert_eq!(
+        session.first_user_message_preview.as_deref(),
+        Some("真正最早的用户消息")
+    );
+    assert_eq!(
+        session.first_user_message_at,
+        Some(Utc.with_ymd_and_hms(2026, 6, 22, 1, 0, 1).unwrap())
+    );
 }
 
 #[test]

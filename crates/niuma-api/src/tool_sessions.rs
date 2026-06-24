@@ -60,6 +60,10 @@ pub struct NormalizedSessionSummary {
     pub title: String,
     pub status: ToolSessionStatus,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user_message_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user_message_at: Option<DateTime<Utc>>,
     pub latest_event_summary: Option<String>,
     pub subagent_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +391,7 @@ fn normalized_summary(
             .map(raw_session_summary)
             .collect::<Vec<_>>()
     });
+    let first_user_message = normalized_first_user_message(primary, &raw_sessions);
 
     NormalizedSessionSummary {
         normalized_session_id: normalized_session_id.clone(),
@@ -394,6 +399,10 @@ fn normalized_summary(
         title: session_title(primary),
         status,
         updated_at,
+        first_user_message_preview: first_user_message
+            .as_ref()
+            .map(|message| message.preview.clone()),
+        first_user_message_at: first_user_message.map(|message| message.created_at),
         latest_event_summary: None,
         subagent_count,
         raw_sessions: raw_summaries,
@@ -447,6 +456,31 @@ fn session_scope_sort_rank(item: &ToolSessionListItem) -> usize {
 fn session_title(item: &ToolSessionListItem) -> String {
     let short_id = item.session_id.chars().take(8).collect::<String>();
     format!("session-{short_id}")
+}
+
+struct FirstUserMessageSummary {
+    preview: String,
+    created_at: DateTime<Utc>,
+}
+
+fn normalized_first_user_message(
+    primary: &ToolSessionListItem,
+    raw_sessions: &[ToolSessionListItem],
+) -> Option<FirstUserMessageSummary> {
+    // 主会话的首条用户消息最能代表归一化 session；没有主会话时再从原始会话中取最早一条。
+    message_summary_from_item(primary).or_else(|| {
+        raw_sessions
+            .iter()
+            .filter_map(message_summary_from_item)
+            .min_by_key(|message| message.created_at)
+    })
+}
+
+fn message_summary_from_item(item: &ToolSessionListItem) -> Option<FirstUserMessageSummary> {
+    Some(FirstUserMessageSummary {
+        preview: item.first_user_message_preview.clone()?,
+        created_at: item.first_user_message_at?,
+    })
 }
 
 pub(crate) fn capped_limit(limit: Option<usize>) -> Result<usize, String> {

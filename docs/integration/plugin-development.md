@@ -395,7 +395,7 @@ Successful `session_list` response:
 }
 ```
 
-`session_project_groups` groups the provider snapshot by project path and returns project -> normalized session -> optional raw session details. Normalized sessions collect subagents under `normalized_session_id`; raw subagent details are not expanded by default, but parent session `updated_at` still includes subagent activity. Project group counters use explicit names: `normalized_session_count` is the number of normalized sessions, `raw_session_count` is the number of raw session files, and `subagent_count` is the number of raw session files produced by subagents. Common query parameters:
+`session_project_groups` groups the provider snapshot by project path and returns project -> normalized session -> optional raw session details. Normalized sessions collect subagents under `normalized_session_id`; raw subagent details are not expanded by default, but parent session `updated_at` still includes subagent activity. Each normalized session includes `updated_at` as the latest raw session update time, and may include `first_user_message_preview` / `first_user_message_at` for the earliest user message preview known to the provider. Project group counters use explicit names: `normalized_session_count` is the number of normalized sessions, `raw_session_count` is the number of raw session files, and `subagent_count` is the number of raw session files produced by subagents. Common query parameters:
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -420,7 +420,19 @@ Successful `session_project_groups` response uses the standard pagination shape:
         "normalized_session_count": 1,
         "raw_session_count": 2,
         "subagent_count": 1,
-        "sessions": []
+        "sessions": [
+          {
+            "normalized_session_id": "session-1",
+            "primary_session_id": "session-1",
+            "title": "session-session",
+            "status": "active",
+            "updated_at": "2026-06-24T10:00:00Z",
+            "first_user_message_preview": "Summarize this project",
+            "first_user_message_at": "2026-06-24T09:30:00Z",
+            "latest_event_summary": null,
+            "subagent_count": 1
+          }
+        ]
       }
     ],
     "page": 1,
@@ -545,6 +557,8 @@ After receiving `session_snapshot_updated`, the host updates its in-memory sessi
 | `session_scope` | `main` or `subagent`. |
 | `agent_nickname` / `agent_role` | Tool-provided subagent display fields, if any. |
 | `normalization_status` | `resolved`, `parent_missing`, or `parent_unresolved`. Diagnostic only. |
+| `first_user_message_preview` | Optional preview of the earliest user message. Providers should keep it short; the built-in Codex provider caps it at 200 characters. |
+| `first_user_message_at` | Timestamp of `first_user_message_preview`, if known. |
 
 `ToolSessionDetail` reuses the same identity fields and adds:
 
