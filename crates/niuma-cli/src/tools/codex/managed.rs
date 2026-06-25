@@ -1,7 +1,7 @@
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,12 +61,10 @@ fn resolve_real_codex() -> Result<PathBuf, String> {
             .map_err(|error| format!("NIUMA_REAL_CODEX 无效：{error}"));
     }
 
-    let path = which::which("codex").map_err(|_| {
+    let candidates = which::which_all("codex").map_err(|_| {
         "找不到真实 codex，请设置 NIUMA_REAL_CODEX=/absolute/path/to/codex".to_string()
     })?;
-    validate_real_codex_path(path, &current_exe).map_err(|error| {
-        format!("PATH 中的 codex 不可用：{error}；请设置 NIUMA_REAL_CODEX=/absolute/path/to/codex")
-    })
+    select_valid_codex_candidate(candidates, &current_exe)
 }
 
 fn validate_real_codex_path(path: PathBuf, current_exe: &PathBuf) -> Result<PathBuf, String> {
@@ -92,6 +90,27 @@ fn validate_real_codex_path(path: PathBuf, current_exe: &PathBuf) -> Result<Path
     }
 
     Ok(real_codex)
+}
+
+fn select_valid_codex_candidate<I>(candidates: I, current_exe: &Path) -> Result<PathBuf, String>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let current_exe = current_exe.to_path_buf();
+    let mut last_error = None;
+
+    // PATH 中可能先命中 niuma wrapper，自身或不可用候选都跳过，继续寻找真实 Codex。
+    for candidate in candidates {
+        match validate_real_codex_path(candidate, &current_exe) {
+            Ok(path) => return Ok(path),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    let detail = last_error.unwrap_or_else(|| "没有找到 codex 候选".to_string());
+    Err(format!(
+        "PATH 中没有可用的真实 codex，最后一个失败原因：{detail}；请设置 NIUMA_REAL_CODEX=/absolute/path/to/codex"
+    ))
 }
 
 #[cfg(unix)]
@@ -178,6 +197,26 @@ mod tests {
         let current_exe = std::env::current_exe().unwrap();
         let error = validate_real_codex_path(current_exe.clone(), &current_exe).unwrap_err();
         assert!(error.contains("不能指向 niuma 自身"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selects_later_valid_codex_candidate_after_current_exe() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let current_exe = std::env::current_exe().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let real_codex = dir.path().join("codex");
+        fs::write(&real_codex, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&real_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&real_codex, permissions).unwrap();
+
+        let selected =
+            select_valid_codex_candidate([current_exe.clone(), real_codex.clone()], &current_exe)
+                .unwrap();
+        assert_eq!(selected, real_codex.canonicalize().unwrap());
     }
 
     #[cfg(unix)]
