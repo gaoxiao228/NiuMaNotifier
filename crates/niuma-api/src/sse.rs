@@ -5,6 +5,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use niuma_core::main_state::{MainStatePayload, MainStateService, MainStateWatcher};
+use niuma_core::models::{EventType, NiumaEvent, ToolKind};
 use niuma_core::runtime_event::RuntimeEvent;
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
@@ -23,6 +24,16 @@ pub(crate) struct MainStateBroadcaster {
 #[derive(Default)]
 struct MainStateClient {
     last_content: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct EventsStreamQuery {
+    tool: Option<ToolKind>,
+    session_id: Option<String>,
+    normalized_session_id: Option<String>,
+    project_path: Option<String>,
+    event_type: Option<EventType>,
+    severity: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -75,14 +86,32 @@ pub(crate) async fn sse_stream(State(state): State<AppState>) -> Response {
     response
 }
 
-pub(crate) async fn events_stream(State(state): State<AppState>) -> Response {
+pub(crate) async fn events_stream(
+    State(state): State<AppState>,
+    query: Result<Query<EventsStreamQuery>, QueryRejection>,
+) -> Response {
+    let filter = match query {
+        Ok(Query(query)) => EventsStreamFilter::from_query(query),
+        Err(error) => {
+            return json_response(
+                400,
+                niuma_core::api_response::ApiResponse::fail(
+                    niuma_core::api_response::ApiErrorCode::ParameterType,
+                    format!("查询参数类型错误（event_type）：{error}"),
+                ),
+            );
+        }
+    };
     let mut receiver = state.runtime_events.subscribe();
     let event_stream = stream! {
         loop {
             match receiver.recv().await {
                 Ok(RuntimeEvent::NiumaEventsAppended { events, .. }) => {
                     for niuma_event in events {
-                        // 事件流只广播实际应用的新事件，推送插件自行判断是否消费。
+                        if !filter.matches(&niuma_event) {
+                            continue;
+                        }
+                        // 事件流只广播实际应用的新事件，推送插件可用查询参数缩小消费范围。
                         if let Ok(data) = serde_json::to_string(&niuma_event) {
                             yield Ok::<Event, std::convert::Infallible>(
                                 Event::default()
@@ -115,6 +144,73 @@ pub(crate) async fn events_stream(State(state): State<AppState>) -> Response {
         .into_response();
     apply_cors_headers(response.headers_mut());
     response
+}
+
+#[derive(Clone, Debug, Default)]
+struct EventsStreamFilter {
+    tool: Option<ToolKind>,
+    session_id: Option<String>,
+    normalized_session_id: Option<String>,
+    project_path: Option<String>,
+    event_type: Option<EventType>,
+    severity: Option<String>,
+}
+
+impl EventsStreamFilter {
+    fn from_query(query: EventsStreamQuery) -> Self {
+        Self {
+            tool: query.tool,
+            session_id: trim_non_empty(query.session_id),
+            normalized_session_id: trim_non_empty(query.normalized_session_id),
+            project_path: trim_non_empty(query.project_path),
+            event_type: query.event_type,
+            severity: trim_non_empty(query.severity),
+        }
+    }
+
+    fn matches(&self, event: &NiumaEvent) -> bool {
+        if self.tool.as_ref().is_some_and(|tool| tool != &event.tool) {
+            return false;
+        }
+        if self
+            .session_id
+            .as_deref()
+            .is_some_and(|session_id| session_id != event.session_id)
+        {
+            return false;
+        }
+        if self
+            .normalized_session_id
+            .as_deref()
+            .is_some_and(|normalized_session_id| {
+                event.normalized_session_id.as_deref() != Some(normalized_session_id)
+            })
+        {
+            return false;
+        }
+        if self
+            .project_path
+            .as_deref()
+            .is_some_and(|project_path| project_path != event.project_path)
+        {
+            return false;
+        }
+        if self
+            .event_type
+            .as_ref()
+            .is_some_and(|event_type| event_type != &event.event_type)
+        {
+            return false;
+        }
+        if self
+            .severity
+            .as_deref()
+            .is_some_and(|severity| severity != event.severity)
+        {
+            return false;
+        }
+        true
+    }
 }
 
 pub(crate) async fn session_project_groups_stream(
@@ -240,6 +336,12 @@ fn session_project_groups_payload(
         .project_groups_with_runtime(query.clone(), &runtime_states)?;
     serde_json::to_string(&page)
         .map_err(|error| format!("session project groups 序列化失败：{error}"))
+}
+
+fn trim_non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn main_state_content_key(payload: &MainStatePayload) -> String {

@@ -755,7 +755,7 @@ Notification plugins and status indicator plugins both consume real-time data th
 - Reconnect automatically after disconnection. A fixed 2 to 5 second interval or exponential backoff is recommended.
 - Do not assume SSE will replay history. Events missed during disconnection should not be recovered through database queries.
 
-SSE currently has no authentication or subscription parameters. External plugins should connect only to the trusted local Local API and should not expose it to the public internet.
+SSE currently has no authentication. Some streams expose query filters for narrowing delivered frames. External plugins should connect only to the trusted local Local API and should not expose it to the public internet.
 
 ## Notification Plugin Event Consumption
 
@@ -765,6 +765,40 @@ SSE currently has no authentication or subscription parameters. External plugins
 GET /api/v1/events/stream
 Accept: text/event-stream
 ```
+
+The stream accepts optional query filters for regular `event` frames:
+
+```http
+GET /api/v1/events/stream?tool=codex&session_id=session-1&event_type=approval_requested
+GET /api/v1/events/stream?normalized_session_id=main-session&project_path=/repo
+```
+
+Supported filters are `tool`, `session_id`, `normalized_session_id`, `project_path`, `event_type`, and `severity`. Multiple filters are combined with AND semantics. These filters apply only to regular `event` frames; `notification_test` remains a control event for plugin testing and is not tied to a session.
+
+Filter parameters:
+
+| Parameter | Match target | Notes |
+| --- | --- | --- |
+| `tool` | `event.tool` | Tool id such as `codex`, `claude_code`, or a custom tool id. |
+| `session_id` | `event.session_id` | Matches the raw session that produced the event. Use this when a plugin is attached to one exact session. |
+| `normalized_session_id` | `event.normalized_session_id` | Matches the grouped/main session id. Prefer this for project group UIs that need main-session plus subagent events. Events without `normalized_session_id` do not match this filter. |
+| `project_path` | `event.project_path` | Exact path match. URL-encode spaces and non-ASCII path characters. |
+| `event_type` | `event.event_type` | Snake-case event type, for example `approval_requested`, `input_requested`, or `assistant_message_completed`. Invalid enum values return the standard `HTTP 400` parameter-type error before SSE is established. |
+| `severity` | `event.severity` | Exact string match. Current built-in sources commonly use values such as `urgent`, but plugins should not assume a closed enum. |
+
+Use filtered streams to reduce plugin-side work when the consumer has a narrow responsibility. For example, an approval-only consumer can subscribe to:
+
+```http
+GET /api/v1/events/stream?event_type=approval_requested
+```
+
+A session detail panel that only cares about one grouped session can subscribe to:
+
+```http
+GET /api/v1/events/stream?normalized_session_id=main-session
+```
+
+Filtering is not a permission boundary. It only changes what this SSE connection receives; it does not grant or restrict access to other Local API endpoints.
 
 Normal event format:
 
@@ -788,6 +822,7 @@ Consumption constraints:
 
 - `/api/v1/events/stream` only broadcasts newly applied events. It does not replay historical events.
 - Duplicate reports that are deduplicated do not enter this stream.
+- If filters are present, non-matching events are skipped and are not buffered for later delivery.
 - Plugins should decide which events require notification.
 - Default notification behavior should skip `assistant_message_completed` when `session_scope = "subagent"`, so a subagent finish is not reported as the main task finish. `approval_requested` should still notify because subagent approvals also need user action.
 - Plugins should store local dedupe state in `NIUMA_PLUGIN_DATA_DIR` to avoid duplicate sends after reconnecting.

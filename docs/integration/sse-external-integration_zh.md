@@ -95,6 +95,15 @@ Accept: text/event-stream
 
 事件流用于事件消费者插件。服务端只广播成功写入并进入状态机的新 `NiumaEvent`，不会补发历史事件，也不会广播重复上报但被去重的事件。推送插件需要自行判断是否发送通知。
 
+可选查询参数可以缩小普通 `event` 帧范围：
+
+```http
+GET /api/v1/events/stream?tool=codex&session_id=s1&event_type=approval_requested
+GET /api/v1/events/stream?normalized_session_id=main-session&project_path=/repo
+```
+
+支持的过滤字段包括 `tool`、`session_id`、`normalized_session_id`、`project_path`、`event_type` 和 `severity`。多个过滤条件之间是 AND 关系。这些过滤不作用于 `notification_test` 控制帧。
+
 事件格式：
 
 ```text

@@ -98,6 +98,15 @@ items that were successfully stored and applied to the state machine. It does no
 events and does not broadcast duplicate submissions that were deduplicated. Notification plugins decide
 for themselves whether an event should trigger a push notification.
 
+Optional query filters can narrow regular `event` frames:
+
+```http
+GET /api/v1/events/stream?tool=codex&session_id=s1&event_type=approval_requested
+GET /api/v1/events/stream?normalized_session_id=main-session&project_path=/repo
+```
+
+Supported filters are `tool`, `session_id`, `normalized_session_id`, `project_path`, `event_type`, and `severity`. Multiple filters are combined with AND semantics. These filters do not apply to `notification_test` control frames.
+
 Event format:
 
 ```text

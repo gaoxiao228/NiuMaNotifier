@@ -755,7 +755,7 @@ unknown
 - 连接断开后自动重连，推荐使用 2 到 5 秒固定间隔或指数退避。
 - 不要假设 SSE 会补发历史数据；断线期间错过的事件不应通过数据库回查补偿。
 
-SSE 当前没有鉴权和订阅参数。外部插件应只连接本机可信 Local API，不要把该接口暴露给公网。
+SSE 当前没有鉴权。部分流提供查询过滤参数，用于缩小推送帧范围。外部插件应只连接本机可信 Local API，不要把该接口暴露给公网。
 
 ## 通知插件事件消费
 
@@ -765,6 +765,40 @@ SSE 当前没有鉴权和订阅参数。外部插件应只连接本机可信 Loc
 GET /api/v1/events/stream
 Accept: text/event-stream
 ```
+
+该流支持用可选查询参数过滤普通 `event` 帧：
+
+```http
+GET /api/v1/events/stream?tool=codex&session_id=session-1&event_type=approval_requested
+GET /api/v1/events/stream?normalized_session_id=main-session&project_path=/repo
+```
+
+支持的过滤字段包括 `tool`、`session_id`、`normalized_session_id`、`project_path`、`event_type` 和 `severity`。多个过滤条件之间是 AND 关系。这些过滤只作用于普通 `event` 帧；`notification_test` 是插件测试控制事件，不绑定具体 session。
+
+过滤参数说明：
+
+| 参数 | 匹配目标 | 说明 |
+| --- | --- | --- |
+| `tool` | `event.tool` | 工具 ID，例如 `codex`、`claude_code` 或自定义工具 ID。 |
+| `session_id` | `event.session_id` | 匹配产生事件的 raw session。当插件只绑定一个具体 session 时使用。 |
+| `normalized_session_id` | `event.normalized_session_id` | 匹配归一化后的分组/主 session ID。项目分组 UI 如果需要同时接收主 session 和 subagent 事件，优先使用该参数。没有 `normalized_session_id` 的事件不会命中该过滤。 |
+| `project_path` | `event.project_path` | 精确路径匹配。路径中有空格或非 ASCII 字符时需要 URL encode。 |
+| `event_type` | `event.event_type` | snake_case 事件类型，例如 `approval_requested`、`input_requested` 或 `assistant_message_completed`。如果传入无效枚举值，服务端会在建立 SSE 前返回标准 `HTTP 400` 参数类型错误。 |
+| `severity` | `event.severity` | 精确字符串匹配。当前内置来源常见值包括 `urgent`，但插件不应假设它是封闭枚举。 |
+
+当消费者职责很窄时，建议使用过滤流减少插件侧处理。例如只处理授权的消费者可以订阅：
+
+```http
+GET /api/v1/events/stream?event_type=approval_requested
+```
+
+只关心某个分组 session 的详情面板可以订阅：
+
+```http
+GET /api/v1/events/stream?normalized_session_id=main-session
+```
+
+过滤不是权限边界。它只影响当前 SSE 连接收到哪些事件，不授予或限制其他 Local API 的访问能力。
 
 普通事件格式：
 
@@ -788,6 +822,7 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 
 - `/api/v1/events/stream` 只广播成功写入的新事件，不补发历史事件。
 - 重复上报但被去重的事件不会进入该流。
+- 如果携带过滤参数，不匹配的事件会被跳过，不会为了后续重连缓存。
 - 插件应自行判断哪些事件需要发送通知。
 - 默认通知策略应跳过 `session_scope = "subagent"` 的 `assistant_message_completed`，避免子代理完成被误报为主任务完成；`approval_requested` 仍应通知，因为子代理授权也需要用户处理。
 - 插件应在 `NIUMA_PLUGIN_DATA_DIR` 中保存本地去重状态，避免重连后重复发送。

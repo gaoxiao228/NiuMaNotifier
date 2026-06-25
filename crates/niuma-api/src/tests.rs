@@ -2032,6 +2032,55 @@ async fn events_stream_emits_applied_event_after_post_event() {
 }
 
 #[tokio::test]
+async fn events_stream_filters_events_by_session_and_event_type() {
+    let store = NiumaStore::new(test_path("events_sse_filtered"));
+    let router = app(store);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream?session_id=s1&event_type=approval_requested")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let mut wrong_session =
+        sample_event_with_type("event-2", "event-2", EventType::ApprovalRequested, 1_001);
+    wrong_session.session_id = "s2".to_string();
+    let wrong_type = sample_event_with_type("event-3", "event-3", EventType::TaskFailed, 1_002);
+    let expected =
+        sample_event_with_type("event-4", "event-4", EventType::ApprovalRequested, 1_003);
+
+    for event in [wrong_session, wrong_type, expected] {
+        let post = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/events")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), 200);
+    }
+
+    let chunk = next_sse_chunk(&mut body).await;
+    assert!(chunk.contains("event: event"));
+    assert!(chunk.contains("id: event-4"));
+    assert!(chunk.contains("\"session_id\":\"s1\""));
+    assert!(chunk.contains("\"event_type\":\"approval_requested\""));
+    assert!(!chunk.contains("event-2"));
+    assert!(!chunk.contains("event-3"));
+}
+
+#[tokio::test]
 async fn events_stream_skips_duplicate_events() {
     let store = NiumaStore::new(test_path("events_sse_duplicate"));
     let router = app(store);
