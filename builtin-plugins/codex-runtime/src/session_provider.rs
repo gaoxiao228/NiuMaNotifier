@@ -8,7 +8,8 @@ use chrono::{DateTime, Utc};
 use niuma_core::models::ToolKind;
 use niuma_core::store::NiumaStore;
 use niuma_core::tool_session::{
-    ToolSessionListItem, ToolSessionNormalizationStatus, ToolSessionScope, ToolSessionStatus,
+    ToolSessionControl, ToolSessionListItem, ToolSessionNormalizationStatus, ToolSessionScope,
+    ToolSessionStatus,
 };
 use niuma_core::tool_session_rpc::{
     ProviderRpcNotification, ProviderRpcRequest, ProviderRpcResponse, SessionDetailParams,
@@ -35,6 +36,16 @@ impl CodexSessionProvider {
         Self::with_repository(Arc::new(Mutex::new(CodexSessionRepository::new(
             codex_home,
         ))))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_codex_home_and_registry_path(
+        codex_home: PathBuf,
+        managed_registry_path: PathBuf,
+    ) -> Self {
+        Self::with_repository(Arc::new(Mutex::new(
+            CodexSessionRepository::with_managed_registry_path(codex_home, managed_registry_path),
+        )))
     }
 
     pub(crate) fn with_repository(repository: Arc<Mutex<CodexSessionRepository>>) -> Self {
@@ -453,6 +464,7 @@ struct SnapshotSessionFingerprint {
     normalization_status: Option<ToolSessionNormalizationStatus>,
     first_user_message_preview: Option<String>,
     first_user_message_at: Option<DateTime<Utc>>,
+    control: Option<ToolSessionControl>,
     status: ToolSessionStatus,
 }
 
@@ -474,6 +486,7 @@ impl From<&ToolSessionListItem> for SnapshotSessionFingerprint {
             normalization_status: session.normalization_status.clone(),
             first_user_message_preview: session.first_user_message_preview.clone(),
             first_user_message_at: session.first_user_message_at,
+            control: session.control.clone(),
             status: session.status.clone(),
         }
     }

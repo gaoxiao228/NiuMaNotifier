@@ -30,6 +30,18 @@ pub enum ToolSessionNormalizationStatus {
     ParentUnresolved,
 }
 
+// control 描述某个工具会话是否能被 Niuma 通过外部通道继续写入或控制。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ToolSessionControl {
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapper_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
 // 列表项是宿主保存的轻量会话索引，供后续 session_list API 直接返回。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolSessionListItem {
@@ -61,6 +73,8 @@ pub struct ToolSessionListItem {
     pub first_user_message_preview: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_user_message_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<ToolSessionControl>,
     pub status: ToolSessionStatus,
 }
 
@@ -108,6 +122,8 @@ pub struct ToolSessionDetail {
     pub agent_role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normalization_status: Option<ToolSessionNormalizationStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<ToolSessionControl>,
     pub messages: Vec<ToolSessionMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,

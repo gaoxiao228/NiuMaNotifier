@@ -96,6 +96,7 @@ fn sample_session(session_id: &str) -> ToolSessionListItem {
         normalization_status: Some(ToolSessionNormalizationStatus::Resolved),
         first_user_message_preview: None,
         first_user_message_at: None,
+        control: None,
         status: ToolSessionStatus::Active,
     }
 }

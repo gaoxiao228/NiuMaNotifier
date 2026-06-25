@@ -5,9 +5,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
+use niuma_core::codex_managed_session::{
+    first_user_message_hash, read_registry, ManagedCodexRegistry, ManagedCodexSessionState,
+};
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{
-    ToolSessionDetail, ToolSessionListItem, ToolSessionMessageRole, ToolSessionStatus,
+    ToolSessionControl, ToolSessionDetail, ToolSessionListItem, ToolSessionMessageRole,
+    ToolSessionStatus,
 };
 use niuma_core::tool_session_rpc::SessionDetailParams;
 use serde::Deserialize;
@@ -35,6 +39,7 @@ const FIRST_USER_MESSAGE_PREVIEW_CHARS: usize = 200;
 
 pub(crate) struct CodexSessionRepository {
     codex_home: PathBuf,
+    managed_registry_path: PathBuf,
     index: HashMap<String, SessionIndex>,
     event_cursors: HashMap<PathBuf, CodexEventCursor>,
     #[cfg(test)]
@@ -50,6 +55,7 @@ pub(crate) struct SessionIndex {
 pub(crate) struct CodexSnapshotContext {
     codex_home: PathBuf,
     previous_by_path: HashMap<String, SessionIndex>,
+    managed_registry_path: PathBuf,
 }
 
 pub(crate) struct CodexSnapshotRefresh {
@@ -113,6 +119,8 @@ struct ParsedSessionFile {
 #[derive(Clone)]
 struct FirstUserMessage {
     preview: String,
+    #[allow(dead_code)]
+    hash: String,
     created_at: DateTime<Utc>,
 }
 
@@ -123,8 +131,19 @@ struct DetailMessageCandidate {
 
 impl CodexSessionRepository {
     pub(crate) fn new(codex_home: PathBuf) -> Self {
+        Self::with_managed_registry_path(
+            codex_home,
+            niuma_core::platform::paths::codex_managed_registry_path(),
+        )
+    }
+
+    pub(crate) fn with_managed_registry_path(
+        codex_home: PathBuf,
+        managed_registry_path: PathBuf,
+    ) -> Self {
         Self {
             codex_home,
+            managed_registry_path,
             index: HashMap::new(),
             event_cursors: HashMap::new(),
             #[cfg(test)]
@@ -156,6 +175,7 @@ impl CodexSessionRepository {
         CodexSnapshotContext {
             codex_home: self.codex_home.clone(),
             previous_by_path,
+            managed_registry_path: self.managed_registry_path.clone(),
         }
     }
 
@@ -163,6 +183,13 @@ impl CodexSessionRepository {
         context: CodexSnapshotContext,
     ) -> Result<CodexSnapshotRefresh, String> {
         let now = Utc::now();
+        let managed_registry =
+            read_registry(&context.managed_registry_path).unwrap_or_else(|error| {
+                if context.managed_registry_path.exists() {
+                    eprintln!("NiumaNotifier Codex managed registry 读取失败：{error}");
+                }
+                ManagedCodexRegistry::default()
+            });
         let mut next_index = HashMap::new();
         #[cfg(test)]
         let mut scanned_count = 0;
@@ -182,7 +209,9 @@ impl CodexSessionRepository {
                     Self::scan_session_file_index(&path, file_signature, now)
                 });
             match result {
-                Ok(index) => {
+                Ok(mut index) => {
+                    index.list_item.control =
+                        control_for_session(&index.list_item.session_id, &managed_registry);
                     next_index.insert(index.list_item.session_id.clone(), index);
                 }
                 Err(error) => {
@@ -416,6 +445,7 @@ impl CodexSessionRepository {
                 .first_user_message
                 .as_ref()
                 .map(|message| message.created_at),
+            control: None,
             status,
         };
 
@@ -530,6 +560,7 @@ fn detail_from_index(
         agent_nickname: index.list_item.agent_nickname.clone(),
         agent_role: index.list_item.agent_role.clone(),
         normalization_status: index.list_item.normalization_status.clone(),
+        control: index.list_item.control.clone(),
         messages,
         next_cursor,
     })
@@ -639,8 +670,32 @@ fn remember_first_user_message(parsed: &mut ParsedSessionFile, signature: &Detai
     }
     parsed.first_user_message = Some(FirstUserMessage {
         preview: message_preview(&signature.content),
+        hash: first_user_message_hash(&signature.content),
         created_at: signature.created_at,
     });
+}
+
+fn control_for_session(
+    session_id: &str,
+    registry: &ManagedCodexRegistry,
+) -> Option<ToolSessionControl> {
+    registry
+        .sessions
+        .iter()
+        .find(|session| {
+            session.codex_session_id.as_deref() == Some(session_id)
+                && session.state == ManagedCodexSessionState::Bound
+        })
+        .map(|session| ToolSessionControl {
+            available: true,
+            provider: Some("niuma_codex".to_string()),
+            wrapper_session_id: Some(session.wrapper_session_id.clone()),
+            capabilities: vec![
+                "answer_input".to_string(),
+                "approve".to_string(),
+                "reject".to_string(),
+            ],
+        })
 }
 
 fn message_preview(content: &str) -> String {

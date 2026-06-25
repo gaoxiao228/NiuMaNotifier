@@ -2206,6 +2206,7 @@ mod tests {
                 normalization_status: Some(
                     niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
                 ),
+                control: None,
                 messages: Vec::new(),
                 next_cursor: None,
             })

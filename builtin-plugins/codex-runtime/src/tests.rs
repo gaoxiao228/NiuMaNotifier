@@ -120,6 +120,62 @@ fn codex_session_provider_snapshot_uses_earliest_user_message_timestamp() {
 }
 
 #[test]
+fn codex_session_snapshot_marks_bound_managed_session_control_available() {
+    let temp = tempfile::tempdir().unwrap();
+    let session_path = write_codex_session_file(
+        temp.path(),
+        "rollout-2026-06-22-33333333-3333-3333-3333-333333333333.jsonl",
+        "session-managed",
+        "/tmp/managed-repo",
+        "请继续",
+        "好的",
+    );
+    let registry_path = temp.path().join("managed-sessions/codex.json");
+    std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &registry_path,
+        serde_json::json!({
+            "version": 1,
+            "sessions": [{
+                "wrapper_session_id": "niuma_codex_1",
+                "state": "bound",
+                "cwd": "/tmp/managed-repo",
+                "pid": 42,
+                "real_socket": "/tmp/real.sock",
+                "relay_socket": "/tmp/relay.sock",
+                "control_socket": "/tmp/control.sock",
+                "started_at": "2026-06-22T01:00:00Z",
+                "first_user_message_hash": niuma_core::codex_managed_session::first_user_message_hash("请继续"),
+                "first_user_message_preview": "请继续",
+                "first_user_message_submitted_at": "2026-06-22T01:00:01Z",
+                "codex_session_id": "session-managed",
+                "codex_session_file_path": session_path.to_string_lossy(),
+                "bound_at": "2026-06-22T01:00:02Z"
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home_and_registry_path(
+        temp.path().into(),
+        registry_path,
+    );
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "session-managed")
+        .expect("managed session should be discovered");
+
+    let control = session.control.as_ref().expect("control should be present");
+    assert!(control.available);
+    assert_eq!(control.provider.as_deref(), Some("niuma_codex"));
+    assert_eq!(control.wrapper_session_id.as_deref(), Some("niuma_codex_1"));
+    assert!(control.capabilities.contains(&"answer_input".to_string()));
+}
+
+#[test]
 fn codex_session_provider_detail_deduplicates_codex_mirrored_message_rows() {
     let temp = tempfile::tempdir().unwrap();
     let day_dir = temp.path().join("sessions/2026/06/22");

@@ -3320,6 +3320,7 @@ fn tool_session_item(
         ),
         first_user_message_preview: None,
         first_user_message_at: None,
+        control: None,
         status: if is_active {
             ToolSessionStatus::Active
         } else {
@@ -3432,6 +3433,7 @@ fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {
         normalization_status: Some(
             niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
         ),
+        control: None,
         // provider 已经按倒序返回消息，API 不能再重排。
         messages: vec![
             ToolSessionMessage {
