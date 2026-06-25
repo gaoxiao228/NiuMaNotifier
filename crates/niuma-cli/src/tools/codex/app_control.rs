@@ -5,7 +5,14 @@ use niuma_core::codex_managed_session::{
 use niuma_core::platform::paths::codex_managed_registry_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread;
+use std::time::{Duration, Instant};
 
 // Task 4 会从 app-server transport 填充该结构，本任务先固定可测试状态输入。
 #[allow(dead_code)]
@@ -63,6 +70,146 @@ pub enum ControlCommand {
         content: String,
     },
     Interrupt,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedWebSocketMessages {
+    pub messages: Vec<Value>,
+    pub rest: Vec<u8>,
+}
+
+#[allow(dead_code)]
+pub fn encode_websocket_text_frame(text: &str, mask: bool) -> Vec<u8> {
+    let payload = text.as_bytes();
+    let mut output = Vec::new();
+    output.push(0x81);
+
+    let mask_bit = if mask { 0x80 } else { 0 };
+    if payload.len() < 126 {
+        output.push(mask_bit | payload.len() as u8);
+    } else if payload.len() <= u16::MAX as usize {
+        output.push(mask_bit | 126);
+        output.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    } else {
+        output.push(mask_bit | 127);
+        output.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+
+    if mask {
+        let key = [0x12, 0x34, 0x56, 0x78];
+        output.extend_from_slice(&key);
+        for (index, byte) in payload.iter().enumerate() {
+            output.push(byte ^ key[index % 4]);
+        }
+    } else {
+        output.extend_from_slice(payload);
+    }
+
+    output
+}
+
+#[allow(dead_code)]
+pub fn parse_websocket_text_frames(buffer: &[u8]) -> Result<ParsedWebSocketMessages, String> {
+    let mut offset = 0usize;
+    let mut messages = Vec::new();
+
+    while buffer.len().saturating_sub(offset) >= 2 {
+        let frame_start = offset;
+        let first = buffer[offset];
+        let second = buffer[offset + 1];
+        let opcode = first & 0x0f;
+        let masked = second & 0x80 != 0;
+        let mut payload_len = (second & 0x7f) as usize;
+        offset += 2;
+
+        if opcode == 0x8 {
+            offset += payload_len;
+            continue;
+        }
+        if opcode != 0x1 {
+            return Err("只支持 WebSocket text frame".to_string());
+        }
+
+        if payload_len == 126 {
+            if buffer.len().saturating_sub(offset) < 2 {
+                return Ok(ParsedWebSocketMessages {
+                    messages,
+                    rest: buffer[frame_start..].to_vec(),
+                });
+            }
+            payload_len = u16::from_be_bytes([buffer[offset], buffer[offset + 1]]) as usize;
+            offset += 2;
+        } else if payload_len == 127 {
+            if buffer.len().saturating_sub(offset) < 8 {
+                return Ok(ParsedWebSocketMessages {
+                    messages,
+                    rest: buffer[frame_start..].to_vec(),
+                });
+            }
+            let len = u64::from_be_bytes([
+                buffer[offset],
+                buffer[offset + 1],
+                buffer[offset + 2],
+                buffer[offset + 3],
+                buffer[offset + 4],
+                buffer[offset + 5],
+                buffer[offset + 6],
+                buffer[offset + 7],
+            ]);
+            payload_len = usize::try_from(len).map_err(|_| "WebSocket frame 过大".to_string())?;
+            offset += 8;
+        }
+
+        let mask_key = if masked {
+            if buffer.len().saturating_sub(offset) < 4 {
+                return Ok(ParsedWebSocketMessages {
+                    messages,
+                    rest: buffer[frame_start..].to_vec(),
+                });
+            }
+            let key = [
+                buffer[offset],
+                buffer[offset + 1],
+                buffer[offset + 2],
+                buffer[offset + 3],
+            ];
+            offset += 4;
+            Some(key)
+        } else {
+            None
+        };
+
+        if buffer.len().saturating_sub(offset) < payload_len {
+            return Ok(ParsedWebSocketMessages {
+                messages,
+                rest: buffer[frame_start..].to_vec(),
+            });
+        }
+
+        let mut payload = buffer[offset..offset + payload_len].to_vec();
+        if let Some(key) = mask_key {
+            for (index, byte) in payload.iter_mut().enumerate() {
+                *byte ^= key[index % 4];
+            }
+        }
+
+        let value = serde_json::from_slice(&payload)
+            .map_err(|error| format!("解析 app-server JSON-RPC frame 失败：{error}"))?;
+        messages.push(value);
+        offset += payload_len;
+    }
+
+    Ok(ParsedWebSocketMessages {
+        messages,
+        rest: buffer[offset..].to_vec(),
+    })
+}
+
+#[allow(dead_code)]
+pub fn parse_control_command_line(line: &str) -> Result<ControlCommand, String> {
+    serde_json::from_str(line.trim_end())
+        .map_err(|error| format!("解析 control command 失败：{error}"))
 }
 
 #[allow(dead_code)]
@@ -124,6 +271,56 @@ impl AppControlState {
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new())),
         });
+    }
+
+    pub fn observe_client_message(&mut self, message: &Value) {
+        if message.get("method").is_some() {
+            return;
+        }
+        let Some(id) = message.get("id") else {
+            return;
+        };
+        let relay_request_id = jsonrpc_id_key(id);
+        self.pending_approvals
+            .retain(|approval| approval.relay_request_id != relay_request_id);
+        self.pending_inputs
+            .retain(|input| input.relay_request_id != relay_request_id);
+    }
+
+    pub fn resolve_approval_decision_frame(
+        &mut self,
+        request_id: &str,
+        decision: &str,
+    ) -> Result<Vec<u8>, String> {
+        let index = self
+            .pending_approvals
+            .iter()
+            .position(|approval| approval.request_id == request_id)
+            .ok_or_else(|| format!("找不到待处理权限请求：{request_id}"))?;
+        let approval = self.pending_approvals.remove(index);
+        let payload = json!({
+            "id": approval.relay_jsonrpc_id,
+            "result": { "decision": decision },
+        });
+        Ok(encode_websocket_text_frame(&payload.to_string(), true))
+    }
+
+    pub fn resolve_input_answer_frame(
+        &mut self,
+        request_id: &str,
+        answers: Value,
+    ) -> Result<Vec<u8>, String> {
+        let index = self
+            .pending_inputs
+            .iter()
+            .position(|input| input.request_id == request_id)
+            .ok_or_else(|| format!("找不到待回答输入请求：{request_id}"))?;
+        let input = self.pending_inputs.remove(index);
+        let payload = json!({
+            "id": input.relay_jsonrpc_id,
+            "result": { "answers": answers },
+        });
+        Ok(encode_websocket_text_frame(&payload.to_string(), true))
     }
 }
 
@@ -229,12 +426,501 @@ fn cleanup_socket_base_dir(base_dir: &Path) {
 }
 
 fn run_app_server_remote_processes(
+    real_codex: PathBuf,
+    args: Vec<String>,
+    wrapper_session_id: String,
+    base_dir: PathBuf,
+) -> Result<i32, String> {
+    run_app_server_remote_processes_impl(real_codex, args, wrapper_session_id, base_dir)
+}
+
+#[cfg(not(unix))]
+fn run_app_server_remote_processes_impl(
     _real_codex: PathBuf,
     _args: Vec<String>,
     _wrapper_session_id: String,
     _base_dir: PathBuf,
 ) -> Result<i32, String> {
-    Err("app-server relay transport is wired in Task 4".to_string())
+    Err("niuma-codex managed mode 当前仅支持 Unix socket 平台".to_string())
+}
+
+#[cfg(unix)]
+fn run_app_server_remote_processes_impl(
+    real_codex: PathBuf,
+    args: Vec<String>,
+    wrapper_session_id: String,
+    base_dir: PathBuf,
+) -> Result<i32, String> {
+    use std::os::unix::net::UnixStream;
+
+    let real_socket = base_dir.join("real.sock");
+    let relay_socket = base_dir.join("relay.sock");
+    let control_socket = base_dir.join("control.sock");
+    remove_socket_if_exists(&real_socket)?;
+    remove_socket_if_exists(&relay_socket)?;
+    remove_socket_if_exists(&control_socket)?;
+
+    let mut server = std::process::Command::new(&real_codex)
+        .args(["app-server", "--listen"])
+        .arg(format!("unix://{}", real_socket.display()))
+        .spawn()
+        .map_err(|error| format!("启动 codex app-server 失败：{error}"))?;
+    if let Err(error) = wait_for_socket(&real_socket, Duration::from_secs(5)) {
+        let _ = server.kill();
+        let _ = server.wait();
+        return Err(error);
+    }
+
+    let shared = Arc::new(RelaySharedState::new(wrapper_session_id));
+    let relay_handle = match start_relay_thread(
+        real_socket.clone(),
+        relay_socket.clone(),
+        Arc::clone(&shared),
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = server.kill();
+            let _ = server.wait();
+            return Err(error);
+        }
+    };
+    if let Err(error) = wait_for_socket(&relay_socket, Duration::from_secs(5)) {
+        let _ = server.kill();
+        let _ = server.wait();
+        relay_handle.request_stop();
+        relay_handle.join();
+        return Err(error);
+    }
+    let control_handle = match start_control_thread(control_socket.clone(), Arc::clone(&shared)) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = server.kill();
+            let _ = server.wait();
+            relay_handle.request_stop();
+            let _ = UnixStream::connect(&relay_socket);
+            relay_handle.join();
+            return Err(error);
+        }
+    };
+    if let Err(error) = wait_for_socket(&control_socket, Duration::from_secs(5)) {
+        let _ = server.kill();
+        let _ = server.wait();
+        relay_handle.request_stop();
+        control_handle.request_stop();
+        let _ = UnixStream::connect(&relay_socket);
+        let _ = UnixStream::connect(&control_socket);
+        relay_handle.join();
+        control_handle.join();
+        return Err(error);
+    }
+
+    let mut remote_args = vec![
+        "--remote".to_string(),
+        format!("unix://{}", relay_socket.display()),
+    ];
+    remote_args.extend(args);
+    let remote_status = std::process::Command::new(&real_codex)
+        .args(remote_args)
+        .status()
+        .map_err(|error| format!("启动 codex remote 失败：{error}"));
+
+    let _ = server.kill();
+    let _ = server.wait();
+    relay_handle.request_stop();
+    control_handle.request_stop();
+    let _ = UnixStream::connect(&relay_socket);
+    let _ = UnixStream::connect(&control_socket);
+    relay_handle.join();
+    control_handle.join();
+    remove_socket_if_exists(&real_socket)?;
+    remove_socket_if_exists(&relay_socket)?;
+    remove_socket_if_exists(&control_socket)?;
+    let status = remote_status?;
+    Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(unix)]
+struct RelaySharedState {
+    state: Mutex<AppControlState>,
+    upstream_writer: Mutex<Option<std::os::unix::net::UnixStream>>,
+}
+
+#[cfg(unix)]
+impl RelaySharedState {
+    fn new(wrapper_session_id: String) -> Self {
+        Self {
+            state: Mutex::new(AppControlState {
+                wrapper_session_id,
+                ..Default::default()
+            }),
+            upstream_writer: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(unix)]
+struct ThreadHandle {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl ThreadHandle {
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    fn join(mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_socket(path: &Path, timeout: Duration) -> Result<(), String> {
+    let started_at = Instant::now();
+    while started_at.elapsed() < timeout {
+        if path.exists() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("app-server socket 未创建：{}", path.display()))
+}
+
+#[cfg(unix)]
+fn remove_socket_if_exists(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("清理 socket 文件失败 {}：{error}", path.display())),
+    }
+}
+
+#[cfg(unix)]
+fn start_relay_thread(
+    real_socket: PathBuf,
+    relay_socket: PathBuf,
+    shared: Arc<RelaySharedState>,
+) -> Result<ThreadHandle, String> {
+    use std::os::unix::net::UnixListener;
+
+    let listener = UnixListener::bind(&relay_socket)
+        .map_err(|error| format!("监听 niuma-codex relay socket 失败：{error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("设置 relay socket 非阻塞失败：{error}"))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !thread_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((client, _)) => {
+                    let real_socket = real_socket.clone();
+                    let shared = Arc::clone(&shared);
+                    thread::spawn(move || {
+                        if let Err(error) = handle_relay_connection(client, &real_socket, shared) {
+                            eprintln!("niuma-codex relay 连接处理失败：{error}");
+                        }
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => {
+                    eprintln!("niuma-codex relay accept 失败：{error}");
+                    break;
+                }
+            }
+        }
+    });
+    Ok(ThreadHandle {
+        stop,
+        handle: Some(handle),
+    })
+}
+
+#[cfg(unix)]
+fn handle_relay_connection(
+    mut client: std::os::unix::net::UnixStream,
+    real_socket: &Path,
+    shared: Arc<RelaySharedState>,
+) -> Result<(), String> {
+    use std::os::unix::net::UnixStream;
+
+    let mut upstream = UnixStream::connect(real_socket)
+        .map_err(|error| format!("连接真实 codex app-server socket 失败：{error}"))?;
+    let upstream_writer = upstream
+        .try_clone()
+        .map_err(|error| format!("复制上游 socket 失败：{error}"))?;
+    {
+        let mut writer = shared
+            .upstream_writer
+            .lock()
+            .map_err(|_| "relay upstream writer 锁已损坏".to_string())?;
+        *writer = Some(upstream_writer);
+    }
+
+    let mut client_reader = client
+        .try_clone()
+        .map_err(|error| format!("复制 TUI socket 失败：{error}"))?;
+    let shared_for_client = Arc::clone(&shared);
+    let client_to_server = thread::spawn(move || {
+        let mut observer = WebSocketObserver::default();
+        copy_observed(&mut client_reader, &mut upstream, |chunk| {
+            observe_client_data(chunk, &mut observer, &shared_for_client)
+        })
+    });
+
+    let mut upstream_reader = {
+        let writer = shared
+            .upstream_writer
+            .lock()
+            .map_err(|_| "relay upstream writer 锁已损坏".to_string())?;
+        writer
+            .as_ref()
+            .ok_or_else(|| "relay upstream writer 未初始化".to_string())?
+            .try_clone()
+            .map_err(|error| format!("复制上游读取 socket 失败：{error}"))?
+    };
+    let shared_for_server = Arc::clone(&shared);
+    let server_to_client = thread::spawn(move || {
+        let mut observer = WebSocketObserver::default();
+        copy_observed(&mut upstream_reader, &mut client, |chunk| {
+            observe_server_data(chunk, &mut observer, &shared_for_server)
+        })
+    });
+
+    let _ = client_to_server.join();
+    let _ = server_to_client.join();
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_observed<R, W, F>(reader: &mut R, writer: &mut W, mut observe: F) -> Result<(), String>
+where
+    R: Read,
+    W: Write,
+    F: FnMut(&[u8]),
+{
+    let mut buffer = [0u8; 8192];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(size) => {
+                let chunk = &buffer[..size];
+                observe(chunk);
+                writer
+                    .write_all(chunk)
+                    .map_err(|error| format!("relay 写入失败：{error}"))?;
+            }
+            Err(error) => return Err(format!("relay 读取失败：{error}")),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct WebSocketObserver {
+    handshake_complete: bool,
+    handshake_buffer: Vec<u8>,
+    frame_buffer: Vec<u8>,
+}
+
+#[cfg(unix)]
+fn frames_after_handshake(chunk: &[u8], observer: &mut WebSocketObserver) -> Option<Vec<u8>> {
+    if observer.handshake_complete {
+        return Some(chunk.to_vec());
+    }
+
+    observer.handshake_buffer.extend_from_slice(chunk);
+    let Some(index) = find_header_end(&observer.handshake_buffer) else {
+        return None;
+    };
+    observer.handshake_complete = true;
+    let rest = observer.handshake_buffer[index + 4..].to_vec();
+    observer.handshake_buffer.clear();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest)
+    }
+}
+
+#[cfg(unix)]
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+#[cfg(unix)]
+fn observe_server_data(chunk: &[u8], observer: &mut WebSocketObserver, shared: &RelaySharedState) {
+    let Some(frames) = frames_after_handshake(chunk, observer) else {
+        return;
+    };
+    observer.frame_buffer.extend_from_slice(&frames);
+    match parse_websocket_text_frames(&observer.frame_buffer) {
+        Ok(parsed) => {
+            observer.frame_buffer = parsed.rest;
+            if let Ok(mut state) = shared.state.lock() {
+                for message in parsed.messages {
+                    if let Some(method) = message.get("method").and_then(Value::as_str) {
+                        state.observe_server_request(AppServerRequest {
+                            jsonrpc_id: message.get("id").cloned().unwrap_or(Value::Null),
+                            method: method.to_string(),
+                            params: message.get("params").cloned().unwrap_or(Value::Null),
+                        });
+                    }
+                }
+            }
+        }
+        Err(error) => eprintln!("解析 Codex server WebSocket frame 失败：{error}"),
+    }
+}
+
+#[cfg(unix)]
+fn observe_client_data(chunk: &[u8], observer: &mut WebSocketObserver, shared: &RelaySharedState) {
+    let Some(frames) = frames_after_handshake(chunk, observer) else {
+        return;
+    };
+    observer.frame_buffer.extend_from_slice(&frames);
+    match parse_websocket_text_frames(&observer.frame_buffer) {
+        Ok(parsed) => {
+            observer.frame_buffer = parsed.rest;
+            if let Ok(mut state) = shared.state.lock() {
+                for message in parsed.messages {
+                    state.observe_client_message(&message);
+                }
+            }
+        }
+        Err(error) => eprintln!("解析 Codex client WebSocket frame 失败：{error}"),
+    }
+}
+
+#[cfg(unix)]
+fn start_control_thread(
+    control_socket: PathBuf,
+    shared: Arc<RelaySharedState>,
+) -> Result<ThreadHandle, String> {
+    use std::os::unix::net::UnixListener;
+
+    let listener = UnixListener::bind(&control_socket)
+        .map_err(|error| format!("监听 niuma-codex control socket 失败：{error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("设置 control socket 非阻塞失败：{error}"))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !thread_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let shared = Arc::clone(&shared);
+                    thread::spawn(move || {
+                        if let Err(error) = handle_control_connection(stream, shared) {
+                            eprintln!("niuma-codex control 连接处理失败：{error}");
+                        }
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => {
+                    eprintln!("niuma-codex control accept 失败：{error}");
+                    break;
+                }
+            }
+        }
+    });
+    Ok(ThreadHandle {
+        stop,
+        handle: Some(handle),
+    })
+}
+
+#[cfg(unix)]
+fn handle_control_connection(
+    mut stream: std::os::unix::net::UnixStream,
+    shared: Arc<RelaySharedState>,
+) -> Result<(), String> {
+    let mut line = String::new();
+    {
+        let mut reader = BufReader::new(
+            stream
+                .try_clone()
+                .map_err(|error| format!("复制 control socket 失败：{error}"))?,
+        );
+        reader
+            .read_line(&mut line)
+            .map_err(|error| format!("读取 control command 失败：{error}"))?;
+    }
+    let response = match parse_control_command_line(&line) {
+        Ok(command) => handle_control_command(command, &shared),
+        Err(error) => json!({ "ok": false, "message": error }),
+    };
+    stream
+        .write_all(format!("{response}\n").as_bytes())
+        .map_err(|error| format!("写入 control response 失败：{error}"))
+}
+
+#[cfg(unix)]
+fn handle_control_command(command: ControlCommand, shared: &RelaySharedState) -> Value {
+    match command {
+        ControlCommand::Requests => match shared.state.lock() {
+            Ok(state) => json!({
+                "ok": true,
+                "approvals": state.pending_approvals,
+                "inputs": state.pending_inputs,
+            }),
+            Err(_) => json!({ "ok": false, "message": "control state 锁已损坏" }),
+        },
+        ControlCommand::ApprovalDecision {
+            request_id,
+            decision,
+        } => write_control_response_frame(shared, |state| {
+            state.resolve_approval_decision_frame(&request_id, &decision)
+        }),
+        ControlCommand::AnswerInput {
+            request_id,
+            answers,
+        } => write_control_response_frame(shared, |state| {
+            state.resolve_input_answer_frame(&request_id, answers)
+        }),
+        ControlCommand::SendInstruction { content } => {
+            json!({ "ok": false, "message": format!("send_instruction transport 尚未接入 app-server RPC：{content}") })
+        }
+        ControlCommand::Interrupt => {
+            json!({ "ok": false, "message": "interrupt transport 尚未接入 app-server RPC" })
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_control_response_frame<F>(shared: &RelaySharedState, build_frame: F) -> Value
+where
+    F: FnOnce(&mut AppControlState) -> Result<Vec<u8>, String>,
+{
+    let frame = match shared.state.lock() {
+        Ok(mut state) => match build_frame(&mut state) {
+            Ok(frame) => frame,
+            Err(error) => return json!({ "ok": false, "message": error }),
+        },
+        Err(_) => return json!({ "ok": false, "message": "control state 锁已损坏" }),
+    };
+
+    let mut writer = match shared.upstream_writer.lock() {
+        Ok(writer) => writer,
+        Err(_) => return json!({ "ok": false, "message": "relay upstream writer 锁已损坏" }),
+    };
+    let Some(stream) = writer.as_mut() else {
+        return json!({ "ok": false, "message": "当前没有可回写的 Codex TUI WebSocket" });
+    };
+    match stream.write_all(&frame) {
+        Ok(()) => json!({ "ok": true }),
+        Err(error) => {
+            json!({ "ok": false, "message": format!("写回 Codex app-server 失败：{error}") })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -395,5 +1081,54 @@ mod tests {
             session.binding_failure_reason.as_deref(),
             Some("transport failed")
         );
+    }
+
+    #[test]
+    fn websocket_text_frame_round_trips_json() {
+        let payload = json!({"id": 1, "method": "thread/read"});
+        let frame = encode_websocket_text_frame(&payload.to_string(), false);
+
+        let parsed = parse_websocket_text_frames(&frame).unwrap();
+
+        assert_eq!(parsed.messages, vec![payload]);
+        assert!(parsed.rest.is_empty());
+    }
+
+    #[test]
+    fn control_command_parses_json_line() {
+        let command =
+            parse_control_command_line(r#"{"type":"send_instruction","content":"继续"}"#).unwrap();
+
+        assert!(
+            matches!(command, ControlCommand::SendInstruction { content } if content == "继续")
+        );
+    }
+
+    #[test]
+    fn approval_decision_builds_masked_jsonrpc_response_and_removes_pending() {
+        let mut state = AppControlState {
+            wrapper_session_id: "wrapper-test".to_string(),
+            ..Default::default()
+        };
+        state.observe_server_request(AppServerRequest {
+            jsonrpc_id: json!(15),
+            method: "item/commandExecution/requestApproval".into(),
+            params: json!({
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "command": "cargo test"
+            }),
+        });
+
+        let frame = state
+            .resolve_approval_decision_frame("codex-relay:wrapper-test:turn-1:item-1", "accept")
+            .unwrap();
+        let decoded = parse_websocket_text_frames(&frame).unwrap();
+
+        assert_eq!(
+            decoded.messages,
+            vec![json!({"id": 15, "result": {"decision": "accept"}})]
+        );
+        assert!(state.pending_approvals.is_empty());
     }
 }
