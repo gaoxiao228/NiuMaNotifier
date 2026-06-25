@@ -348,11 +348,7 @@ fn run_app_control_inner(real_codex: PathBuf, args: Vec<String>) -> Result<i32, 
         .map_err(|error| format!("读取当前目录失败：{error}"))?
         .to_string_lossy()
         .to_string();
-    let base_dir = registry_path
-        .parent()
-        .ok_or_else(|| "Codex managed registry 路径缺少父目录".to_string())?
-        .join("sockets")
-        .join(&wrapper_session_id);
+    let base_dir = managed_socket_base_dir(&wrapper_session_id);
 
     std::fs::create_dir_all(&base_dir)
         .map_err(|error| format!("创建 niuma-codex socket 目录失败：{error}"))?;
@@ -395,6 +391,24 @@ fn run_app_control_inner(real_codex: PathBuf, args: Vec<String>) -> Result<i32, 
                 )),
             }
         }
+    }
+}
+
+fn managed_socket_base_dir(wrapper_session_id: &str) -> PathBuf {
+    // Unix domain socket 路径受 SUN_LEN 限制，不能放在较长的 app data 目录下。
+    let short_id = wrapper_session_id
+        .strip_prefix("niuma_codex_")
+        .unwrap_or(wrapper_session_id)
+        .chars()
+        .take(12)
+        .collect::<String>();
+    #[cfg(unix)]
+    {
+        PathBuf::from("/tmp").join("niuma-codex").join(short_id)
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::temp_dir().join("niuma-codex").join(short_id)
     }
 }
 
@@ -1081,6 +1095,20 @@ mod tests {
             session.binding_failure_reason.as_deref(),
             Some("transport failed")
         );
+    }
+
+    #[test]
+    fn managed_socket_base_dir_keeps_unix_socket_paths_short() {
+        let base_dir = managed_socket_base_dir("niuma_codex_eb6c63c67b9d4bc9b6e20fd7e0fad8a6");
+        let real_socket = base_dir.join("real.sock");
+
+        assert!(
+            real_socket.to_string_lossy().len() < 100,
+            "socket path is too long: {}",
+            real_socket.display()
+        );
+        #[cfg(unix)]
+        assert!(real_socket.starts_with("/tmp/niuma-codex"));
     }
 
     #[test]
