@@ -442,6 +442,33 @@ Successful `session_project_groups` response uses the standard pagination shape:
 }
 ```
 
+`session_project_groups/stream` provides an SSE snapshot stream with the same query parameters as `session_project_groups`:
+
+```http
+GET /api/v1/session_project_groups/stream?tool=codex&project_path=/repo&include_subagents=true&page=1&page_size=20
+```
+
+The stream sends `event: session_project_groups` frames. The `data` payload uses the same pagination shape as `session_project_groups`, and each normalized session adds runtime overlay fields from Niuma runtime state: `runtime_status`, `runtime_last_event_id`, and `runtime_last_activity_at`. Raw sessions include the same runtime fields when `include_subagents=true`. `status` keeps its provider meaning (`active`, `inactive`, or `unknown`); use `runtime_status` for Niuma states such as `running`, `waiting_approval`, `waiting_input`, `completed`, `error`, `idle`, or `stale`.
+
+The stream sends a full snapshot immediately after the connection is opened. When Niuma runtime state changes, the server recomputes the same query and sends another full snapshot only if the serialized content changed. The stream is a display-state API, so consumers should treat it like `/api/v1/state/stream`: reconnect by opening the stream again and accepting the first snapshot, not by trying to resume from an SSE id.
+
+Example frame:
+
+```text
+event: session_project_groups
+id: 2
+data: {"list":[{"tool":"codex","project_path":"/repo","project_name":"repo","normalized_session_count":1,"raw_session_count":1,"subagent_count":0,"sessions":[{"normalized_session_id":"session-1","primary_session_id":"session-1","title":"session-session","status":"active","runtime_status":"waiting_approval","runtime_last_event_id":"event-1","runtime_last_activity_at":"2026-06-25T02:15:35Z","updated_at":"2026-06-25T02:15:35Z","first_user_message_preview":"Summarize this project","first_user_message_at":"2026-06-25T02:10:00Z","latest_event_summary":null,"subagent_count":0}]}],"page":1,"page_size":20,"total":1}
+```
+
+Runtime overlay rules:
+
+- `runtime_status = null` means Niuma currently has no runtime-state record for that session.
+- `status` and `runtime_status` are intentionally separate. Do not use provider `status` to decide whether the session is waiting for approval or input.
+- Normalized session `runtime_status` is aggregated from the raw sessions under the same `normalized_session_id`, using this priority: `waiting_approval` / `waiting_input`, then `error`, `running`, `completed`, `idle`, `stale`, then `null`.
+- With `include_subagents=true`, `raw_sessions[]` includes each raw session's own runtime overlay fields. With `include_subagents=false`, only the normalized session summary is returned.
+
+If query parameters have invalid types, the stream endpoint returns the standard error envelope before establishing SSE, for example `HTTP 400` with `code = 100003`. If page bounds fail business validation, it returns `HTTP 200` with a non-zero business code.
+
 `session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`.
 
 Successful responses still use the standard envelope:

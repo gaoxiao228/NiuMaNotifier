@@ -66,6 +66,10 @@ impl RuntimeEventBus {
         self.sender.subscribe()
     }
 
+    pub fn current_version(&self) -> u64 {
+        self.version.load(Ordering::SeqCst)
+    }
+
     pub fn publish_niuma_events(&self, events: Vec<NiumaEvent>) {
         if events.is_empty() {
             return;

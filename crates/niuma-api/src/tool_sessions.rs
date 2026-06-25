@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
-use niuma_core::models::ToolKind;
+use niuma_core::models::{RuntimeStateItem, RuntimeStateStatus, ToolKind};
 use niuma_core::tool_session::{
     ToolSessionDetail, ToolSessionListItem, ToolSessionNormalizationStatus, ToolSessionScope,
     ToolSessionStatus,
@@ -87,6 +87,68 @@ pub struct RawSessionSummary {
     pub updated_at: DateTime<Utc>,
     pub is_active: bool,
     pub status: ToolSessionStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RuntimeSessionProjectGroupPage {
+    pub list: Vec<RuntimeProjectSessionGroup>,
+    pub page: usize,
+    pub page_size: usize,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RuntimeProjectSessionGroup {
+    pub tool: ToolKind,
+    pub project_path: String,
+    pub project_name: String,
+    pub updated_at: DateTime<Utc>,
+    pub normalized_session_count: usize,
+    pub raw_session_count: usize,
+    pub subagent_count: usize,
+    pub sessions: Vec<RuntimeNormalizedSessionSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RuntimeNormalizedSessionSummary {
+    pub normalized_session_id: String,
+    pub primary_session_id: String,
+    pub title: String,
+    pub status: ToolSessionStatus,
+    pub runtime_status: Option<RuntimeStateStatus>,
+    pub runtime_last_event_id: Option<String>,
+    pub runtime_last_activity_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user_message_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_user_message_at: Option<DateTime<Utc>>,
+    pub latest_event_summary: Option<String>,
+    pub subagent_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_sessions: Option<Vec<RuntimeRawSessionSummary>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RuntimeRawSessionSummary {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    pub normalized_session_id: String,
+    pub session_scope: ToolSessionScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalization_status: Option<ToolSessionNormalizationStatus>,
+    pub source_path: String,
+    pub updated_at: DateTime<Utc>,
+    pub is_active: bool,
+    pub status: ToolSessionStatus,
+    pub runtime_status: Option<RuntimeStateStatus>,
+    pub runtime_last_event_id: Option<String>,
+    pub runtime_last_activity_at: Option<DateTime<Utc>>,
 }
 
 // registry 是宿主进程内的 snapshot 缓存，provider 每次上报时按 tool 整批替换。
@@ -249,6 +311,67 @@ impl ToolSessionRegistry {
         })
     }
 
+    pub fn project_groups_with_runtime(
+        &self,
+        query: ToolSessionProjectGroupsQuery,
+        runtime_states: &[RuntimeStateItem],
+    ) -> Result<RuntimeSessionProjectGroupPage, String> {
+        let page = capped_page(query.page)?;
+        let page_size = capped_page_size(query.page_size)?;
+        let snapshot_items = {
+            let snapshots = self
+                .snapshots
+                .read()
+                .expect("tool session registry lock poisoned");
+
+            snapshots_for_tool(&snapshots, query.tool.as_deref())
+                .into_iter()
+                .flat_map(|sessions| sessions.iter().cloned())
+                .collect::<Vec<_>>()
+        };
+        let project_path = query
+            .project_path
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let mut projects = HashMap::<String, ProjectAccumulator>::new();
+
+        for item in snapshot_items {
+            if project_path
+                .as_deref()
+                .is_some_and(|expected| item.project_path != expected)
+            {
+                continue;
+            }
+            let key = format!("{}\0{}", item.tool.as_str(), item.project_path);
+            projects
+                .entry(key)
+                .or_insert_with(|| ProjectAccumulator::new(&item))
+                .push(item);
+        }
+
+        let mut groups = projects
+            .into_values()
+            .map(|project| project.into_runtime_group(query.include_subagents, runtime_states))
+            .collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.tool.as_str().cmp(right.tool.as_str()))
+                .then_with(|| left.project_path.cmp(&right.project_path))
+        });
+
+        let total = groups.len();
+        let start = (page - 1).saturating_mul(page_size);
+        let list = groups.into_iter().skip(start).take(page_size).collect();
+        Ok(RuntimeSessionProjectGroupPage {
+            list,
+            page,
+            page_size,
+            total,
+        })
+    }
+
     pub fn find_session(&self, tool: &ToolKind, session_id: &str) -> Option<ToolSessionListItem> {
         self.snapshots
             .read()
@@ -352,6 +475,56 @@ impl ProjectAccumulator {
             sessions,
         }
     }
+
+    fn into_runtime_group(
+        self,
+        include_subagents: bool,
+        runtime_states: &[RuntimeStateItem],
+    ) -> RuntimeProjectSessionGroup {
+        let raw_session_count = self
+            .sessions
+            .values()
+            .map(|sessions| sessions.len())
+            .sum::<usize>();
+        let mut sessions = self
+            .sessions
+            .into_iter()
+            .map(|(normalized_session_id, raw_sessions)| {
+                runtime_normalized_summary(
+                    normalized_session_id,
+                    raw_sessions,
+                    include_subagents,
+                    runtime_states,
+                )
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.primary_session_id.cmp(&right.primary_session_id))
+        });
+        let updated_at = sessions
+            .iter()
+            .map(|session| session.updated_at)
+            .max()
+            .unwrap_or_else(Utc::now);
+        let subagent_count = sessions
+            .iter()
+            .map(|session| session.subagent_count)
+            .sum::<usize>();
+
+        RuntimeProjectSessionGroup {
+            tool: self.tool,
+            project_path: self.project_path,
+            project_name: self.project_name,
+            updated_at,
+            normalized_session_count: sessions.len(),
+            raw_session_count,
+            subagent_count,
+            sessions,
+        }
+    }
 }
 
 fn normalized_summary(
@@ -422,6 +595,123 @@ fn raw_session_summary(item: &ToolSessionListItem) -> RawSessionSummary {
         updated_at: item.modified_at,
         is_active: item.is_active,
         status: item.status.clone(),
+    }
+}
+
+fn runtime_normalized_summary(
+    normalized_session_id: String,
+    mut raw_sessions: Vec<ToolSessionListItem>,
+    include_subagents: bool,
+    runtime_states: &[RuntimeStateItem],
+) -> RuntimeNormalizedSessionSummary {
+    raw_sessions.sort_by(|left, right| {
+        session_scope_sort_rank(left)
+            .cmp(&session_scope_sort_rank(right))
+            .then_with(|| right.modified_at.cmp(&left.modified_at))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    let primary = raw_sessions
+        .iter()
+        .find(|item| session_scope_for(item) == ToolSessionScope::Main)
+        .or_else(|| {
+            raw_sessions
+                .iter()
+                .find(|item| item.session_id == normalized_session_id)
+        })
+        .unwrap_or(&raw_sessions[0]);
+    let updated_at = raw_sessions
+        .iter()
+        .map(|item| item.modified_at)
+        .max()
+        .unwrap_or(primary.modified_at);
+    let subagent_count = raw_sessions.iter().filter(|item| item.is_subagent).count();
+    let status = if raw_sessions.iter().any(|item| item.is_active) {
+        ToolSessionStatus::Active
+    } else {
+        primary.status.clone()
+    };
+    let runtime = raw_sessions
+        .iter()
+        .filter_map(|item| runtime_for_session(runtime_states, &item.tool, &item.session_id))
+        .max_by(|left, right| compare_runtime_priority(left, right))
+        .cloned();
+    let raw_summaries = include_subagents.then(|| {
+        raw_sessions
+            .iter()
+            .map(|item| runtime_raw_session_summary(item, runtime_states))
+            .collect::<Vec<_>>()
+    });
+    let first_user_message = normalized_first_user_message(primary, &raw_sessions);
+
+    RuntimeNormalizedSessionSummary {
+        normalized_session_id: normalized_session_id.clone(),
+        primary_session_id: primary.session_id.clone(),
+        title: session_title(primary),
+        status,
+        runtime_status: runtime.as_ref().map(|item| item.status.clone()),
+        runtime_last_event_id: runtime.as_ref().and_then(|item| item.last_event_id.clone()),
+        runtime_last_activity_at: runtime.as_ref().map(|item| item.last_activity_at),
+        updated_at,
+        first_user_message_preview: first_user_message
+            .as_ref()
+            .map(|message| message.preview.clone()),
+        first_user_message_at: first_user_message.map(|message| message.created_at),
+        latest_event_summary: None,
+        subagent_count,
+        raw_sessions: raw_summaries,
+    }
+}
+
+fn runtime_raw_session_summary(
+    item: &ToolSessionListItem,
+    runtime_states: &[RuntimeStateItem],
+) -> RuntimeRawSessionSummary {
+    let runtime = runtime_for_session(runtime_states, &item.tool, &item.session_id);
+    RuntimeRawSessionSummary {
+        session_id: item.session_id.clone(),
+        parent_session_id: item.parent_session_id.clone(),
+        normalized_session_id: normalized_session_id_for(item),
+        session_scope: session_scope_for(item),
+        agent_nickname: item.agent_nickname.clone(),
+        agent_role: item.agent_role.clone(),
+        normalization_status: item.normalization_status.clone(),
+        source_path: item.file_path.clone(),
+        updated_at: item.modified_at,
+        is_active: item.is_active,
+        status: item.status.clone(),
+        runtime_status: runtime.map(|item| item.status.clone()),
+        runtime_last_event_id: runtime.and_then(|item| item.last_event_id.clone()),
+        runtime_last_activity_at: runtime.map(|item| item.last_activity_at),
+    }
+}
+
+fn runtime_for_session<'a>(
+    runtime_states: &'a [RuntimeStateItem],
+    tool: &ToolKind,
+    session_id: &str,
+) -> Option<&'a RuntimeStateItem> {
+    runtime_states
+        .iter()
+        .find(|item| &item.tool == tool && item.session_id == session_id)
+}
+
+fn compare_runtime_priority(
+    left: &&RuntimeStateItem,
+    right: &&RuntimeStateItem,
+) -> std::cmp::Ordering {
+    runtime_status_priority(&left.status)
+        .cmp(&runtime_status_priority(&right.status))
+        .then_with(|| left.last_activity_at.cmp(&right.last_activity_at))
+}
+
+fn runtime_status_priority(status: &RuntimeStateStatus) -> usize {
+    match status {
+        RuntimeStateStatus::WaitingApproval | RuntimeStateStatus::WaitingInput => 6,
+        RuntimeStateStatus::Error => 5,
+        RuntimeStateStatus::Running => 4,
+        RuntimeStateStatus::Completed => 3,
+        RuntimeStateStatus::Idle => 2,
+        RuntimeStateStatus::Stale => 1,
     }
 }
 

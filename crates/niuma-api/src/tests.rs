@@ -24,7 +24,10 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 use crate::tool_sessions::{ToolSessionDetailProvider, ToolSessionListQuery, ToolSessionRegistry};
-use crate::{app, app_with_bus, app_with_bus_and_plugin_dir, app_with_tool_sessions};
+use crate::{
+    app, app_with_bus, app_with_bus_and_plugin_dir, app_with_bus_and_tool_sessions,
+    app_with_tool_sessions,
+};
 
 #[tokio::test]
 async fn post_event_then_get_main_state_returns_waiting_approval() {
@@ -1903,6 +1906,67 @@ async fn sse_stream_emits_state_updates_to_each_connected_client() {
     let second_updated = next_sse_chunk(&mut second_body).await;
     assert!(first_updated.contains("\"status\":\"waiting_approval\""));
     assert!(second_updated.contains("\"status\":\"waiting_approval\""));
+}
+
+#[tokio::test]
+async fn session_project_groups_stream_overlays_runtime_status() {
+    let store = NiumaStore::new(test_path("session_project_groups_stream_runtime_status"));
+    enable_codex_listener(&store);
+    let bus = RuntimeEventBus::new();
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "s1",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+    let router = app_with_bus_and_tool_sessions(store, bus, registry);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_project_groups/stream?tool=codex&page=1&page_size=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let initial = next_sse_chunk(&mut body).await;
+    assert!(initial.contains("event: session_project_groups"));
+    assert!(initial.contains("\"primary_session_id\":\"s1\""));
+    assert!(initial.contains("\"status\":\"active\""));
+    assert!(initial.contains("\"runtime_status\":null"));
+
+    let mut event = sample_event();
+    event.session_id = "s1".to_string();
+    let posted = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/events")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
+
+    let updated = next_sse_chunk(&mut body).await;
+    assert!(updated.contains("event: session_project_groups"));
+    assert!(updated.contains("\"primary_session_id\":\"s1\""));
+    assert!(updated.contains("\"status\":\"active\""));
+    assert!(updated.contains("\"runtime_status\":\"waiting_approval\""));
+    assert!(updated.contains("\"runtime_last_event_id\":\"event-1\""));
 }
 
 #[tokio::test]

@@ -1,14 +1,18 @@
 use async_stream::stream;
-use axum::extract::State;
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use niuma_core::main_state::{MainStatePayload, MainStateService, MainStateWatcher};
 use niuma_core::runtime_event::RuntimeEvent;
+use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::response::apply_cors_headers;
+use crate::response::json_response;
 use crate::state::AppState;
+use crate::tool_sessions::ToolSessionProjectGroupsQuery;
 
 #[derive(Default)]
 pub(crate) struct MainStateBroadcaster {
@@ -19,6 +23,15 @@ pub(crate) struct MainStateBroadcaster {
 #[derive(Default)]
 struct MainStateClient {
     last_content: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct SessionProjectGroupsStreamQuery {
+    tool: Option<String>,
+    project_path: Option<String>,
+    include_subagents: Option<bool>,
+    page: Option<usize>,
+    page_size: Option<usize>,
 }
 
 impl MainStateBroadcaster {
@@ -104,6 +117,76 @@ pub(crate) async fn events_stream(State(state): State<AppState>) -> Response {
     response
 }
 
+pub(crate) async fn session_project_groups_stream(
+    State(state): State<AppState>,
+    query: Result<Query<SessionProjectGroupsStreamQuery>, QueryRejection>,
+) -> Response {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(error) => {
+            return json_response(
+                400,
+                niuma_core::api_response::ApiResponse::fail(
+                    niuma_core::api_response::ApiErrorCode::ParameterType,
+                    format!("查询参数类型错误（include_subagents/page/page_size）：{error}"),
+                ),
+            );
+        }
+    };
+    let query = ToolSessionProjectGroupsQuery {
+        tool: query
+            .tool
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty()),
+        project_path: query
+            .project_path
+            .map(|project_path| project_path.trim().to_string())
+            .filter(|project_path| !project_path.is_empty()),
+        include_subagents: query.include_subagents.unwrap_or(false),
+        page: query.page,
+        page_size: query.page_size,
+    };
+    if let Err(error) = session_project_groups_payload(&state, &query) {
+        return json_response(
+            200,
+            niuma_core::api_response::ApiResponse::fail(
+                niuma_core::api_response::ApiErrorCode::BusinessValidation,
+                error,
+            ),
+        );
+    }
+
+    let event_stream = stream! {
+        let mut receiver = state.runtime_events.subscribe();
+        let mut client = MainStateClient::default();
+        if let Some(event) = next_session_project_groups_event(&state, &query, &mut client, true) {
+            yield Ok::<Event, std::convert::Infallible>(event);
+        }
+        loop {
+            match receiver.recv().await {
+                Ok(RuntimeEvent::NiumaEventsAppended { .. })
+                | Ok(RuntimeEvent::AttentionDismissed { .. })
+                | Ok(RuntimeEvent::StateReset { .. })
+                | Ok(RuntimeEvent::StateChanged { .. }) => {
+                    if let Some(event) =
+                        next_session_project_groups_event(&state, &query, &mut client, false)
+                    {
+                        yield Ok::<Event, std::convert::Infallible>(event);
+                    }
+                }
+                Ok(RuntimeEvent::PluginNotificationTestRequested { .. }) => {}
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            }
+        }
+    };
+    let mut response = Sse::new(event_stream)
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    apply_cors_headers(response.headers_mut());
+    response
+}
+
 fn next_state_event(state: &AppState, client: &mut MainStateClient, force: bool) -> Option<Event> {
     let mut payload = MainStateService::new(state.store.clone())
         .current_state(Utc::now())
@@ -121,6 +204,42 @@ fn next_state_event(state: &AppState, client: &mut MainStateClient, force: bool)
     let version = payload.version.to_string();
     let data = serde_json::to_string(&payload).ok()?;
     Some(Event::default().event("state").id(version).data(data))
+}
+
+fn next_session_project_groups_event(
+    state: &AppState,
+    query: &ToolSessionProjectGroupsQuery,
+    client: &mut MainStateClient,
+    force: bool,
+) -> Option<Event> {
+    let content = session_project_groups_payload(state, query).ok()?;
+    if !client.should_send(&content, force) {
+        return None;
+    }
+    let data: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let id = state
+        .runtime_events
+        .current_version()
+        .saturating_add(1)
+        .to_string();
+    Some(
+        Event::default()
+            .event("session_project_groups")
+            .id(id)
+            .data(serde_json::to_string(&data).ok()?),
+    )
+}
+
+fn session_project_groups_payload(
+    state: &AppState,
+    query: &ToolSessionProjectGroupsQuery,
+) -> Result<String, String> {
+    let runtime_states = state.store.runtime_state_list()?;
+    let page = state
+        .tool_sessions
+        .project_groups_with_runtime(query.clone(), &runtime_states)?;
+    serde_json::to_string(&page)
+        .map_err(|error| format!("session project groups 序列化失败：{error}"))
 }
 
 fn main_state_content_key(payload: &MainStatePayload) -> String {

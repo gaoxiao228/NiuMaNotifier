@@ -442,6 +442,33 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 }
 ```
 
+`session_project_groups/stream` 提供 SSE 快照流，查询参数与 `session_project_groups` 保持一致：
+
+```http
+GET /api/v1/session_project_groups/stream?tool=codex&project_path=/repo&include_subagents=true&page=1&page_size=20
+```
+
+该流发送 `event: session_project_groups` 帧。`data` payload 使用与 `session_project_groups` 相同的分页结构，并在每个归一会话上追加来自 Niuma 运行态的 overlay 字段：`runtime_status`、`runtime_last_event_id`、`runtime_last_activity_at`。当 `include_subagents=true` 时，raw session 也会包含同样的运行态字段。`status` 仍保留 provider 含义（`active`、`inactive` 或 `unknown`）；判断 Niuma 运行态应使用 `runtime_status`，例如 `running`、`waiting_approval`、`waiting_input`、`completed`、`error`、`idle` 或 `stale`。
+
+连接建立后，服务端会立即发送一帧完整快照。当 Niuma 运行态变化时，服务端会用同一组查询参数重新计算并在序列化内容发生变化时再次发送完整快照。该流是展示状态接口，消费者应按 `/api/v1/state/stream` 的方式处理：重连时重新打开流并接受首帧快照，不依赖 SSE id 做断点恢复。
+
+示例帧：
+
+```text
+event: session_project_groups
+id: 2
+data: {"list":[{"tool":"codex","project_path":"/repo","project_name":"repo","normalized_session_count":1,"raw_session_count":1,"subagent_count":0,"sessions":[{"normalized_session_id":"session-1","primary_session_id":"session-1","title":"session-session","status":"active","runtime_status":"waiting_approval","runtime_last_event_id":"event-1","runtime_last_activity_at":"2026-06-25T02:15:35Z","updated_at":"2026-06-25T02:15:35Z","first_user_message_preview":"总结这个项目","first_user_message_at":"2026-06-25T02:10:00Z","latest_event_summary":null,"subagent_count":0}]}],"page":1,"page_size":20,"total":1}
+```
+
+运行态 overlay 规则：
+
+- `runtime_status = null` 表示 Niuma 当前没有该 session 的运行态记录。
+- `status` 与 `runtime_status` 有意分离。不要用 provider `status` 判断 session 是否正在等待授权或输入。
+- 归一会话的 `runtime_status` 会从同一 `normalized_session_id` 下的 raw session 聚合，优先级为：`waiting_approval` / `waiting_input`，然后是 `error`、`running`、`completed`、`idle`、`stale`、`null`。
+- 当 `include_subagents=true` 时，`raw_sessions[]` 会包含每个 raw session 自己的运行态 overlay 字段；当 `include_subagents=false` 时，只返回归一会话摘要。
+
+如果查询参数类型不合法，stream 接口会在建立 SSE 前返回标准错误 envelope，例如 `HTTP 400` 且 `code = 100003`。如果分页范围触发业务校验失败，则返回 `HTTP 200` 加非 0 业务错误码。
+
 `session_detail` 按 `tool + session_id` 读取归一化消息详情。`messages` 倒序返回，`messages[0]` 是本页最新消息；`next_cursor` 用于继续读取更旧消息。第一版支持的消息角色包括 `user`、`assistant`、`system`、`tool_call`、`tool_result`、`event` 和 `unknown`。
 
 成功响应仍使用统一 envelope：
