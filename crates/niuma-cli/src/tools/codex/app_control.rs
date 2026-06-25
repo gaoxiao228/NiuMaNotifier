@@ -5,7 +5,7 @@ use niuma_core::codex_managed_session::{
 use niuma_core::platform::paths::codex_managed_registry_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // Task 4 会从 app-server transport 填充该结构，本任务先固定可测试状态输入。
 #[allow(dead_code)]
@@ -30,6 +30,7 @@ pub struct AppControlState {
 pub struct PendingApproval {
     pub request_id: String,
     pub relay_request_id: String,
+    pub relay_jsonrpc_id: Value,
     pub turn_id: Option<String>,
     pub item_id: Option<String>,
     pub command: Option<String>,
@@ -40,6 +41,7 @@ pub struct PendingApproval {
 pub struct PendingInput {
     pub request_id: String,
     pub relay_request_id: String,
+    pub relay_jsonrpc_id: Value,
     pub questions: Value,
 }
 
@@ -78,7 +80,7 @@ impl AppControlState {
     }
 
     fn observe_approval_request(&mut self, jsonrpc_id: Value, params: Value) {
-        let relay_request_id = jsonrpc_id.to_string();
+        let relay_request_id = jsonrpc_id_key(&jsonrpc_id);
         let turn_id = params
             .get("turnId")
             .and_then(Value::as_str)
@@ -98,6 +100,7 @@ impl AppControlState {
                 self.wrapper_session_id, stable_turn, stable_item
             ),
             relay_request_id,
+            relay_jsonrpc_id: jsonrpc_id,
             turn_id,
             item_id,
             command: params
@@ -108,19 +111,28 @@ impl AppControlState {
     }
 
     fn observe_input_request(&mut self, jsonrpc_id: Value, params: Value) {
-        let relay_request_id = jsonrpc_id.to_string();
+        let relay_request_id = jsonrpc_id_key(&jsonrpc_id);
         self.pending_inputs.push(PendingInput {
             request_id: format!(
                 "codex-input:{}:{}",
-                self.wrapper_session_id,
-                relay_request_id.trim_matches('"')
+                self.wrapper_session_id, relay_request_id
             ),
             relay_request_id,
+            relay_jsonrpc_id: jsonrpc_id,
             questions: params
                 .get("questions")
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new())),
         });
+    }
+}
+
+fn jsonrpc_id_key(jsonrpc_id: &Value) -> String {
+    // request_id 需要稳定且便于查找；字符串 id 不保留 JSON 引号，复杂值保留紧凑 JSON。
+    match jsonrpc_id {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        _ => serde_json::to_string(jsonrpc_id).unwrap_or_else(|_| jsonrpc_id.to_string()),
     }
 }
 
@@ -168,7 +180,52 @@ fn run_app_control_inner(real_codex: PathBuf, args: Vec<String>) -> Result<i32, 
 
     update_registry(&registry_path, |registry| registry.upsert(session))?;
 
-    run_app_server_remote_processes(real_codex, args, wrapper_session_id, base_dir)
+    match run_app_server_remote_processes(
+        real_codex,
+        args,
+        wrapper_session_id.clone(),
+        base_dir.clone(),
+    ) {
+        Ok(code) => Ok(code),
+        Err(error) => {
+            let mark_result =
+                mark_session_exited_after_failure(&registry_path, &wrapper_session_id, &error);
+            cleanup_socket_base_dir(&base_dir);
+            match mark_result {
+                Ok(()) => Err(error),
+                Err(mark_error) => Err(format!(
+                    "{error}；标记 Codex managed session 退出失败：{mark_error}"
+                )),
+            }
+        }
+    }
+}
+
+fn mark_session_exited_after_failure(
+    registry_path: &Path,
+    wrapper_session_id: &str,
+    reason: &str,
+) -> Result<(), String> {
+    update_registry(registry_path, |registry| {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.wrapper_session_id == wrapper_session_id)
+        {
+            session.state = ManagedCodexSessionState::Exited;
+            session.binding_failure_reason = Some(reason.to_string());
+        }
+    })
+    .map(|_| ())
+}
+
+fn cleanup_socket_base_dir(base_dir: &Path) {
+    // Task 4 前 transport 可能尚未创建 socket 文件；不存在时不影响原始错误返回。
+    if let Err(error) = std::fs::remove_dir_all(base_dir) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            let _ = error;
+        }
+    }
 }
 
 fn run_app_server_remote_processes(
@@ -253,6 +310,90 @@ mod tests {
                 request_id: "req-1".to_string(),
                 decision: "approved".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn jsonrpc_id_key_has_stable_display_without_extra_quotes() {
+        assert_eq!(jsonrpc_id_key(&json!(7)), "7");
+        assert_eq!(jsonrpc_id_key(&json!("7")), "7");
+        assert_eq!(jsonrpc_id_key(&json!("abc")), "abc");
+    }
+
+    #[test]
+    fn approval_fallback_and_input_request_ids_use_normalized_jsonrpc_id() {
+        let mut state = AppControlState {
+            wrapper_session_id: "wrapper-test".to_string(),
+            ..Default::default()
+        };
+
+        state.observe_server_request(AppServerRequest {
+            jsonrpc_id: json!("abc"),
+            method: "item/commandExecution/requestApproval".into(),
+            params: json!({
+                "turnId": "turn-1",
+                "command": "cargo test"
+            }),
+        });
+        state.observe_server_request(AppServerRequest {
+            jsonrpc_id: json!("7"),
+            method: "item/tool/requestUserInput".into(),
+            params: json!({}),
+        });
+
+        assert_eq!(
+            state.pending_approvals[0].request_id,
+            "codex-relay:wrapper-test:turn-1:abc"
+        );
+        assert_eq!(state.pending_approvals[0].relay_request_id, "abc");
+        assert_eq!(state.pending_approvals[0].relay_jsonrpc_id, json!("abc"));
+        assert_eq!(
+            state.pending_inputs[0].request_id,
+            "codex-input:wrapper-test:7"
+        );
+        assert_eq!(state.pending_inputs[0].relay_request_id, "7");
+        assert_eq!(state.pending_inputs[0].relay_jsonrpc_id, json!("7"));
+    }
+
+    #[test]
+    fn mark_session_exited_after_failure_updates_registry_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("codex.json");
+        let wrapper_session_id = "wrapper-test".to_string();
+        update_registry(&registry_path, |registry| {
+            registry.upsert(ManagedCodexSession {
+                wrapper_session_id: wrapper_session_id.clone(),
+                state: ManagedCodexSessionState::WaitingFirstUserMessage,
+                cwd: "/tmp/project".to_string(),
+                pid: Some(42),
+                real_socket: "/tmp/real.sock".to_string(),
+                relay_socket: "/tmp/relay.sock".to_string(),
+                control_socket: "/tmp/control.sock".to_string(),
+                started_at: chrono::Utc::now(),
+                first_user_message_hash: None,
+                first_user_message_preview: None,
+                first_user_message_submitted_at: None,
+                codex_session_id: None,
+                codex_session_file_path: None,
+                bound_at: None,
+                binding_failure_reason: None,
+            });
+        })
+        .unwrap();
+
+        mark_session_exited_after_failure(&registry_path, &wrapper_session_id, "transport failed")
+            .unwrap();
+
+        let registry = niuma_core::codex_managed_session::read_registry(&registry_path).unwrap();
+        let session = registry
+            .sessions
+            .iter()
+            .find(|session| session.wrapper_session_id == wrapper_session_id)
+            .unwrap();
+        assert_eq!(session.state, ManagedCodexSessionState::Exited);
+        assert_eq!(
+            session.binding_failure_reason.as_deref(),
+            Some("transport failed")
         );
     }
 }
