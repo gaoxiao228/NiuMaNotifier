@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::listener_config::ListenerConfig;
 use crate::models::{
-    ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason,
-    EventSessionScope, EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
+    ApprovalChannel, ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus,
+    CompletionReason, EventSessionScope, EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
 };
 use crate::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
@@ -2084,6 +2084,8 @@ fn sample_approval_request(id: &str) -> ApprovalRequest {
         proxy_status: ApprovalProxyStatus::Active,
         last_heartbeat_at: Some(Utc.timestamp_opt(1_000, 0).single().unwrap()),
         proxy_lost_at: None,
+        channel: ApprovalChannel::HookProxy,
+        control_ref: None,
     }
 }
 

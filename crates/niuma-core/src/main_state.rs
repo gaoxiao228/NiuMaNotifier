@@ -754,6 +754,8 @@ mod tests {
             proxy_status: ApprovalProxyStatus::Active,
             last_heartbeat_at: Some(at(1_000)),
             proxy_lost_at: None,
+            channel: crate::models::ApprovalChannel::HookProxy,
+            control_ref: None,
         }
     }
 

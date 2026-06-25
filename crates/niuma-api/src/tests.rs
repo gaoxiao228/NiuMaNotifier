@@ -512,6 +512,8 @@ async fn approval_proxy_watchdog_returns_stale_request_to_codex() {
         proxy_status: ApprovalProxyStatus::Active,
         last_heartbeat_at: Some(heartbeat_at),
         proxy_lost_at: None,
+        channel: niuma_core::models::ApprovalChannel::HookProxy,
+        control_ref: None,
     };
     store.upsert_approval_request(request.clone()).unwrap();
     store
@@ -635,6 +637,38 @@ async fn watcher_approval_after_hook_is_suppressed() {
         state_after["data"]["state"]["detail"]["approval"]["can_decide"],
         true
     );
+}
+
+#[tokio::test]
+async fn relay_approval_request_reuses_existing_hook_pending_approval() {
+    let store = NiumaStore::new(test_path("api_relay_reuses_hook_approval"));
+    enable_codex_listener(&store);
+    let router = app(store);
+
+    let created = post_json(
+        &router,
+        "/api/v1/approval-requests",
+        sample_approval_request_body("approval-hook-existing"),
+    )
+    .await;
+    assert_eq!(created["code"], 0);
+    assert_eq!(created["data"]["accepted"], true);
+
+    let mut relay_body = sample_approval_request_body("approval-relay-duplicate");
+    relay_body["channel"] = serde_json::json!("niuma_codex_relay");
+    relay_body["control_ref"] = serde_json::json!({
+        "wrapper_session_id": "wrapper-1",
+        "relay_request_id": "7",
+        "turn_id": "turn-1",
+        "item_id": "item-1"
+    });
+
+    let response = post_json(&router, "/api/v1/approval-requests", relay_body).await;
+
+    assert_eq!(response["code"], 0);
+    assert_eq!(response["data"]["accepted"], true);
+    assert_eq!(response["data"]["deduped_by_channel"], "hook_proxy");
+    assert_eq!(response["data"]["request_id"], "approval-hook-existing");
 }
 
 #[tokio::test]

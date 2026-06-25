@@ -132,6 +132,38 @@ pub enum ApprovalDecisionKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalChannel {
+    HookProxy,
+    NiumaCodexRelay,
+}
+
+impl ApprovalChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ApprovalChannel::HookProxy => "hook_proxy",
+            ApprovalChannel::NiumaCodexRelay => "niuma_codex_relay",
+        }
+    }
+}
+
+fn default_approval_channel() -> ApprovalChannel {
+    ApprovalChannel::HookProxy
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalControlRef {
+    pub wrapper_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_session_id: Option<String>,
+    pub relay_request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalRequest {
     pub id: String,
     pub tool: ToolKind,
@@ -160,6 +192,10 @@ pub struct ApprovalRequest {
     pub last_heartbeat_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_lost_at: Option<DateTime<Utc>>,
+    #[serde(default = "default_approval_channel")]
+    pub channel: ApprovalChannel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_ref: Option<ApprovalControlRef>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

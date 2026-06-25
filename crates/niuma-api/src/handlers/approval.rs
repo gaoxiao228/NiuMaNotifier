@@ -7,8 +7,8 @@ use niuma_core::approval_arbitration::{
     ApprovalFingerprint, ExpiredWatcherApproval, HookApprovalDecision, WatcherApprovalDecision,
 };
 use niuma_core::models::{
-    ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, EventType,
-    NiumaEvent, ToolId,
+    ApprovalChannel, ApprovalControlRef, ApprovalDecisionKind, ApprovalProxyStatus,
+    ApprovalRequest, ApprovalStatus, EventType, NiumaEvent, ToolId,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -29,6 +29,8 @@ pub(crate) struct ApprovalRequestBody {
     project_path: String,
     project_name: String,
     timeout_seconds: Option<u64>,
+    channel: Option<String>,
+    control_ref: Option<ApprovalControlRef>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -86,16 +88,31 @@ pub(crate) async fn post_approval_request(State(state): State<AppState>, body: B
             );
         }
     };
+    if request.channel == ApprovalChannel::NiumaCodexRelay {
+        if let Some(existing) = existing_pending_hook_approval_for_relay(&state, &request) {
+            return json_response(
+                200,
+                ApiResponse::ok(json!({
+                    "request_id": existing.id,
+                    "accepted": true,
+                    "deduped_by_channel": ApprovalChannel::HookProxy.as_str(),
+                    "status": existing.status
+                })),
+            );
+        }
+    }
     let mut hook_decision = HookApprovalDecision::AcceptHook;
-    for fingerprint in hook_approval_fingerprints(&request) {
-        let decision = state
-            .approval_arbiter
-            .lock()
-            .expect("approval arbiter mutex poisoned")
-            .on_hook_approval(fingerprint.clone(), Utc::now());
-        log_hook_approval_arbitration(&request, &fingerprint, &decision);
-        if decision == HookApprovalDecision::ReturnToCodex {
-            hook_decision = HookApprovalDecision::ReturnToCodex;
+    if request.channel == ApprovalChannel::HookProxy {
+        for fingerprint in hook_approval_fingerprints(&request) {
+            let decision = state
+                .approval_arbiter
+                .lock()
+                .expect("approval arbiter mutex poisoned")
+                .on_hook_approval(fingerprint.clone(), Utc::now());
+            log_hook_approval_arbitration(&request, &fingerprint, &decision);
+            if decision == HookApprovalDecision::ReturnToCodex {
+                hook_decision = HookApprovalDecision::ReturnToCodex;
+            }
         }
     }
     if hook_decision == HookApprovalDecision::ReturnToCodex {
@@ -129,11 +146,44 @@ pub(crate) async fn post_approval_request(State(state): State<AppState>, body: B
         ApiResponse::ok(json!({
             "request_id": request.id,
             "accepted": true,
-            "ownership": "hook",
+            "ownership": approval_ownership(&request.channel),
             "hook_action": "wait_for_decision",
             "status": request.status
         })),
     )
+}
+
+fn approval_ownership(channel: &ApprovalChannel) -> &'static str {
+    match channel {
+        ApprovalChannel::HookProxy => "hook",
+        ApprovalChannel::NiumaCodexRelay => "niuma_codex_relay",
+    }
+}
+
+fn existing_pending_hook_approval_for_relay(
+    state: &AppState,
+    relay_request: &ApprovalRequest,
+) -> Option<ApprovalRequest> {
+    let relay_fingerprints = hook_approval_fingerprints(relay_request);
+    if relay_fingerprints.is_empty() {
+        return None;
+    }
+    state
+        .store
+        .approval_requests()
+        .ok()?
+        .into_iter()
+        .find(|existing| {
+            existing.status == ApprovalStatus::Pending
+                && existing.channel == ApprovalChannel::HookProxy
+                && hook_approval_fingerprints(existing)
+                    .iter()
+                    .any(|existing_fp| {
+                        relay_fingerprints
+                            .iter()
+                            .any(|relay_fp| relay_fp.key == existing_fp.key)
+                    })
+        })
 }
 
 pub(super) fn is_codex_watcher_approval(event: &NiumaEvent) -> bool {
@@ -626,6 +676,7 @@ pub(crate) async fn post_approval_heartbeat(
 
 fn build_approval_request(body: ApprovalRequestBody) -> Result<ApprovalRequest, String> {
     let now = Utc::now();
+    let channel = parse_approval_channel(body.channel.as_deref())?;
     Ok(ApprovalRequest {
         id: required_trimmed(&body.request_id, "request_id")?,
         tool: ToolId::from_id(required_trimmed(&body.tool, "tool")?),
@@ -646,7 +697,17 @@ fn build_approval_request(body: ApprovalRequestBody) -> Result<ApprovalRequest, 
         proxy_status: ApprovalProxyStatus::Active,
         last_heartbeat_at: Some(now),
         proxy_lost_at: None,
+        channel,
+        control_ref: body.control_ref,
     })
+}
+
+fn parse_approval_channel(value: Option<&str>) -> Result<ApprovalChannel, String> {
+    match value.unwrap_or("hook_proxy") {
+        "hook_proxy" => Ok(ApprovalChannel::HookProxy),
+        "niuma_codex_relay" => Ok(ApprovalChannel::NiumaCodexRelay),
+        other => Err(format!("未知授权渠道：{other}")),
+    }
 }
 
 fn approval_event(
