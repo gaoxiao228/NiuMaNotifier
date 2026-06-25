@@ -19,6 +19,7 @@ niuma-api = { path = "../niuma-api" }
 niuma-core = { path = "../niuma-core" }
 serde.workspace = true
 serde_json.workspace = true
+uuid = { version = "1", features = ["v4"] }
 which = "6"
 
 [dev-dependencies]
