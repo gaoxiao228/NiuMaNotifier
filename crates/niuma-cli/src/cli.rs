@@ -21,6 +21,7 @@ pub(crate) enum Command {
 }
 
 #[derive(Args)]
+#[command(disable_help_flag = true, disable_version_flag = true)]
 pub(crate) struct CodexCommand {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
@@ -89,6 +90,26 @@ mod tests {
         assert_eq!(
             parse_codex_args(&["niuma", "codex", "exec", "--help"]),
             vec!["exec".to_string(), "--help".to_string()]
+        );
+    }
+
+    #[test]
+    fn preserves_codex_help_and_version_flags() {
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "--help"]),
+            vec!["--help".to_string()]
+        );
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "-h"]),
+            vec!["-h".to_string()]
+        );
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "--version"]),
+            vec!["--version".to_string()]
+        );
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "-V"]),
+            vec!["-V".to_string()]
         );
     }
 }
