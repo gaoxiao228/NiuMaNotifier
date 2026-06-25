@@ -24,8 +24,8 @@ NiuMaNotifier 现有 Codex 内置插件负责两类能力：
 - session 列表、session 详情和等待类事件展示都要体现可交互能力。
 - 第一版不在状态栏增加操作按钮。
 - 授权复用现有 `/api/v1/approval-decisions`，通过 `channel` 区分 hook 和 relay。
-- `niuma-codex` relay 主动上报 approval request，`channel = niuma_codex_relay`。
-- Codex hook 如果检测到当前请求属于 `niuma-codex` 受管会话，必须跳过，不创建 hook approval。
+- Codex hook 不因 `niuma-codex` 受管会话做规避，仍按现有机制创建 `hook_proxy` approval。
+- `niuma-codex` relay 捕获到 app-server approval request 时主动上报，`channel = niuma_codex_relay`；Local API 负责用仲裁规则避免 hook 与 relay 产生重复可操作授权。
 - `request_user_input` 第一版不建 input store，走 relay pending request 和 control API。
 
 ## 非目标
@@ -196,30 +196,15 @@ cwd + first_user_message_hash + 10 秒时间窗口 + 唯一候选
 - `hook_proxy`：现有 hook approval proxy。
 - `niuma_codex_relay`：`niuma-codex` relay 捕获并回包。
 
-普通 Codex 会话继续走现有 hook approval proxy。受管会话由 hook 跳过，relay 上报 approval。
-
-### Hook 跳过
-
-如果用户安装了 NiuMa Codex hook，Codex 仍可能调用：
+Codex hook 不对 `niuma-codex` 做特殊规避。如果用户安装了 NiuMa Codex hook，Codex 仍会按原有配置调用：
 
 ```bash
 niuma internal hook codex --source niuma-notifier
 ```
 
-hook helper 启动后先判断当前请求是否来自 `niuma-codex` 受管会话：
+hook helper 继续按现有流程调用 `/api/v1/approval-requests` 创建 `channel = hook_proxy` 的授权请求，并轮询 `/api/v1/approval-decisions`。这样用户已经安装并信任的 hook 行为保持稳定，不因为使用 `niuma-codex` 启动而改变。
 
-1. 优先看环境变量：
-   - `NIUMA_CODEX_MANAGED=1`
-   - `NIUMA_CODEX_WRAPPER_SESSION_ID=...`
-2. 再查 JSON registry，用 hook payload 的 `session_id`、`cwd` 和 managed session 状态兜底判断。
-
-确认属于受管会话时：
-
-- 不调用 `/api/v1/approval-requests`。
-- 不进入 10 分钟轮询。
-- 不创建 hook 渠道的 approval。
-- 不输出 allow/deny 决策。
-- 返回 ignored/managed_by_niuma_codex，让 Codex 原生 app-server approval 继续出现。
+对于同一个受管 session，如果 hook 已经接管了授权，用户仍通过现有 `/api/v1/approval-decisions` 决策。hook helper 轮询到允许或拒绝后向 Codex 输出 hook decision。此时 relay 不需要成为该授权的实际回包渠道。
 
 ### Relay 上报
 
@@ -251,6 +236,14 @@ POST /api/v1/approval-requests
 ```
 
 如果当时还没有绑定 `codex_session_id`，可以先为空。绑定成功后不改 `request_id`。
+
+relay 上报前后都必须接受 Local API 的授权仲裁结果：
+
+- 如果没有等价 pending approval，Local API 创建 `channel = niuma_codex_relay` 的新授权请求，后续决策通过 relay control socket 回包。
+- 如果已存在等价 `hook_proxy` pending approval，Local API 返回已有 request，并标记 relay 上报被抑制或合并；relay 不创建第二个可操作授权。
+- 如果已存在等价 `niuma_codex_relay` pending approval，Local API 返回已有 request，避免 relay 重复上报。
+
+等价判断沿用现有 approval arbitration 思路，至少使用 project path、session 归一化标识、命令或说明文本生成 fingerprint。relay 上报需要提供足够字段，让 Local API 可以和 hook approval 生成同一类 fingerprint。
 
 ### ApprovalRequest 模型
 
@@ -298,6 +291,8 @@ channel = niuma_codex_relay:
 - 不更新为 allowed/denied。
 - 返回业务失败。
 - UI 仍可显示 pending，并提示控制通道不可用。
+
+如果同一授权已经由 `hook_proxy` 接管，即使 session 是 `niuma-codex` 受管 session，也仍按 `hook_proxy` 流程处理，不强制切换到 relay channel。
 
 ## Request User Input
 
@@ -521,7 +516,7 @@ Rust 单元测试：
 
 ## 风险与验证点
 
-- 需要实测 hook 跳过且不输出 allow/deny 时，Codex 是否会继续发出 app-server approval request。
+- 需要实测 hook 已安装时，Codex app-server 是否还会向 TUI/relay 发出同一 approval request；如果会发出，Local API 必须用 fingerprint 仲裁抑制重复授权。
 - 需要实测 Rust relay 对 Codex app-server WebSocket frame 的解析和回包是否与当前 Codex 版本一致。
 - 需要确认 `codex --remote relay.sock <交互式参数>` 对常用交互参数的兼容性。
 - 绑定窗口默认 10 秒，后续可根据实际日志调整。
