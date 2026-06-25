@@ -142,6 +142,31 @@ pub(super) fn is_codex_watcher_approval(event: &NiumaEvent) -> bool {
         && event.event_type == EventType::ApprovalRequested
 }
 
+pub(super) fn cancel_codex_watcher_approval_if_resolved(
+    state: &AppState,
+    event: &NiumaEvent,
+) -> bool {
+    if event.tool != niuma_core::models::ToolKind::Codex
+        || event.source != "codex-session-file"
+        || event.event_type != EventType::SessionActivity
+    {
+        return false;
+    }
+    let Some(resolve_key) = event
+        .attention_resolve_key
+        .as_deref()
+        .filter(|value| value.starts_with("codex_permission:"))
+    else {
+        return false;
+    };
+    // function_call_output 说明同一调用已经继续执行，不能再把 watcher 候选补发成待授权。
+    state
+        .approval_arbiter
+        .lock()
+        .expect("approval arbiter mutex poisoned")
+        .cancel_pending_by_attention_resolve_key(resolve_key)
+}
+
 fn watcher_approval_fingerprint(event: &NiumaEvent) -> Option<ApprovalFingerprint> {
     let content = event.content.as_deref().unwrap_or(event.summary.as_str());
     let command = content.strip_prefix("exec_command: ").unwrap_or(content);

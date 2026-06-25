@@ -22,6 +22,7 @@ pub(crate) async fn post_event(State(state): State<AppState>, body: Bytes) -> Re
             if approval::is_codex_watcher_approval(&event) {
                 return approval::handle_watcher_approval_event(state, event).await;
             }
+            approval::cancel_codex_watcher_approval_if_resolved(&state, &event);
             append_events_response(&state, vec![event])
         }
         Err(error) => json_response(
@@ -96,6 +97,7 @@ pub(crate) async fn post_plugin_events(State(state): State<AppState>, body: Byte
                 approval::WatcherApprovalApiOutcome::Suppressed { .. } => suppressed_count += 1,
             }
         } else {
+            approval::cancel_codex_watcher_approval_if_resolved(&state, &event);
             immediate_events.push(event);
         }
     }

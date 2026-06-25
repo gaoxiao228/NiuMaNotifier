@@ -229,6 +229,16 @@ impl ApprovalArbiter {
         Some(ExpiredWatcherApproval::Emit(pending.event))
     }
 
+    pub fn cancel_pending_by_attention_resolve_key(&mut self, resolve_key: &str) -> bool {
+        let Some((key, _)) = self.pending_candidates.iter().find(|(_, pending)| {
+            pending.event.attention_resolve_key.as_deref() == Some(resolve_key)
+        }) else {
+            return false;
+        };
+        let key = key.clone();
+        self.pending_candidates.remove(&key).is_some()
+    }
+
     fn capability_for_scope(
         &mut self,
         scope: &ApprovalScope,

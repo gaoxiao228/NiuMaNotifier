@@ -156,6 +156,82 @@ async fn post_plugin_events_delays_codex_watcher_approval() {
 }
 
 #[tokio::test]
+async fn post_plugin_events_cancels_codex_watcher_approval_when_output_arrives() {
+    let store = NiumaStore::new(test_path("post_plugin_events_watcher_output_cancels"));
+    enable_codex_listener(&store);
+    let router = app(store);
+    let resolve_key = "codex_permission:s1:call-output-1";
+    let mut approval = sample_event_with_type(
+        "watcher-approval-output",
+        "watcher-dedupe-output",
+        EventType::ApprovalRequested,
+        1_000,
+    );
+    approval.source = "codex-session-file".to_string();
+    approval.summary = "exec_command: npm test".to_string();
+    approval.content = Some("exec_command: npm test".to_string());
+    approval.attention_resolve_key = Some(resolve_key.to_string());
+    approval.payload_ref = Some("codex_watcher_approval:output".to_string());
+    let approval_body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "events": [approval]
+    });
+
+    let approval_post = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugin-events")
+                .header("content-type", "application/json")
+                .body(Body::from(approval_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let approval_value = response_json(approval_post).await;
+    assert_eq!(approval_value["code"], 0);
+    assert_eq!(approval_value["data"]["applied_count"], 0);
+    assert_eq!(approval_value["data"]["delayed_count"], 1);
+
+    let mut output = sample_event_with_type(
+        "watcher-output",
+        "watcher-output-dedupe",
+        EventType::SessionActivity,
+        1_001,
+    );
+    output.source = "codex-session-file".to_string();
+    output.summary = "Codex session activity".to_string();
+    output.attention_resolve_key = Some(resolve_key.to_string());
+    output.payload_ref = Some("/tmp/rollout.jsonl".to_string());
+    let output_body = serde_json::json!({
+        "plugin_id": "builtin-codex",
+        "events": [output]
+    });
+
+    let output_post = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugin-events")
+                .header("content-type", "application/json")
+                .body(Body::from(output_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let output_value = response_json(output_post).await;
+    assert_eq!(output_value["code"], 0);
+    assert_eq!(output_value["data"]["applied_count"], 1);
+
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+
+    let state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(state["data"]["state"]["status"], "running");
+}
+
+#[tokio::test]
 async fn post_plugin_events_dedupes_repeated_events() {
     let router = app(NiumaStore::new(test_path("post_plugin_events_dedupe")));
     let event = sample_event();
