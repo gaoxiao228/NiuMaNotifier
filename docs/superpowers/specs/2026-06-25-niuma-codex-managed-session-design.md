@@ -26,7 +26,7 @@ NiuMaNotifier 现有 Codex 内置插件负责两类能力：
 - 授权复用现有 `/api/v1/approval-decisions`，通过 `channel` 区分 hook 和 relay。
 - Codex hook 不因 `niuma-codex` 受管会话做规避，仍按现有机制创建 `hook_proxy` approval。
 - `niuma-codex` relay 捕获到 app-server approval request 时主动上报，`channel = niuma_codex_relay`；Local API 负责用仲裁规则避免 hook 与 relay 产生重复可操作授权。
-- `request_user_input` 第一版不建 input store，走 relay pending request 和 control API。
+- `request_user_input` 第一版不建 input store，也不由 relay 追加第二条 `InputRequested` 事件；watcher 负责产生等待输入事件，relay 只提供 pending request 和 control overlay。
 
 ## 非目标
 
@@ -296,7 +296,7 @@ channel = niuma_codex_relay:
 
 ## Request User Input
 
-`request_user_input` 第一版不新增 input store。pending input request 保存在 relay 运行时内存里。
+`request_user_input` 第一版不新增 input store，并且不让 relay 单独追加 `InputRequested` 事件。避免出现 app-server relay 和 session watcher 对同一次等待输入各写一条事件。
 
 relay 捕获：
 
@@ -304,7 +304,9 @@ relay 捕获：
 item/tool/requestUserInput
 ```
 
-然后上报 `InputRequested` 事件，事件交互信息示例：
+relay 捕获后只记录 pending input request，并通过 control socket 暴露 request id、questions、options 等可回答信息。session watcher 继续从 Codex session JSONL 生成唯一的 `InputRequested` 事件。
+
+UI 或 API 展示 watcher 生成的 `InputRequested` 事件时，根据 managed registry 和 relay pending request 动态叠加可操作交互信息。叠加后的展示形态示例：
 
 ```json
 {
@@ -316,6 +318,8 @@ item/tool/requestUserInput
   "endpoint": "/api/v1/tool-session-control/answer-input"
 }
 ```
+
+如果 watcher 还没扫描到对应 session 文件事件，但 relay 已经捕获到 pending input，第一版可以只在 session 详情的“当前 pending request”区域展示，不追加事件流事件。这样保持事件事实来源单一。
 
 提交答案接口：
 
@@ -494,14 +498,14 @@ Rust 单元测试：
 - `cwd + hash + 10s + unique` 绑定规则。
 - ambiguous 不绑定。
 - approval channel 分发。
-- hook 检测 managed session 后跳过。
+- hook 与 relay 上报等价 approval 时通过 fingerprint 仲裁，避免重复可操作授权。
 - control socket 协议解析。
 
 集成或模拟测试：
 
 - relay 捕获 approval request 后创建 `channel = niuma_codex_relay` 的 approval request。
 - `/api/v1/approval-decisions` 对 relay channel 先调用 control socket，成功后更新 store。
-- relay input request 生成 `InputRequested` 可操作事件。
+- watcher 生成 `InputRequested` 事件，relay pending input 只叠加可操作信息，不生成第二条事件。
 - `answer-input` 通过 control socket 成功回包。
 - session list/detail 带 control 信息。
 - 未绑定 session 不显示可交互能力。
