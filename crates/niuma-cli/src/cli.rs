@@ -11,12 +11,19 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     Doctor,
     Status { tool: Option<ToolArg> },
+    Codex(CodexCommand),
     Hook(HookCommand),
     Internal(InternalRootCommand),
     SampleEvent,
     Reset,
     DismissBlocker,
     Serve,
+}
+
+#[derive(Args)]
+pub(crate) struct CodexCommand {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub(crate) args: Vec<String>,
 }
 
 #[derive(Args)]
