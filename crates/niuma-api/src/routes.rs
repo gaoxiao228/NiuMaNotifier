@@ -19,7 +19,10 @@ use crate::handlers::{
 };
 use crate::manual_test::manual_test_scenario;
 use crate::response::{preflight, route_not_found};
-use crate::sse::{events_stream, session_project_groups_stream, sse_stream, MainStateBroadcaster};
+use crate::sse::{
+    events_stream, session_detail_stream, session_project_groups_stream, sse_stream,
+    MainStateBroadcaster,
+};
 use crate::state::AppState;
 use crate::tool_sessions::ToolSessionRegistry;
 
@@ -155,6 +158,10 @@ fn app_with_bus_and_plugin_dir_and_tool_sessions(
         .route(
             "/api/v1/session_detail",
             get(get_session_detail).options(preflight),
+        )
+        .route(
+            "/api/v1/session_detail/stream",
+            get(session_detail_stream).options(preflight),
         )
         .route(
             "/api/v1/session_project_groups",

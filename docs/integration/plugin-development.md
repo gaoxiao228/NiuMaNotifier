@@ -471,6 +471,20 @@ If query parameters have invalid types, the stream endpoint returns the standard
 
 `session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`.
 
+`session_detail/stream` provides an SSE snapshot stream for one exact session:
+
+```http
+GET /api/v1/session_detail/stream?tool=codex&session_id=session-1&limit=100
+```
+
+This stream must always specify both `tool` and `session_id`. It does not support global subscription. Use `/api/v1/events/stream` for global or filtered event subscriptions, and use `session_detail/stream` only when a UI is displaying one session detail panel.
+
+The stream sends `event: session_detail` frames. The `data` payload uses the same shape as the `data` object returned by `/api/v1/session_detail`. The first frame is sent immediately after the connection is opened. Later frames are sent when matching runtime events indicate that the requested raw session or normalized session may have changed, and only when the serialized detail snapshot changed.
+
+`cursor` is intentionally not supported on the stream endpoint. The stream watches the latest page only; use `/api/v1/session_detail?cursor=...` for historical paging.
+
+If `tool` or `session_id` is missing or empty, the stream endpoint returns the standard business failure envelope before establishing SSE. Invalid `limit` types return the standard `HTTP 400` parameter-type envelope before SSE is established.
+
 Successful responses still use the standard envelope:
 
 ```json

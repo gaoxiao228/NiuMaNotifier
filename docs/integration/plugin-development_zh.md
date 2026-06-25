@@ -471,6 +471,20 @@ data: {"list":[{"tool":"codex","project_path":"/repo","project_name":"repo","nor
 
 `session_detail` 按 `tool + session_id` 读取归一化消息详情。`messages` 倒序返回，`messages[0]` 是本页最新消息；`next_cursor` 用于继续读取更旧消息。第一版支持的消息角色包括 `user`、`assistant`、`system`、`tool_call`、`tool_result`、`event` 和 `unknown`。
 
+`session_detail/stream` 为单个明确 session 提供 SSE 快照流：
+
+```http
+GET /api/v1/session_detail/stream?tool=codex&session_id=session-1&limit=100
+```
+
+该流必须同时指定 `tool` 和 `session_id`，不支持全局订阅。全局事件或过滤事件订阅应使用 `/api/v1/events/stream`；只有当 UI 正在展示某一个 session 详情面板时，才使用 `session_detail/stream`。
+
+该流发送 `event: session_detail` 帧。`data` payload 使用与 `/api/v1/session_detail` 返回的 `data` 对象相同的结构。连接建立后会立即发送首帧。后续当匹配的运行时事件表明该 raw session 或 normalized session 可能变化时，服务端会重新计算详情，并且只在序列化后的详情快照发生变化时推送。
+
+stream 接口有意不支持 `cursor`。它只监听最新页；历史分页继续使用 `/api/v1/session_detail?cursor=...`。
+
+如果 `tool` 或 `session_id` 缺失或为空，stream 接口会在建立 SSE 前返回标准业务失败 envelope。如果 `limit` 类型不合法，则在建立 SSE 前返回标准 `HTTP 400` 参数类型错误 envelope。
+
 成功响应仍使用统一 envelope：
 
 ```json

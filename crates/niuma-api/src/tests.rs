@@ -1970,6 +1970,100 @@ async fn session_project_groups_stream_overlays_runtime_status() {
 }
 
 #[tokio::test]
+async fn session_detail_stream_emits_initial_and_updated_snapshot() {
+    let store = NiumaStore::new(test_path("session_detail_stream"));
+    enable_codex_listener(&store);
+    let bus = RuntimeEventBus::new();
+    let detail_provider = Arc::new(MutableDetailProvider::new(sample_tool_session_detail(
+        "existing-session",
+    )));
+    let registry = session_detail_registry_with_provider(detail_provider.clone());
+    let router = app_with_bus_and_tool_sessions(store, bus, registry);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail/stream?tool=codex&session_id=existing-session&limit=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let initial = next_sse_chunk(&mut body).await;
+    assert!(initial.contains("event: session_detail"));
+    assert!(initial.contains("\"session_id\":\"existing-session\""));
+    assert!(initial.contains("\"id\":\"m2\""));
+    assert!(initial.contains("\"next_cursor\":\"next-1\""));
+
+    let mut changed_detail = sample_tool_session_detail("existing-session");
+    changed_detail.messages.insert(
+        0,
+        ToolSessionMessage {
+            id: "m3".to_string(),
+            role: ToolSessionMessageRole::Assistant,
+            content: "updated".to_string(),
+            created_at: Utc.timestamp_opt(30, 0).single().unwrap(),
+            metadata: Value::Null,
+        },
+    );
+    detail_provider.replace(changed_detail);
+
+    let mut event = sample_event();
+    event.session_id = "existing-session".to_string();
+    event.normalized_session_id = Some("existing-session".to_string());
+    let posted = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/events")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
+
+    let updated = next_sse_chunk(&mut body).await;
+    assert!(updated.contains("event: session_detail"));
+    assert!(updated.contains("\"id\":\"m3\""));
+    assert!(updated.contains("\"content\":\"updated\""));
+}
+
+#[tokio::test]
+async fn session_detail_stream_requires_tool_and_session_id() {
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail: sample_tool_session_detail("existing-session"),
+        calls: Arc::new(StdMutex::new(Vec::new())),
+    }));
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_stream_missing")),
+        registry,
+    );
+
+    for uri in [
+        "/api/v1/session_detail/stream",
+        "/api/v1/session_detail/stream?tool=codex",
+        "/api/v1/session_detail/stream?session_id=existing-session",
+        "/api/v1/session_detail/stream?tool=&session_id=existing-session",
+        "/api/v1/session_detail/stream?tool=codex&session_id=",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let value = response_json(response).await;
+        assert_ne!(value["code"], 0, "{uri} 应返回业务失败");
+    }
+}
+
+#[tokio::test]
 async fn events_stream_allows_cross_origin_event_source() {
     let router = app(NiumaStore::new(test_path("events_sse_cors")));
     let response = router
@@ -3273,6 +3367,34 @@ impl ToolSessionDetailProvider for FakeDetailProvider {
     ) -> Result<ToolSessionDetail, String> {
         self.calls.lock().unwrap().push(limit);
         Ok(self.detail.clone())
+    }
+}
+
+struct MutableDetailProvider {
+    detail: StdMutex<ToolSessionDetail>,
+}
+
+impl MutableDetailProvider {
+    fn new(detail: ToolSessionDetail) -> Self {
+        Self {
+            detail: StdMutex::new(detail),
+        }
+    }
+
+    fn replace(&self, detail: ToolSessionDetail) {
+        *self.detail.lock().unwrap() = detail;
+    }
+}
+
+impl ToolSessionDetailProvider for MutableDetailProvider {
+    fn detail(
+        &self,
+        _tool: &ToolKind,
+        _session_id: &str,
+        _limit: usize,
+        _cursor: Option<String>,
+    ) -> Result<ToolSessionDetail, String> {
+        Ok(self.detail.lock().unwrap().clone())
     }
 }
 
