@@ -58,3 +58,37 @@ pub(crate) enum InternalCommand {
 pub(crate) enum ToolArg {
     Codex,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_codex_args(argv: &[&str]) -> Vec<String> {
+        let cli = Cli::try_parse_from(argv).unwrap();
+        match cli.command.unwrap() {
+            Command::Codex(command) => command.args,
+            _ => panic!("expected codex command"),
+        }
+    }
+
+    #[test]
+    fn parses_codex_flags_as_trailing_args() {
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "--model", "gpt-5"]),
+            vec!["--model".to_string(), "gpt-5".to_string()]
+        );
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "-c", "model=gpt-5"]),
+            vec!["-c".to_string(), "model=gpt-5".to_string()]
+        );
+    }
+
+    #[test]
+    fn preserves_hyphen_values_after_codex_subcommand() {
+        assert_eq!(
+            parse_codex_args(&["niuma", "codex", "exec", "--help"]),
+            vec!["exec".to_string(), "--help".to_string()]
+        );
+    }
+}

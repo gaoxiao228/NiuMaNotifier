@@ -17,7 +17,7 @@ fn main() {
         Command::Status {
             tool: Some(ToolArg::Codex),
         } => tools::codex::hook_commands::codex_hook_status(),
-        Command::Codex(command) => tools::codex::managed::run_codex_command(command.args),
+        Command::Codex(command) => return tools::codex::managed::run_codex_command(command.args),
         Command::Hook(command) => tools::codex::hook_commands::run_hook_command(command),
         Command::Internal(command) => return internal::run_internal_command(command),
         Command::SampleEvent => system_commands::sample_event(),
