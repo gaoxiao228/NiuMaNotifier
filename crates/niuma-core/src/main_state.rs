@@ -10,8 +10,8 @@ use crate::event_display::{
     fallback_content_for_status, fallback_error_for_status, status_summary, EventDisplayDetail,
 };
 use crate::models::{
-    ApprovalRequest, ApprovalStatus, AttentionItem, LatestActivity, NiumaEvent, RuntimeStateItem,
-    RuntimeStateStatus, ToolKind,
+    ApprovalRequest, AttentionItem, EventInteractionDetail, LatestActivity, NiumaEvent,
+    RuntimeStateItem, RuntimeStateStatus, ToolKind,
 };
 use crate::runtime_event::RuntimeEventBus;
 use crate::store::NiumaStore;
@@ -59,17 +59,7 @@ pub struct StateDetail {
     pub completion_reason: Option<String>,
     pub failure_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval: Option<StateApprovalDetail>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StateApprovalDetail {
-    pub request_id: String,
-    pub status: ApprovalStatus,
-    pub can_decide: bool,
-    pub message: Option<String>,
-    pub decided_by: Option<String>,
-    pub decided_source: Option<String>,
+    pub interaction: Option<EventInteractionDetail>,
 }
 
 #[derive(Clone)]
@@ -259,34 +249,39 @@ fn detail_from_attention_item(
     match event {
         Some(event) => {
             let mut detail = detail_from_event(event);
-            detail.approval = approval_detail_for_refs(
+            if let Some(interaction) = interaction_from_approval_refs(
                 event.payload_ref.as_deref(),
                 item.attention_resolve_key.as_deref(),
                 approval_requests,
-            );
+            ) {
+                detail.interaction = Some(interaction);
+            }
             detail
         }
-        None => StateDetail {
-            event_id: item.event_id.clone(),
-            event_type: event_type_name_for_status(&item.status).to_string(),
-            severity: if item.status == RuntimeStateStatus::Error {
-                "error"
-            } else {
-                "urgent"
-            }
-            .to_string(),
-            summary: truncate(&item.summary, 200),
-            content: fallback_content_for_status(&item.status, None, &item.summary),
-            error_message: fallback_error_for_status(&item.status, None, &item.summary),
-            payload_ref: None,
-            completion_reason: None,
-            failure_reason: None,
-            approval: approval_detail_for_refs(
+        None => {
+            let interaction = interaction_from_approval_refs(
                 None,
                 item.attention_resolve_key.as_deref(),
                 approval_requests,
-            ),
-        },
+            );
+            StateDetail {
+                event_id: item.event_id.clone(),
+                event_type: event_type_name_for_status(&item.status).to_string(),
+                severity: if item.status == RuntimeStateStatus::Error {
+                    "error"
+                } else {
+                    "urgent"
+                }
+                .to_string(),
+                summary: truncate(&item.summary, 200),
+                content: fallback_content_for_status(&item.status, None, &item.summary),
+                error_message: fallback_error_for_status(&item.status, None, &item.summary),
+                payload_ref: None,
+                completion_reason: None,
+                failure_reason: None,
+                interaction,
+            }
+        }
     }
 }
 
@@ -313,7 +308,7 @@ fn activity_detail(activity: &LatestActivity, event: Option<&NiumaEvent>) -> Opt
                 payload_ref: None,
                 completion_reason: None,
                 failure_reason: None,
-                approval: None,
+                interaction: None,
             }),
         })
 }
@@ -322,21 +317,42 @@ fn detail_from_event(event: &NiumaEvent) -> StateDetail {
     display_detail_from_event(event).into()
 }
 
-fn approval_detail_for_refs(
+fn interaction_from_approval_refs(
     payload_ref: Option<&str>,
     attention_resolve_key: Option<&str>,
     requests: &[ApprovalRequest],
-) -> Option<StateApprovalDetail> {
+) -> Option<EventInteractionDetail> {
     let request_id = approval_request_id_from_ref(payload_ref)
         .or_else(|| approval_request_id_from_ref(attention_resolve_key))?;
     requests
         .iter()
         .find(|request| request.id == request_id)
-        .map(StateApprovalDetail::from)
+        .map(interaction_from_approval_request)
 }
 
 fn approval_request_id_from_ref(value: Option<&str>) -> Option<&str> {
     value?.strip_prefix("approval:")
+}
+
+fn interaction_from_approval_request(request: &ApprovalRequest) -> EventInteractionDetail {
+    // 主状态展示的是当前阻塞项快照；授权已返回 Codex 时必须覆盖原始事件的可操作性。
+    match request.status {
+        crate::models::ApprovalStatus::Pending => {
+            EventInteractionDetail::niuma_approval(request.id.clone())
+        }
+        crate::models::ApprovalStatus::Allowed => {
+            EventInteractionDetail::tool_approval("已同意，等待 Codex 继续")
+        }
+        crate::models::ApprovalStatus::Denied => {
+            EventInteractionDetail::tool_approval("已拒绝，等待 Codex 继续")
+        }
+        crate::models::ApprovalStatus::ReturnedToCodex => {
+            EventInteractionDetail::tool_approval("Niuma 已停止代处理，请回到 Codex 中同意或拒绝")
+        }
+        crate::models::ApprovalStatus::ResolvedInTool => {
+            EventInteractionDetail::tool_approval("已在 Codex 中处理")
+        }
+    }
 }
 
 fn idle_payload() -> MainStatePayload {
@@ -365,30 +381,7 @@ impl From<EventDisplayDetail> for StateDetail {
             payload_ref: detail.payload_ref,
             completion_reason: detail.completion_reason,
             failure_reason: detail.failure_reason,
-            approval: None,
-        }
-    }
-}
-
-impl From<&ApprovalRequest> for StateApprovalDetail {
-    fn from(request: &ApprovalRequest) -> Self {
-        let (can_decide, message) = match request.status {
-            ApprovalStatus::Pending => (true, None),
-            ApprovalStatus::Allowed => (false, Some("已同意，等待 Codex 继续".to_string())),
-            ApprovalStatus::Denied => (false, Some("已拒绝，等待 Codex 继续".to_string())),
-            ApprovalStatus::ReturnedToCodex => (
-                false,
-                Some("Niuma 已停止代处理，请回到 Codex 中同意或拒绝".to_string()),
-            ),
-        };
-
-        Self {
-            request_id: request.id.clone(),
-            status: request.status.clone(),
-            can_decide,
-            message,
-            decided_by: request.decided_by.clone(),
-            decided_source: request.decided_source.clone(),
+            interaction: detail.interaction,
         }
     }
 }
@@ -400,8 +393,9 @@ mod tests {
     use crate::listener_config::ListenerConfig;
     use crate::main_state::{MainStateService, MainStateStatus};
     use crate::models::{
-        ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason, EventType,
-        FailureReason, NiumaEvent, ToolKind,
+        ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason,
+        EventInteractionHandling, EventInteractionKind, EventType, FailureReason, NiumaEvent,
+        ToolKind,
     };
     use crate::store::NiumaStore;
 
@@ -431,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn waiting_approval_exposes_pending_approval_actions() {
+    fn waiting_approval_exposes_pending_interaction_actions() {
         let store = NiumaStore::new(test_sqlite_path("pending_approval_actions"));
         enable_codex_listener(&store);
         store
@@ -455,11 +449,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.status, MainStateStatus::WaitingApproval);
-        let approval = state.detail.unwrap().approval.unwrap();
-        assert_eq!(approval.request_id, "approval-1");
-        assert_eq!(approval.status, ApprovalStatus::Pending);
-        assert!(approval.can_decide);
-        assert!(approval.message.is_none());
+        let detail = state.detail.unwrap();
+        let interaction = detail.interaction.unwrap();
+        assert_eq!(interaction.kind, EventInteractionKind::Approval);
+        assert_eq!(interaction.handling, EventInteractionHandling::Niuma);
+        assert!(interaction.actionable);
+        assert_eq!(interaction.request_id.as_deref(), Some("approval-1"));
+        assert_eq!(interaction.actions, vec!["allow", "deny"]);
+        assert_eq!(
+            interaction.endpoint.as_deref(),
+            Some("/api/v1/approval-decisions")
+        );
     }
 
     #[test]
@@ -496,11 +496,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.status, MainStateStatus::WaitingApproval);
-        let approval = state.detail.unwrap().approval.unwrap();
-        assert_eq!(approval.status, ApprovalStatus::ReturnedToCodex);
-        assert!(!approval.can_decide);
+        let detail = state.detail.unwrap();
+        let interaction = detail.interaction.unwrap();
+        assert_eq!(interaction.kind, EventInteractionKind::Approval);
+        assert_eq!(interaction.handling, EventInteractionHandling::Tool);
+        assert!(!interaction.actionable);
         assert_eq!(
-            approval.message.as_deref(),
+            interaction.message.as_deref(),
             Some("Niuma 已停止代处理，请回到 Codex 中同意或拒绝")
         );
     }
@@ -717,6 +719,7 @@ mod tests {
             completion_reason: None,
             failure_reason: None,
             payload_ref: None,
+            interaction: None,
             created_at: at(timestamp),
         }
     }

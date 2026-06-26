@@ -206,6 +206,17 @@ if (
 }
 
 if (
+  !ruleIncludes('.input-response-form', 'display: grid;') ||
+  !ruleIncludes('.input-question', 'display: grid;') ||
+  !ruleIncludes('.input-option', 'grid-template-columns: auto minmax(0, 1fr);') ||
+  !ruleIncludes('.input-option span', 'grid-column: 2;') ||
+  !ruleIncludes('.input-option small', 'grid-column: 2;') ||
+  !ruleIncludes('.input-option textarea', 'grid-column: 2;')
+) {
+  throw new Error('等待输入表单应使用纵向网格布局，避免长选项和自定义输入挤在同一行')
+}
+
+if (
   !css.includes('.settings-notification-history') ||
   !css.includes('grid-template-rows: auto minmax(0, 1fr);') ||
   !css.includes('height: 100%;')

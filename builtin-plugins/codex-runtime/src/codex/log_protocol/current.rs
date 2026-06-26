@@ -60,6 +60,7 @@ pub fn parse_codex_log_row(row: &CodexLogRow, source_path: &str) -> Option<Niuma
         completion_reason: None,
         failure_reason: Some(failure.reason),
         payload_ref: Some(source_path.to_string()),
+        interaction: None,
         created_at,
     })
 }

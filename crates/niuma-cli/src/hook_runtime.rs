@@ -233,7 +233,9 @@ fn approval_decision(
     match status {
         ApprovalStatus::Allowed => Ok(Some(ApprovalDecisionKind::Allow)),
         ApprovalStatus::Denied => Ok(Some(ApprovalDecisionKind::Deny)),
-        ApprovalStatus::Pending | ApprovalStatus::ReturnedToCodex => Ok(None),
+        ApprovalStatus::Pending
+        | ApprovalStatus::ReturnedToCodex
+        | ApprovalStatus::ResolvedInTool => Ok(None),
     }
 }
 
@@ -302,6 +304,7 @@ fn approval_status_from_value(value: &serde_json::Value) -> Result<ApprovalStatu
         "allowed" => Ok(ApprovalStatus::Allowed),
         "denied" => Ok(ApprovalStatus::Denied),
         "returned_to_codex" => Ok(ApprovalStatus::ReturnedToCodex),
+        "resolved_in_tool" => Ok(ApprovalStatus::ResolvedInTool),
         other => Err(format!("未知授权状态：{other}")),
     }
 }
@@ -456,6 +459,7 @@ mod tests {
             completion_reason: None,
             failure_reason: None,
             payload_ref: None,
+            interaction: None,
             created_at: Utc.timestamp_opt(1_000, 0).single().unwrap(),
         }
     }

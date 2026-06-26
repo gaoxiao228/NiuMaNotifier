@@ -45,16 +45,45 @@ export type MainStateDetail = {
   payload_ref: string | null
   completion_reason: string | null
   failure_reason: string | null
-  approval?: StateApprovalDetail | null
+  interaction?: EventInteractionDetail | null
+  approval?: LegacyApprovalDetail | null
 }
 
-export type StateApprovalDetail = {
+export type LegacyApprovalDetail = {
   request_id: string
   status: string
   can_decide: boolean
   message: string | null
   decided_by: string | null
   decided_source: string | null
+}
+
+export type EventInteractionDetail = {
+  kind: 'approval' | 'input'
+  handling: 'niuma' | 'tool' | 'none'
+  actionable: boolean
+  request_id?: string | null
+  actions?: string[]
+  endpoint?: string | null
+  message?: string | null
+  schema?: EventInteractionSchema | null
+}
+
+export type EventInteractionSchema = {
+  questions: EventInteractionQuestion[]
+}
+
+export type EventInteractionQuestion = {
+  id: string
+  header?: string | null
+  question: string
+  description?: string | null
+  options?: EventInteractionOption[]
+}
+
+export type EventInteractionOption = {
+  label: string
+  description?: string | null
 }
 
 export type ApprovalDecisionResult = {
@@ -65,6 +94,14 @@ export type ApprovalDecisionResult = {
   decided_by: string | null
   decided_source: string | null
   reason: string | null
+}
+
+export type AnswerInputResult = {
+  answered: boolean
+  wrapper_session_id: string
+  request_id: string
+  state_cleared: boolean
+  result: unknown
 }
 
 export type RuntimeStateItem = {
@@ -298,6 +335,25 @@ export async function submitApprovalDecision(
       decided_by: 'desktop',
       decided_source: 'ui',
       reason
+    })
+  })
+}
+
+export async function submitInputAnswer(
+  sessionId: string,
+  wrapperSessionId: string,
+  requestId: string,
+  answers: Record<string, string[]>
+) {
+  return await requestLocalApi<AnswerInputResult>('/api/v1/session-control/answer-input', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tool: 'codex',
+      session_id: sessionId,
+      wrapper_session_id: wrapperSessionId,
+      request_id: requestId,
+      answers
     })
   })
 }

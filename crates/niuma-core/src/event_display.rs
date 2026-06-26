@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::models::{EventType, NiumaEvent, RuntimeStateStatus};
+use crate::models::{EventInteractionDetail, EventType, NiumaEvent, RuntimeStateStatus};
 
 // 主状态 detail 和通知正文共用这里的展示字段规则，避免 content/summary fallback 分叉。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -14,6 +14,7 @@ pub(crate) struct EventDisplayDetail {
     pub payload_ref: Option<String>,
     pub completion_reason: Option<String>,
     pub failure_reason: Option<String>,
+    pub interaction: Option<EventInteractionDetail>,
 }
 
 pub(crate) fn detail_from_event(event: &NiumaEvent) -> EventDisplayDetail {
@@ -27,6 +28,7 @@ pub(crate) fn detail_from_event(event: &NiumaEvent) -> EventDisplayDetail {
         payload_ref: event.payload_ref.clone(),
         completion_reason: event.completion_reason.as_ref().map(enum_to_snake_string),
         failure_reason: event.failure_reason.as_ref().map(enum_to_snake_string),
+        interaction: event.interaction.clone(),
     }
 }
 

@@ -64,7 +64,10 @@ pub fn parse_codex_messages_newest_first(
 ) -> Vec<ToolSessionMessage> {
     let mut messages = indexed_lines
         .iter()
-        .map(|(line_index, line)| parse_codex_message_line(session_id, *line_index, line))
+        .filter_map(|(line_index, line)| {
+            (!is_injected_context_message_line(line))
+                .then(|| parse_codex_message_line(session_id, *line_index, line))
+        })
         .collect::<Vec<_>>();
     // API 约定详情消息倒序返回，最新一行排在最前。
     messages.reverse();
@@ -88,7 +91,7 @@ pub fn detail_message_signature(line: &str) -> Option<DetailMessageSignature> {
     let item_type = row.payload.get("type").and_then(Value::as_str);
     let role = role_for_row(&row.row_type, item_type, &row.payload);
     let content = content_for_row(&row.row_type, item_type, &row.payload);
-    if content.is_empty() {
+    if content.is_empty() || is_injected_context_content(&content) {
         return None;
     }
     Some(DetailMessageSignature {
@@ -206,6 +209,31 @@ fn trimmed_text(value: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_string())
 }
 
+fn is_injected_context_message_line(line: &str) -> bool {
+    let Ok(row) = serde_json::from_str::<CodexRow>(line) else {
+        return false;
+    };
+    if !matches!(row.row_type.as_str(), "event_msg" | "response_item") {
+        return false;
+    }
+    let item_type = row.payload.get("type").and_then(Value::as_str);
+    let content = content_for_row(&row.row_type, item_type, &row.payload);
+    is_injected_context_content(&content)
+}
+
+fn is_injected_context_content(content: &str) -> bool {
+    let content = content.trim_start();
+    // Codex 会把注入上下文和中断标记作为 role=user 写入 JSONL；这些不是用户真实提问。
+    (content.starts_with("# AGENTS.md instructions")
+        && content.contains("<INSTRUCTIONS>")
+        && content.contains("</INSTRUCTIONS>"))
+        || (content.starts_with("<environment_context>")
+            && content.contains("</environment_context>"))
+        || (content.starts_with("<turn_aborted>") && content.contains("</turn_aborted>"))
+        || (content.starts_with("<subagent_notification>")
+            && content.contains("</subagent_notification>"))
+}
+
 fn parse_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
@@ -287,5 +315,71 @@ mod tests {
         assert!(!encoded.contains("不能泄露"));
         assert!(encoded.contains("codex_row_type"));
         assert!(encoded.contains("codex_item_type"));
+    }
+
+    #[test]
+    fn codex_messages_skip_injected_agents_context() {
+        let lines = vec![
+            (
+                0,
+                r##"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Global Rules\n\n- 始终使用简体中文与我交流\n</INSTRUCTIONS>\n<environment_context>\n  <cwd>/tmp/demo</cwd>\n</environment_context>"}]}}"##
+                    .to_string(),
+            ),
+            (
+                1,
+                r#"{"timestamp":"2026-06-22T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"真实用户问题"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ToolSessionMessageRole::User);
+        assert_eq!(messages[0].content, "真实用户问题");
+    }
+
+    #[test]
+    fn codex_messages_skip_turn_aborted_context() {
+        let lines = vec![
+            (
+                0,
+                r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background.\n</turn_aborted>"}]}}"#
+                    .to_string(),
+            ),
+            (
+                1,
+                r#"{"timestamp":"2026-06-22T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"真实用户问题"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ToolSessionMessageRole::User);
+        assert_eq!(messages[0].content, "真实用户问题");
+    }
+
+    #[test]
+    fn codex_messages_skip_subagent_notification_context() {
+        let lines = vec![
+            (
+                0,
+                r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<subagent_notification>\n{\"agent_path\":\"agent-1\",\"status\":{\"completed\":\"审查完成\"}}\n</subagent_notification>"}]}}"#
+                    .to_string(),
+            ),
+            (
+                1,
+                r#"{"timestamp":"2026-06-22T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"真实用户问题"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ToolSessionMessageRole::User);
+        assert_eq!(messages[0].content, "真实用户问题");
     }
 }

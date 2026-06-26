@@ -9,7 +9,9 @@ use crate::codex::session_identity::{
 use crate::codex::session_protocol::{
     detect_session_protocol_family, CodexProtocolFamily, CodexSessionProtocolParser,
 };
-use niuma_core::models::{CompletionReason, EventType, FailureReason, NiumaEvent, ToolKind};
+use niuma_core::models::{
+    CompletionReason, EventInteractionDetail, EventType, FailureReason, NiumaEvent, ToolKind,
+};
 
 // 只负责把单行 Codex JSONL 转换为核心事件，文件扫描和运行时监听由后续任务处理。
 #[derive(Clone, Default)]
@@ -237,6 +239,15 @@ impl CodexJsonlParser {
             _ => None,
         };
         let error_message = (event_type == EventType::TaskFailed).then(|| summary_text.clone());
+        let interaction = match event_type {
+            EventType::ApprovalRequested => Some(EventInteractionDetail::tool_approval(
+                "请回到 Codex 中同意或拒绝",
+            )),
+            EventType::InputRequested => Some(EventInteractionDetail::tool_input(
+                "请回到 Codex 中继续输入",
+            )),
+            _ => None,
+        };
 
         Ok(Some(NiumaEvent {
             id: event_id,
@@ -267,6 +278,7 @@ impl CodexJsonlParser {
             } else {
                 Some(fallback_path.to_string())
             },
+            interaction,
             created_at: timestamp,
         }))
     }

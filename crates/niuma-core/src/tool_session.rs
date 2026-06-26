@@ -40,6 +40,19 @@ pub struct ToolSessionControl {
     pub wrapper_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ToolSessionControlAction>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ToolSessionControlAction {
+    #[serde(rename = "type")]
+    pub action_type: String,
+    pub transport: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_command: Option<String>,
 }
 
 // 列表项是宿主保存的轻量会话索引，供后续 session_list API 直接返回。

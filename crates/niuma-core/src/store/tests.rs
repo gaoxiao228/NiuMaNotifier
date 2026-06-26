@@ -5,7 +5,9 @@ use std::time::Duration;
 use crate::listener_config::ListenerConfig;
 use crate::models::{
     ApprovalChannel, ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus,
-    CompletionReason, EventSessionScope, EventType, NiumaEvent, RuntimeStateStatus, ToolKind,
+    AttentionItem, CompletionReason, EventInteractionDetail, EventInteractionOption,
+    EventInteractionQuestion, EventInteractionSchema, EventSessionScope, EventType, NiumaEvent,
+    RuntimeStateStatus, ToolKind,
 };
 use crate::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
@@ -32,6 +34,76 @@ fn approval_decision_kind_serializes_as_allow_or_deny() {
         serde_json::to_value(ApprovalDecisionKind::Deny).unwrap(),
         serde_json::json!("deny")
     );
+}
+
+#[test]
+fn niuma_input_interaction_serializes_schema() {
+    let interaction = EventInteractionDetail::niuma_input(
+        "codex-input:niuma_codex_1:9",
+        EventInteractionSchema {
+            questions: vec![EventInteractionQuestion {
+                id: "app_form".to_string(),
+                header: Some("形态".to_string()),
+                question: "这个程序你更希望主要以什么形态运行？".to_string(),
+                options: vec![EventInteractionOption {
+                    label: "托盘常驻 (Recommended)".to_string(),
+                    description: Some("跨平台常驻后台，适合长期监控。".to_string()),
+                }],
+            }],
+        },
+    );
+
+    let value = serde_json::to_value(interaction).unwrap();
+
+    assert_eq!(value["kind"], "input");
+    assert_eq!(value["handling"], "niuma");
+    assert_eq!(value["actionable"], true);
+    assert_eq!(value["request_id"], "codex-input:niuma_codex_1:9");
+    assert_eq!(value["actions"], serde_json::json!(["submit"]));
+    assert_eq!(value["endpoint"], "/api/v1/session-control/answer-input");
+    assert_eq!(value["schema"]["questions"][0]["id"], "app_form");
+    assert_eq!(
+        value["schema"]["questions"][0]["options"][0]["label"],
+        "托盘常驻 (Recommended)"
+    );
+}
+
+#[test]
+fn event_deserializes_without_interaction() {
+    let event: NiumaEvent = serde_json::from_value(serde_json::json!({
+        "id": "event-legacy-1",
+        "dedupe_key": "event-legacy-1",
+        "source": "legacy",
+        "tool": "codex",
+        "session_id": "session-1",
+        "project_path": "/tmp/demo",
+        "project_name": "demo",
+        "event_type": "session_activity",
+        "severity": "info",
+        "summary": "Codex is running",
+        "payload_ref": null,
+        "created_at": "2026-06-26T00:00:00Z"
+    }))
+    .unwrap();
+
+    assert_eq!(event.id, "event-legacy-1");
+    assert_eq!(event.interaction, None);
+}
+
+#[test]
+fn interaction_deserializes_without_schema() {
+    let interaction: EventInteractionDetail = serde_json::from_value(serde_json::json!({
+        "kind": "approval",
+        "handling": "niuma",
+        "actionable": true,
+        "request_id": "approval-1",
+        "actions": ["allow", "deny"],
+        "endpoint": "/api/v1/approval-decisions"
+    }))
+    .unwrap();
+
+    assert_eq!(interaction.request_id.as_deref(), Some("approval-1"));
+    assert_eq!(interaction.schema, None);
 }
 
 #[test]
@@ -134,6 +206,30 @@ fn stale_pending_proxy_returns_to_codex() {
         results[0].request.decided_source.as_deref(),
         Some("proxy_lost")
     );
+}
+
+#[test]
+fn stale_relay_approval_is_not_returned_to_codex_by_proxy_watchdog() {
+    let store = NiumaStore::new(test_sqlite_path("stale_relay_approval"));
+    let mut request = sample_approval_request("approval-relay-1");
+    request.channel = ApprovalChannel::NiumaCodexRelay;
+    request.proxy_status = ApprovalProxyStatus::Active;
+    request.last_heartbeat_at = Some(Utc.timestamp_opt(100, 0).single().unwrap());
+    store.upsert_approval_request(request).unwrap();
+
+    let results = store
+        .return_stale_approval_proxies_to_codex(
+            Utc.timestamp_opt(109, 0).single().unwrap(),
+            chrono::Duration::seconds(8),
+        )
+        .unwrap();
+
+    assert!(results.is_empty());
+    let stored = store
+        .approval_request("approval-relay-1")
+        .unwrap()
+        .expect("relay approval should remain stored");
+    assert_eq!(stored.status, ApprovalStatus::Pending);
 }
 
 #[test]
@@ -776,6 +872,158 @@ fn resolved_approval_activity_clears_unkeyed_hook_approval_without_hiding_input(
         RuntimeStateStatus::WaitingInput
     );
     assert_eq!(snapshot.status, RuntimeStateStatus::WaitingInput);
+}
+
+#[test]
+fn unknown_resolve_key_does_not_clear_unkeyed_approval() {
+    let store = NiumaStore::new(test_sqlite_path("unknown_key_keeps_unkeyed_approval"));
+    let approval = sample_session_event(
+        "hook-approval-dedupe",
+        "session-a",
+        EventType::ApprovalRequested,
+        1_000,
+    );
+    let activity = sample_session_event(
+        "unknown-resolved-dedupe",
+        "session-a",
+        EventType::SessionActivity,
+        2_000,
+    )
+    .with_attention_resolve_key("custom:session-a:request-1");
+
+    store.append_event(approval).unwrap();
+    let state = store.append_event(activity).unwrap();
+
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(
+        state.attention_items[0].status,
+        RuntimeStateStatus::WaitingApproval
+    );
+    assert_eq!(state.attention_items[0].attention_resolve_key, None);
+}
+
+#[test]
+fn relay_input_replaces_watcher_input_fallback() {
+    let store = NiumaStore::new(test_sqlite_path("relay_input_replaces_watcher_fallback"));
+    let fallback = sample_session_event(
+        "watcher-input-fallback",
+        "session-a",
+        EventType::InputRequested,
+        1_000,
+    );
+    let relay = sample_session_event("relay-input", "session-a", EventType::InputRequested, 2_000)
+        .with_attention_resolve_key("input:request-1");
+
+    store.append_event(fallback).unwrap();
+    let state = store.append_event(relay).unwrap();
+
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(
+        state.attention_items[0].attention_resolve_key.as_deref(),
+        Some("input:request-1")
+    );
+    assert_eq!(state.attention_items[0].event_id, "event_relay-input");
+}
+
+#[test]
+fn watcher_input_does_not_replace_existing_relay_input() {
+    let store = NiumaStore::new(test_sqlite_path("watcher_input_keeps_relay_input"));
+    let relay = sample_session_event("relay-input", "session-a", EventType::InputRequested, 1_000)
+        .with_attention_resolve_key("input:request-1");
+    let fallback = sample_session_event(
+        "watcher-input-fallback",
+        "session-a",
+        EventType::InputRequested,
+        2_000,
+    );
+
+    store.append_event(relay).unwrap();
+    let state = store.append_event(fallback).unwrap();
+
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(
+        state.attention_items[0].attention_resolve_key.as_deref(),
+        Some("input:request-1")
+    );
+    assert_eq!(state.attention_items[0].event_id, "event_relay-input");
+}
+
+#[test]
+fn answer_activity_clears_keyed_and_legacy_dirty_unkeyed_input_for_session() {
+    let store = NiumaStore::new(test_sqlite_path("answer_activity_clears_dirty_inputs"));
+    let keyed_input =
+        sample_session_event("relay-input", "session-a", EventType::InputRequested, 1_000)
+            .with_attention_resolve_key("input:request-1");
+    let fallback_input = sample_session_event(
+        "legacy-watcher-input-fallback",
+        "session-a",
+        EventType::InputRequested,
+        2_000,
+    );
+    let resolved = sample_session_event(
+        "answered-input",
+        "session-a",
+        EventType::SessionActivity,
+        3_000,
+    )
+    .with_attention_resolve_key("input:request-1");
+
+    store.append_event(keyed_input).unwrap();
+    {
+        let mut runtime = store.runtime().unwrap();
+        // 兼容旧版本或竞态中已经同时存在的 watcher fallback，回答成功必须一次清理干净。
+        runtime
+            .state
+            .attention_items
+            .push(AttentionItem::from_event(
+                &fallback_input,
+                RuntimeStateStatus::WaitingInput,
+            ));
+    }
+    let state = store.append_event(resolved).unwrap();
+
+    assert!(state.attention_items.is_empty());
+    assert_eq!(
+        state
+            .runtime_states
+            .iter()
+            .find(|session| session.session_id == "session-a")
+            .unwrap()
+            .status,
+        RuntimeStateStatus::Running
+    );
+}
+
+#[test]
+fn answer_activity_clears_only_matching_keyed_input_without_hiding_approval() {
+    let store = NiumaStore::new(test_sqlite_path("answer_activity_keeps_approval"));
+    let keyed_input =
+        sample_session_event("relay-input", "session-a", EventType::InputRequested, 1_000)
+            .with_attention_resolve_key("input:request-1");
+    let approval = sample_session_event(
+        "approval-dedupe",
+        "session-a",
+        EventType::ApprovalRequested,
+        2_000,
+    );
+    let resolved = sample_session_event(
+        "answered-input",
+        "session-a",
+        EventType::SessionActivity,
+        3_000,
+    )
+    .with_attention_resolve_key("input:request-1");
+
+    store.append_event(keyed_input).unwrap();
+    store.append_event(approval).unwrap();
+    let state = store.append_event(resolved).unwrap();
+
+    assert_eq!(state.attention_items.len(), 1);
+    assert_eq!(
+        state.attention_items[0].status,
+        RuntimeStateStatus::WaitingApproval
+    );
+    assert_eq!(state.attention_items[0].attention_resolve_key, None);
 }
 
 #[test]
@@ -2165,6 +2413,7 @@ fn sample_session_event(
         completion_reason: None,
         failure_reason: None,
         payload_ref: None,
+        interaction: None,
         created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
     }
 }

@@ -189,6 +189,21 @@ pub fn match_managed_session(
     candidates: &[CodexSessionBindingCandidate],
     window: chrono::Duration,
 ) -> BindingMatch {
+    if let Some(session_id) = managed.codex_session_id.as_deref() {
+        let matches = candidates
+            .iter()
+            .filter(|candidate| candidate.session_id == session_id)
+            .collect::<Vec<_>>();
+        return match matches.as_slice() {
+            [] => BindingMatch::None,
+            [candidate] => BindingMatch::Unique {
+                session_id: candidate.session_id.clone(),
+                session_file_path: candidate.session_file_path.clone(),
+            },
+            _ => BindingMatch::Ambiguous,
+        };
+    }
+
     if window < chrono::Duration::zero() {
         return BindingMatch::None;
     }
@@ -437,6 +452,54 @@ mod tests {
             match_managed_session(&managed, &[first, second], chrono::Duration::seconds(10));
 
         assert_eq!(result, BindingMatch::Ambiguous);
+    }
+
+    #[test]
+    fn binding_uses_known_codex_session_id_to_narrow_candidates() {
+        let managed = ManagedCodexSession {
+            codex_session_id: Some("codex-session-2".to_string()),
+            ..managed_session("继续", 1_010)
+        };
+        let first = binding_candidate("codex-session-1", "继续", 1_012);
+        let second = binding_candidate("codex-session-2", "继续", 1_013);
+
+        let result =
+            match_managed_session(&managed, &[first, second], chrono::Duration::seconds(10));
+
+        assert_eq!(
+            result,
+            BindingMatch::Unique {
+                session_id: "codex-session-2".into(),
+                session_file_path: "/codex/codex-session-2.jsonl".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn binding_uses_known_codex_session_id_as_primary_key() {
+        let managed = ManagedCodexSession {
+            codex_session_id: Some("codex-session-2".to_string()),
+            first_user_message_hash: None,
+            first_user_message_submitted_at: None,
+            ..managed_session("继续", 1_010)
+        };
+        let first = binding_candidate("codex-session-1", "不匹配", 1_200);
+        let second = CodexSessionBindingCandidate {
+            first_user_message_hash: None,
+            first_user_message_at: None,
+            ..binding_candidate("codex-session-2", "不匹配", 1_300)
+        };
+
+        let result =
+            match_managed_session(&managed, &[first, second], chrono::Duration::seconds(10));
+
+        assert_eq!(
+            result,
+            BindingMatch::Unique {
+                session_id: "codex-session-2".into(),
+                session_file_path: "/codex/codex-session-2.jsonl".into(),
+            }
+        );
     }
 
     #[test]

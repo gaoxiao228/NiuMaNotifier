@@ -124,6 +124,7 @@ fn manual_test_events(request: ManualTestScenarioRequest) -> Result<Vec<NiumaEve
                 completion_reason: None,
                 failure_reason: None,
                 payload_ref: None,
+                interaction: None,
                 created_at: now + chrono::Duration::milliseconds(index as i64),
             })
         })

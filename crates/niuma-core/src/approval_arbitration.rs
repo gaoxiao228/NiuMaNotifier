@@ -106,6 +106,7 @@ pub struct RecentApprovalEmission {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApprovalEmissionSource {
     Hook,
+    Relay,
     Watcher,
 }
 
@@ -119,7 +120,7 @@ pub enum WatcherApprovalDecision {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HookApprovalDecision {
     AcceptHook,
-    ReturnToCodex,
+    ReplaceWatcher,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -145,7 +146,10 @@ impl ApprovalArbiter {
         // hook 已经接管同一个授权时，迟到的 watcher fallback 只会制造重复通知。
         if self.recent_emissions.iter().any(|emission| {
             emission.fingerprint.key == fingerprint.key
-                && emission.source == ApprovalEmissionSource::Hook
+                && matches!(
+                    emission.source,
+                    ApprovalEmissionSource::Hook | ApprovalEmissionSource::Relay
+                )
         }) {
             return WatcherApprovalDecision::Suppress;
         }
@@ -174,6 +178,23 @@ impl ApprovalArbiter {
         fingerprint: ApprovalFingerprint,
         now: DateTime<Utc>,
     ) -> HookApprovalDecision {
+        self.on_proxy_approval(fingerprint, ApprovalEmissionSource::Hook, now)
+    }
+
+    pub fn on_relay_approval(
+        &mut self,
+        fingerprint: ApprovalFingerprint,
+        now: DateTime<Utc>,
+    ) -> HookApprovalDecision {
+        self.on_proxy_approval(fingerprint, ApprovalEmissionSource::Relay, now)
+    }
+
+    fn on_proxy_approval(
+        &mut self,
+        fingerprint: ApprovalFingerprint,
+        source: ApprovalEmissionSource,
+        now: DateTime<Utc>,
+    ) -> HookApprovalDecision {
         self.prune_recent(now);
         self.pending_candidates.remove(&fingerprint.key);
         let was_watcher_fallback = self.recent_emissions.iter().any(|emission| {
@@ -188,9 +209,10 @@ impl ApprovalArbiter {
             },
         );
         if was_watcher_fallback {
-            HookApprovalDecision::ReturnToCodex
+            self.record_emission(&fingerprint, source, now);
+            HookApprovalDecision::ReplaceWatcher
         } else {
-            self.record_emission(&fingerprint, ApprovalEmissionSource::Hook, now);
+            self.record_emission(&fingerprint, source, now);
             HookApprovalDecision::AcceptHook
         }
     }
@@ -361,6 +383,7 @@ mod tests {
             completion_reason: None,
             failure_reason: None,
             payload_ref: None,
+            interaction: None,
             created_at: now(),
         }
     }
@@ -460,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn late_hook_after_watcher_fallback_returns_to_codex() {
+    fn late_hook_after_watcher_fallback_replaces_watcher() {
         let mut arbiter = ApprovalArbiter::default();
         let fp = fingerprint();
         arbiter.on_watcher_approval(fp.clone(), event("watcher-1"), now());
@@ -468,7 +491,38 @@ mod tests {
 
         let decision = arbiter.on_hook_approval(fp, now() + chrono::Duration::seconds(3));
 
-        assert_eq!(decision, HookApprovalDecision::ReturnToCodex);
+        assert_eq!(decision, HookApprovalDecision::ReplaceWatcher);
+    }
+
+    #[test]
+    fn late_relay_after_watcher_fallback_replaces_watcher() {
+        let mut arbiter = ApprovalArbiter::default();
+        let fp = fingerprint();
+        arbiter.on_watcher_approval(fp.clone(), event("watcher-1"), now());
+        arbiter.expire_candidate(&fp, now() + chrono::Duration::seconds(2));
+
+        let decision = arbiter.on_relay_approval(fp, now() + chrono::Duration::seconds(3));
+
+        assert_eq!(decision, HookApprovalDecision::ReplaceWatcher);
+    }
+
+    #[test]
+    fn watcher_after_relay_emission_is_suppressed() {
+        let mut arbiter = ApprovalArbiter::default();
+        let fp = fingerprint();
+        assert_eq!(
+            arbiter.on_relay_approval(fp.clone(), now()),
+            HookApprovalDecision::AcceptHook
+        );
+
+        let decision = arbiter.on_watcher_approval(
+            fp,
+            event("watcher-after-relay"),
+            now() + chrono::Duration::seconds(1),
+        );
+
+        assert_eq!(decision, WatcherApprovalDecision::Suppress);
+        assert_eq!(arbiter.pending_count(), 0);
     }
 
     #[test]

@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 chrono.workspace = true
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
 niuma-api = { path = "../niuma-api" }
 niuma-core = { path = "../niuma-core" }
 serde.workspace = true

@@ -1,4 +1,10 @@
-import type { ListenerToolConfig, MainStatePayload, NiumaEvent, RuntimeStateItem } from './api'
+import type {
+  EventInteractionQuestion,
+  ListenerToolConfig,
+  MainStatePayload,
+  NiumaEvent,
+  RuntimeStateItem
+} from './api'
 import {
   translateEventType,
   translateStatus,
@@ -7,6 +13,8 @@ import {
   type LanguageCode
 } from './i18n'
 import { escapeHtml, formatLocalTime } from './viewUtils'
+
+const CUSTOM_INPUT_VALUE = '__niuma_custom_answer__'
 
 export type ListenerToggleRenderOptions = {
   toggle: HTMLInputElement | null
@@ -32,6 +40,7 @@ export type RequestDetailRenderOptions = {
   state: MainStatePayload | null
   language: LanguageCode
   approving: boolean
+  inputSubmitting?: boolean
 }
 
 export type StatusSummaryRenderOptions = {
@@ -58,9 +67,8 @@ export function shouldShowManualBlockerAction(state: MainStatePayload | null) {
   if (!state || !isBlockingStatus(state.status)) {
     return false
   }
-  const approval = state.detail?.approval
-  // hook 授权由专用按钮或 Codex 侧处理；只有退回 Codex 后才保留手动清理入口。
-  if (approval && approval.status !== 'returned_to_codex') {
+  const interaction = state.detail?.interaction
+  if (interaction?.handling === 'niuma' && interaction.actionable) {
     return false
   }
   return true
@@ -166,7 +174,8 @@ export function renderRequestDetail(options: RequestDetailRenderOptions) {
   }
 
   // 当前请求详情来自后端主状态 detail，避免前端从最近事件中猜测。
-  const content = detail.error_message || detail.content || detail.summary
+  const content = detail.error_message || requestDetailContent(options.state)
+  const instruction = interactionInstruction(options.state)
   options.element.hidden = false
   options.element.innerHTML = `
     <dt>${escapeHtml(t.project)}</dt>
@@ -177,10 +186,54 @@ export function renderRequestDetail(options: RequestDetailRenderOptions) {
     <dd>${escapeHtml(session ? translateTool(options.language, session.tool) : t.none)}</dd>
     <dt>${escapeHtml(t.requestContent)}</dt>
     <dd>${escapeHtml(content)}</dd>
+    ${
+      instruction
+        ? `
+    <dt>${escapeHtml(t.handlingHint)}</dt>
+    <dd class="interaction-message">${escapeHtml(instruction)}</dd>
+    `
+        : ''
+    }
     <dt>${escapeHtml(t.requestTime)}</dt>
     <dd>${escapeHtml(formatLocalTime(options.state.updated_at, options.language))}</dd>
   `
   renderApprovalActions(options.actionsElement, options)
+}
+
+export function blockerActionLabel(state: MainStatePayload | null, language: LanguageCode) {
+  const t = translations[language]
+  const interaction = state?.detail?.interaction
+  if (interaction?.handling === 'tool' && !interaction.actionable) {
+    const toolName = state?.session ? translateTool(language, state.session.tool) : t.toolLabel
+    return t.clearBlockerAfterTool.replace('{tool}', toolName)
+  }
+  return t.clearBlocker
+}
+
+export function interactionInstruction(state: MainStatePayload | null) {
+  const interaction = state?.detail?.interaction
+  if (!interaction || interaction.actionable) {
+    return null
+  }
+  return interaction.message || null
+}
+
+function requestDetailContent(state: MainStatePayload) {
+  const detail = state.detail
+  if (!detail) {
+    return ''
+  }
+  const interaction = detail?.interaction
+  if (
+    state.status === 'waiting_input' &&
+    interaction?.kind === 'input' &&
+    interaction.handling === 'niuma' &&
+    interaction.actionable &&
+    interaction.schema?.questions.length
+  ) {
+    return detail.summary
+  }
+  return detail?.content || detail?.summary || ''
 }
 
 function renderApprovalActions(
@@ -191,23 +244,110 @@ function renderApprovalActions(
     return
   }
   const t = translations[options.language]
-  const approval = options.state?.detail?.approval
-  if (!approval) {
-    element.hidden = true
-    element.innerHTML = ''
+  const interaction = options.state?.detail?.interaction
+  const inputRequestId =
+    interaction?.kind === 'input' &&
+    interaction.handling === 'niuma' &&
+    interaction.actionable &&
+    interaction.request_id &&
+    interaction.schema?.questions.length
+      ? interaction.request_id
+      : null
+  if (inputRequestId && interaction?.schema) {
+    element.hidden = false
+    element.innerHTML = renderInputResponseForm(
+      inputRequestId,
+      interaction.schema.questions,
+      t,
+      Boolean(options.inputSubmitting)
+    )
     return
   }
-  element.hidden = false
-  if (approval.can_decide) {
+  const interactionRequestId =
+    interaction?.kind === 'approval' &&
+    interaction.handling === 'niuma' &&
+    interaction.actionable &&
+    interaction.request_id
+      ? interaction.request_id
+      : null
+  if (interactionRequestId) {
     const disabled = options.approving ? 'disabled' : ''
     const allowText = options.approving ? t.approvalSubmitting : t.approveApproval
+    element.hidden = false
     element.innerHTML = `
-      <button class="approval-action allow" type="button" data-approval-request-id="${escapeHtml(approval.request_id)}" data-approval-decision="allow" ${disabled}>${escapeHtml(allowText)}</button>
-      <button class="approval-action deny" type="button" data-approval-request-id="${escapeHtml(approval.request_id)}" data-approval-decision="deny" ${disabled}>${escapeHtml(t.denyApproval)}</button>
+      <button class="approval-action allow" type="button" data-approval-request-id="${escapeHtml(interactionRequestId)}" data-approval-decision="allow" ${disabled}>${escapeHtml(allowText)}</button>
+      <button class="approval-action deny" type="button" data-approval-request-id="${escapeHtml(interactionRequestId)}" data-approval-decision="deny" ${disabled}>${escapeHtml(t.denyApproval)}</button>
     `
     return
   }
-  element.innerHTML = `<p class="approval-message">${escapeHtml(approval.message || t.none)}</p>`
+  const instruction = interactionInstruction(options.state)
+  if (instruction) {
+    element.hidden = false
+    element.innerHTML = `<p class="approval-message">${escapeHtml(instruction)}</p>`
+    return
+  }
+  element.hidden = true
+  element.innerHTML = ''
+}
+
+function renderInputResponseForm(
+  requestId: string,
+  questions: EventInteractionQuestion[],
+  t: (typeof translations)[LanguageCode],
+  submitting: boolean
+) {
+  const disabled = submitting ? 'disabled' : ''
+  const questionHtml = questions.map((question) => renderInputQuestion(question, t, disabled)).join('')
+  return `
+    <form data-input-request-id="${escapeHtml(requestId)}" class="input-response-form">
+      ${questionHtml}
+      <button class="approval-action allow" type="submit" ${disabled}>${escapeHtml(t.submitInputAnswer)}</button>
+    </form>
+  `
+}
+
+function renderInputQuestion(
+  question: EventInteractionQuestion,
+  t: (typeof translations)[LanguageCode],
+  disabled: string
+) {
+  const options = question.options ?? []
+  const description = question.description
+    ? `<small>${escapeHtml(question.description)}</small>`
+    : ''
+  const control =
+    options.length > 0
+      ? `
+          ${options
+            .map(
+              (option, index) => `
+              <label class="input-option">
+                <input type="radio" name="${escapeHtml(question.id)}" value="${escapeHtml(option.label)}" ${index === 0 ? 'required' : ''} ${disabled}>
+                <span>${escapeHtml(option.label)}</span>
+                ${option.description ? `<small>${escapeHtml(option.description)}</small>` : ''}
+              </label>
+            `
+            )
+            .join('')}
+          <label class="input-option input-custom-answer">
+            <input type="radio" name="${escapeHtml(question.id)}" value="${CUSTOM_INPUT_VALUE}" ${disabled}>
+            <span>${escapeHtml(t.customInputAnswer)}</span>
+            <textarea name="${escapeHtml(customInputName(question.id))}" data-custom-input-for="${escapeHtml(question.id)}" rows="3" placeholder="${escapeHtml(t.inputTextPlaceholder)}" ${disabled}></textarea>
+          </label>
+        `
+      : `<textarea name="${escapeHtml(question.id)}" rows="3" placeholder="${escapeHtml(t.inputTextPlaceholder)}" required ${disabled}></textarea>`
+  return `
+    <fieldset class="input-question">
+      ${question.header ? `<legend>${escapeHtml(question.header)}</legend>` : ''}
+      <p>${escapeHtml(question.question)}</p>
+      ${description}
+      ${control}
+    </fieldset>
+  `
+}
+
+function customInputName(questionId: string) {
+  return `${questionId}__custom`
 }
 
 export function renderEvents(

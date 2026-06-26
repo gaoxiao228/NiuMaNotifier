@@ -10,8 +10,7 @@ pub enum CodexLaunchMode {
     Passthrough,
 }
 
-const PASSTHROUGH_SUBCOMMANDS: &[&str] =
-    &["resume", "exec", "app-server", "login", "logout", "auth"];
+const PASSTHROUGH_SUBCOMMANDS: &[&str] = &["exec", "app-server", "login", "logout", "auth"];
 
 pub fn classify_codex_args(args: &[String]) -> CodexLaunchMode {
     let Some(first) = args.first().map(String::as_str) else {
@@ -21,6 +20,16 @@ pub fn classify_codex_args(args: &[String]) -> CodexLaunchMode {
     // Codex 自带帮助、版本和已有子命令先保持原样直通，避免 wrapper 改变原生命令语义。
     if matches!(first, "--help" | "-h" | "--version" | "-V") {
         return CodexLaunchMode::Passthrough;
+    }
+    if first == "resume"
+        && args
+            .get(1)
+            .is_some_and(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return CodexLaunchMode::Passthrough;
+    }
+    if first == "resume" {
+        return CodexLaunchMode::Managed;
     }
     if first.starts_with('-') {
         return CodexLaunchMode::Managed;
@@ -169,7 +178,6 @@ mod tests {
     #[test]
     fn classifies_known_passthrough_commands_and_help_as_passthrough() {
         for args in [
-            vec!["resume".to_string()],
             vec!["exec".to_string(), "echo hi".to_string()],
             vec!["app-server".to_string()],
             vec!["login".to_string()],
@@ -183,6 +191,22 @@ mod tests {
         ] {
             assert_eq!(classify_codex_args(&args), CodexLaunchMode::Passthrough);
         }
+    }
+
+    #[test]
+    fn classifies_resume_session_as_managed_but_resume_help_as_passthrough() {
+        assert_eq!(
+            classify_codex_args(&["resume".into(), "019f0304-f3cc".into()]),
+            CodexLaunchMode::Managed
+        );
+        assert_eq!(
+            classify_codex_args(&["resume".into(), "--help".into()]),
+            CodexLaunchMode::Passthrough
+        );
+        assert_eq!(
+            classify_codex_args(&["resume".into(), "-h".into()]),
+            CodexLaunchMode::Passthrough
+        );
     }
 
     #[test]

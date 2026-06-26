@@ -86,6 +86,15 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
         RuntimeStateStatus::WaitingApproval
         | RuntimeStateStatus::WaitingInput
         | RuntimeStateStatus::Error => {
+            if should_skip_unkeyed_input_fallback(state, event) {
+                return;
+            }
+            if is_keyed_relay_input_event(event) {
+                // relay input 带有可操作 request_id，应覆盖同一运行态的 watcher fallback。
+                state.attention_items.retain(|item| {
+                    !is_unkeyed_input_for_session(item, &event.tool, &event.session_id)
+                });
+            }
             state
                 .attention_items
                 .push(AttentionItem::from_event(event, status));
@@ -95,12 +104,7 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
                 // 授权恢复事件只移除同一运行态身份下的对应审批，保留其他工具的同名 session。
                 state.attention_items.retain(|item| {
                     !attention_item_matches_event(item, event)
-                        || (item.attention_resolve_key.as_deref() != Some(resolve_key)
-                            && !is_unkeyed_approval_for_session(
-                                item,
-                                &event.tool,
-                                &event.session_id,
-                            ))
+                        || !attention_item_resolved_by_key(item, event, resolve_key)
                 });
             } else {
                 state.attention_items.retain(|item| {
@@ -170,8 +174,64 @@ fn is_unkeyed_approval_for_session(
         && item.attention_resolve_key.is_none()
 }
 
+fn is_unkeyed_input_for_session(item: &AttentionItem, tool: &ToolKind, session_id: &str) -> bool {
+    &item.tool == tool
+        && item.session_id == session_id
+        && item.status == RuntimeStateStatus::WaitingInput
+        && item.attention_resolve_key.is_none()
+}
+
 fn is_keyed_approval(item: &AttentionItem) -> bool {
     item.status == RuntimeStateStatus::WaitingApproval && item.attention_resolve_key.is_some()
+}
+
+fn is_keyed_input(item: &AttentionItem) -> bool {
+    item.status == RuntimeStateStatus::WaitingInput
+        && item
+            .attention_resolve_key
+            .as_deref()
+            .map(is_input_resolve_key)
+            .unwrap_or(false)
+}
+
+fn is_keyed_relay_input_event(event: &NiumaEvent) -> bool {
+    event.event_type == EventType::InputRequested
+        && event
+            .attention_resolve_key
+            .as_deref()
+            .map(is_input_resolve_key)
+            .unwrap_or(false)
+}
+
+fn should_skip_unkeyed_input_fallback(state: &StoredState, event: &NiumaEvent) -> bool {
+    event.event_type == EventType::InputRequested
+        && event.attention_resolve_key.is_none()
+        && state
+            .attention_items
+            .iter()
+            .any(|item| attention_item_matches_event(item, event) && is_keyed_input(item))
+}
+
+fn attention_item_resolved_by_key(
+    item: &AttentionItem,
+    event: &NiumaEvent,
+    resolve_key: &str,
+) -> bool {
+    item.attention_resolve_key.as_deref() == Some(resolve_key)
+        || (is_approval_resolve_key(resolve_key)
+            && is_unkeyed_approval_for_session(item, &event.tool, &event.session_id))
+        || (is_input_resolve_key(resolve_key)
+            && is_unkeyed_input_for_session(item, &event.tool, &event.session_id))
+}
+
+fn is_input_resolve_key(resolve_key: &str) -> bool {
+    resolve_key.starts_with("input:")
+}
+
+fn is_approval_resolve_key(resolve_key: &str) -> bool {
+    resolve_key.starts_with("approval:")
+        || resolve_key.starts_with("codex_permission:")
+        || resolve_key.starts_with("claude_permission:")
 }
 
 fn restore_session_attention_status(state: &mut StoredState, tool: &ToolKind, session_id: &str) {

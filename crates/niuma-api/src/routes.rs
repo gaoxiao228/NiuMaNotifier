@@ -13,9 +13,11 @@ use crate::handlers::{
     get_main_state, get_notification_records, get_plugin_config, get_plugins,
     get_runtime_state_list, get_session_detail, get_session_list, get_session_project_groups,
     import_plugin, post_approval_decision, post_approval_heartbeat, post_approval_request,
-    post_approval_return_to_codex, post_event, post_plugin_events, post_plugin_notification_result,
-    post_plugin_notification_test_result, remove_plugin, reset_state, run_plugin_action,
-    save_listener_config, save_plugin_config, set_plugin_enabled,
+    post_approval_return_to_codex, post_approval_tool_resolved, post_event, post_plugin_events,
+    post_plugin_notification_result, post_plugin_notification_test_result,
+    post_session_answer_input, post_session_interrupt, post_session_send_instruction,
+    remove_plugin, reset_state, run_plugin_action, save_listener_config, save_plugin_config,
+    set_plugin_enabled,
 };
 use crate::manual_test::manual_test_scenario;
 use crate::response::{preflight, route_not_found};
@@ -113,6 +115,10 @@ fn app_with_bus_and_plugin_dir_and_tool_sessions(
             post(post_approval_return_to_codex).options(preflight),
         )
         .route(
+            "/api/v1/approval-requests/tool-resolved",
+            post(post_approval_tool_resolved).options(preflight),
+        )
+        .route(
             "/api/v1/approval-requests/heartbeat",
             post(post_approval_heartbeat).options(preflight),
         )
@@ -166,6 +172,18 @@ fn app_with_bus_and_plugin_dir_and_tool_sessions(
         .route(
             "/api/v1/session_project_groups",
             get(get_session_project_groups).options(preflight),
+        )
+        .route(
+            "/api/v1/session-control/send-instruction",
+            post(post_session_send_instruction).options(preflight),
+        )
+        .route(
+            "/api/v1/session-control/interrupt",
+            post(post_session_interrupt).options(preflight),
+        )
+        .route(
+            "/api/v1/session-control/answer-input",
+            post(post_session_answer_input).options(preflight),
         )
         .route(
             "/api/v1/session_project_groups/stream",

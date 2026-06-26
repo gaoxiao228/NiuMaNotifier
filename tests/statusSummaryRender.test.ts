@@ -1,4 +1,5 @@
 import {
+  blockerActionLabel,
   renderRequestDetail,
   renderSessions,
   renderStatusSummary,
@@ -84,8 +85,7 @@ const baseState: MainStatePayload = {
     error_message: null,
     payload_ref: null,
     completion_reason: null,
-    failure_reason: null,
-    approval: null
+    failure_reason: null
   }
 }
 
@@ -220,17 +220,13 @@ renderRequestDetail({
         decided_source: null
       }
     }
-  },
+  } as unknown as MainStatePayload,
   language: 'zh-CN',
   approving: false
 })
 
-if (!pendingApprovalActions.innerHTML.includes('同意')) {
-  throw new Error('pending 授权应显示同意按钮')
-}
-
-if (!pendingApprovalActions.innerHTML.includes('拒绝')) {
-  throw new Error('pending 授权应显示拒绝按钮')
+if (!pendingApprovalActions.hidden || pendingApprovalActions.innerHTML.includes('同意')) {
+  throw new Error('旧 approval 字段不应再渲染授权按钮')
 }
 
 const returnedApprovalActions = new FakeActionElement()
@@ -250,13 +246,175 @@ renderRequestDetail({
         decided_source: 'timeout'
       }
     }
+  } as unknown as MainStatePayload,
+  language: 'zh-CN',
+  approving: false
+})
+
+if (!returnedApprovalActions.hidden || returnedApprovalActions.innerHTML.includes('请回到 Codex')) {
+  throw new Error('旧 approval 字段不应再渲染回到工具处理提示')
+}
+
+const toolInteractionDetail = new FakeDetailElement()
+const toolInteractionActions = new FakeActionElement()
+const toolInteractionState: MainStatePayload = {
+  ...baseState,
+  session: {
+    id: 'session-codex',
+    tool: 'codex',
+    project_path: '/Users/niuma/code/NiuMaNotifier',
+    project_name: 'NiuMaNotifier'
+  },
+  detail: {
+    ...baseState.detail!,
+    interaction: {
+      kind: 'approval',
+      handling: 'tool',
+      actionable: false,
+      message: '请回到 Codex 中同意或拒绝'
+    }
+  }
+}
+renderRequestDetail({
+  element: toolInteractionDetail as HTMLDListElement,
+  actionsElement: toolInteractionActions as HTMLElement,
+  state: toolInteractionState,
+  language: 'zh-CN',
+  approving: false
+})
+
+if (!toolInteractionDetail.innerHTML.includes('处理提示')) {
+  throw new Error('不可操作 interaction 应在详情中显示处理提示标签')
+}
+
+if (!toolInteractionActions.innerHTML.includes('请回到 Codex 中同意或拒绝')) {
+  throw new Error('不可操作 interaction 应在操作区显示回到工具处理提示')
+}
+
+if (blockerActionLabel(toolInteractionState, 'zh-CN') !== '我已在 Codex 中处理') {
+  throw new Error('回工具处理的阻塞项应使用更明确的手动清理按钮文案')
+}
+
+if (!shouldShowManualBlockerAction(toolInteractionState)) {
+  throw new Error('只能回工具处理的阻塞项应保留手动清理入口')
+}
+
+const niumaInteractionActions = new FakeActionElement()
+const niumaInteractionState: MainStatePayload = {
+  ...baseState,
+  detail: {
+    ...baseState.detail!,
+    interaction: {
+      kind: 'approval',
+      handling: 'niuma',
+      actionable: true,
+      request_id: 'approval-from-interaction',
+      actions: ['allow', 'deny'],
+      endpoint: '/api/v1/approval-decisions'
+    }
+  }
+}
+renderRequestDetail({
+  element: new FakeDetailElement() as HTMLDListElement,
+  actionsElement: niumaInteractionActions as HTMLElement,
+  state: niumaInteractionState,
+  language: 'zh-CN',
+  approving: false
+})
+
+if (!niumaInteractionActions.innerHTML.includes('data-approval-request-id="approval-from-interaction"')) {
+  throw new Error('可操作 interaction 应使用 interaction.request_id 渲染授权按钮')
+}
+
+if (shouldShowManualBlockerAction(niumaInteractionState)) {
+  throw new Error('可由 Niuma 处理的授权不应显示手动清理入口')
+}
+
+const inputInteractionDetail = new FakeDetailElement()
+const inputInteractionActions = new FakeActionElement()
+renderRequestDetail({
+  element: inputInteractionDetail as HTMLDListElement,
+  actionsElement: inputInteractionActions as HTMLElement,
+  state: {
+    ...baseState,
+    status: 'waiting_input',
+    detail: {
+      ...baseState.detail!,
+      summary: 'Codex 等待输入：请选择处理方式',
+      content: '请选择处理方式\n1. 继续 - 继续当前任务\n2. 停止',
+      interaction: {
+        kind: 'input',
+        handling: 'niuma',
+        actionable: true,
+        request_id: 'codex-input:niuma_codex_wrapper_1:request-1',
+        schema: {
+          questions: [
+            {
+              id: 'decision',
+              question: '请选择处理方式',
+              options: [
+                {
+                  label: '继续',
+                  description: '继续当前任务'
+                },
+                {
+                  label: '停止'
+                }
+              ]
+            },
+            {
+              id: 'comment',
+              question: '补充说明'
+            }
+          ]
+        }
+      }
+    }
   },
   language: 'zh-CN',
   approving: false
 })
 
-if (!returnedApprovalActions.innerHTML.includes('请回到 Codex')) {
-  throw new Error('returned_to_codex 应显示回到 Codex 操作提示')
+if (!inputInteractionDetail.innerHTML.includes('Codex 等待输入：请选择处理方式')) {
+  throw new Error('可操作等待输入详情应显示摘要')
+}
+
+if (inputInteractionDetail.innerHTML.includes('1. 继续 - 继续当前任务')) {
+  throw new Error('可操作等待输入详情不应重复显示完整选项内容')
+}
+
+if (
+  !inputInteractionActions.innerHTML.includes(
+    'form data-input-request-id="codex-input:niuma_codex_wrapper_1:request-1"'
+  )
+) {
+  throw new Error('renders actionable input form from interaction schema: 应渲染 input form')
+}
+
+if (!inputInteractionActions.innerHTML.includes('请选择处理方式')) {
+  throw new Error('renders actionable input form from interaction schema: 应显示问题文案')
+}
+
+if (
+  !inputInteractionActions.innerHTML.includes('type="radio"') ||
+  !inputInteractionActions.innerHTML.includes('value="继续"') ||
+  !inputInteractionActions.innerHTML.includes('继续当前任务')
+) {
+  throw new Error('renders actionable input form from interaction schema: 应显示选项题')
+}
+
+if (
+  !inputInteractionActions.innerHTML.includes('自定义答案') ||
+  !inputInteractionActions.innerHTML.includes('data-custom-input-for="decision"')
+) {
+  throw new Error('有选项的问题末尾应追加自定义答案输入')
+}
+
+if (
+  !inputInteractionActions.innerHTML.includes('textarea') ||
+  !inputInteractionActions.innerHTML.includes('placeholder="请输入回复"')
+) {
+  throw new Error('renders actionable input form from interaction schema: 无选项题应显示 textarea')
 }
 
 if (
@@ -267,7 +425,7 @@ if (
 }
 
 if (
-  shouldShowManualBlockerAction({
+  !shouldShowManualBlockerAction({
     ...baseState,
     detail: {
       ...baseState.detail!,
@@ -280,13 +438,13 @@ if (
         decided_source: null
       }
     }
-  })
+  } as unknown as MainStatePayload)
 ) {
-  throw new Error('hook 授权待决策时不应显示“我已处理”')
+  throw new Error('旧 approval 字段不应隐藏手动清理入口')
 }
 
 if (
-  shouldShowManualBlockerAction({
+  !shouldShowManualBlockerAction({
     ...baseState,
     detail: {
       ...baseState.detail!,
@@ -299,9 +457,9 @@ if (
         decided_source: 'ui'
       }
     }
-  })
+  } as unknown as MainStatePayload)
 ) {
-  throw new Error('hook 授权已决策但未完成时不应显示“我已处理”')
+  throw new Error('没有 interaction 时应按普通阻塞项显示手动清理入口')
 }
 
 if (
@@ -318,7 +476,7 @@ if (
         decided_source: 'timeout'
       }
     }
-  })
+  } as unknown as MainStatePayload)
 ) {
-  throw new Error('授权退回 Codex 后应允许显示“我已处理”')
+  throw new Error('旧 approval 字段为 returned_to_codex 时仍只按普通阻塞项处理')
 }

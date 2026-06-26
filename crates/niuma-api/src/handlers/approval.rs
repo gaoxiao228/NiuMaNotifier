@@ -6,12 +6,17 @@ use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::approval_arbitration::{
     ApprovalFingerprint, ExpiredWatcherApproval, HookApprovalDecision, WatcherApprovalDecision,
 };
+use niuma_core::codex_managed_session::read_registry;
 use niuma_core::models::{
     ApprovalChannel, ApprovalControlRef, ApprovalDecisionKind, ApprovalProxyStatus,
-    ApprovalRequest, ApprovalStatus, EventType, NiumaEvent, ToolId,
+    ApprovalRequest, ApprovalStatus, EventInteractionDetail, EventType, NiumaEvent,
+    RuntimeStateStatus, ToolId,
 };
+use niuma_core::platform::paths::codex_managed_registry_path;
 use serde::Deserialize;
 use serde_json::json;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 
 use super::shared;
 use crate::response::json_response;
@@ -47,6 +52,13 @@ pub(crate) struct ApprovalReturnBody {
     request_id: String,
     returned_by: String,
     reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ApprovalToolResolvedBody {
+    request_id: String,
+    resolved_by: String,
+    reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -101,56 +113,58 @@ pub(crate) async fn post_approval_request(State(state): State<AppState>, body: B
             );
         }
     }
-    let mut hook_decision = HookApprovalDecision::AcceptHook;
-    if request.channel == ApprovalChannel::HookProxy {
-        for fingerprint in hook_approval_fingerprints(&request) {
-            let decision = state
+    let mut proxy_decision = HookApprovalDecision::AcceptHook;
+    for fingerprint in hook_approval_fingerprints(&request) {
+        let decision = {
+            let mut arbiter = state
                 .approval_arbiter
                 .lock()
-                .expect("approval arbiter mutex poisoned")
-                .on_hook_approval(fingerprint.clone(), Utc::now());
-            log_hook_approval_arbitration(&request, &fingerprint, &decision);
-            if decision == HookApprovalDecision::ReturnToCodex {
-                hook_decision = HookApprovalDecision::ReturnToCodex;
+                .expect("approval arbiter mutex poisoned");
+            match request.channel {
+                ApprovalChannel::HookProxy => {
+                    arbiter.on_hook_approval(fingerprint.clone(), Utc::now())
+                }
+                ApprovalChannel::NiumaCodexRelay => {
+                    arbiter.on_relay_approval(fingerprint.clone(), Utc::now())
+                }
             }
+        };
+        log_hook_approval_arbitration(&request, &fingerprint, &decision);
+        if decision == HookApprovalDecision::ReplaceWatcher {
+            proxy_decision = HookApprovalDecision::ReplaceWatcher;
         }
-    }
-    if hook_decision == HookApprovalDecision::ReturnToCodex {
-        return json_response(
-            200,
-            ApiResponse::ok(json!({
-                "request_id": request.id,
-                "accepted": false,
-                "ownership": "watcher_fallback",
-                "hook_action": "return_to_codex",
-                "status": "already_fallback"
-            })),
-        );
     }
     if let Err(error) = state.store.upsert_approval_request(request.clone()) {
         return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
     }
 
-    let event = approval_event(
+    let mut events = Vec::new();
+    if proxy_decision == HookApprovalDecision::ReplaceWatcher {
+        if let Some(event) = watcher_fallback_resolved_event(&state, &request) {
+            events.push(event);
+        }
+    }
+    events.push(approval_event(
         &request,
         EventType::ApprovalRequested,
         "urgent",
         "approval-api",
-    );
-    if let Err(error) = state.mutation_service.append_events(vec![event]) {
+    ));
+    if let Err(error) = state.mutation_service.append_events(events) {
         return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
     }
 
-    json_response(
-        200,
-        ApiResponse::ok(json!({
-            "request_id": request.id,
-            "accepted": true,
-            "ownership": approval_ownership(&request.channel),
-            "hook_action": "wait_for_decision",
-            "status": request.status
-        })),
-    )
+    let mut data = json!({
+        "request_id": request.id,
+        "accepted": true,
+        "ownership": approval_ownership(&request.channel),
+        "hook_action": "wait_for_decision",
+        "status": request.status
+    });
+    if proxy_decision == HookApprovalDecision::ReplaceWatcher {
+        data["replaced_channel"] = json!("session_watch");
+    }
+    json_response(200, ApiResponse::ok(data))
 }
 
 fn approval_ownership(channel: &ApprovalChannel) -> &'static str {
@@ -258,6 +272,84 @@ fn hook_approval_fingerprints(request: &ApprovalRequest) -> Vec<ApprovalFingerpr
     fingerprints
 }
 
+fn watcher_fallback_resolved_event(
+    state: &AppState,
+    request: &ApprovalRequest,
+) -> Option<NiumaEvent> {
+    let request_fingerprints = hook_approval_fingerprints(request);
+    if request_fingerprints.is_empty() {
+        return None;
+    }
+    let stored = state.store.load().ok()?;
+    let watcher_item = stored.attention_items.iter().find(|item| {
+        item.status == RuntimeStateStatus::WaitingApproval
+            && item.tool == request.tool
+            && item
+                .attention_resolve_key
+                .as_deref()
+                .map(|key| key.starts_with("codex_permission:"))
+                .unwrap_or(false)
+            && watcher_attention_fingerprint(item, request)
+                .map(|fingerprint| {
+                    request_fingerprints
+                        .iter()
+                        .any(|request_fp| request_fp.key == fingerprint.key)
+                })
+                .unwrap_or(false)
+    })?;
+    let resolve_key = watcher_item.attention_resolve_key.clone()?;
+    let now = Utc::now();
+    // 只用这个事件驱动状态机移除 watcher fallback；真正可操作授权由后续 approval 事件展示。
+    Some(NiumaEvent {
+        id: format!(
+            "event_watcher_replaced_{}_{}",
+            sanitize_event_id_part(&request.id),
+            now.timestamp_millis()
+        ),
+        dedupe_key: format!("watcher_replaced:{}", request.id),
+        source: "approval-api".to_string(),
+        tool: request.tool.clone(),
+        session_id: watcher_item.session_id.clone(),
+        parent_session_id: None,
+        normalized_session_id: None,
+        session_scope: None,
+        agent_nickname: None,
+        agent_role: None,
+        project_path: request.project_path.clone(),
+        project_name: request.project_name.clone(),
+        event_type: EventType::ApprovalResolved,
+        severity: "info".to_string(),
+        summary: "Niuma 已接管 Codex 授权".to_string(),
+        content: request
+            .description
+            .clone()
+            .or_else(|| request.command.clone()),
+        error_message: None,
+        attention_resolve_key: Some(resolve_key),
+        completion_reason: None,
+        failure_reason: None,
+        payload_ref: None,
+        interaction: None,
+        created_at: now,
+    })
+}
+
+fn watcher_attention_fingerprint(
+    item: &niuma_core::models::AttentionItem,
+    request: &ApprovalRequest,
+) -> Option<ApprovalFingerprint> {
+    let command = item
+        .summary
+        .strip_prefix("exec_command: ")
+        .unwrap_or(item.summary.as_str());
+    ApprovalFingerprint::from_parts(
+        &request.project_path,
+        Some(&item.session_id),
+        Some(command),
+        None,
+    )
+}
+
 pub(super) async fn handle_watcher_approval_event(state: AppState, event: NiumaEvent) -> Response {
     match arbitrate_watcher_approval_event(&state, event) {
         WatcherApprovalApiOutcome::Apply(event) => append_events_response(&state, vec![event]),
@@ -291,8 +383,13 @@ pub(super) enum WatcherApprovalApiOutcome {
 
 pub(super) fn arbitrate_watcher_approval_event(
     state: &AppState,
-    event: NiumaEvent,
+    mut event: NiumaEvent,
 ) -> WatcherApprovalApiOutcome {
+    if event.interaction.is_none() {
+        event.interaction = Some(EventInteractionDetail::tool_approval(
+            "请回到 Codex 中同意或拒绝",
+        ));
+    }
     let Some(fingerprint) = watcher_approval_fingerprint(&event) else {
         log_watcher_approval_without_fingerprint(&event);
         return WatcherApprovalApiOutcome::Apply(event);
@@ -526,6 +623,33 @@ pub(crate) async fn post_approval_decision(State(state): State<AppState>, body: 
     };
 
     let reason = shared::trim_optional_string(request.reason);
+    let existing_request = match state.store.approval_request(&request_id) {
+        Ok(Some(request)) => request,
+        Ok(None) => {
+            return json_response(
+                200,
+                ApiResponse::fail(
+                    ApiErrorCode::BusinessValidation,
+                    format!("授权请求不存在：{request_id}"),
+                ),
+            );
+        }
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+    if existing_request.channel == ApprovalChannel::NiumaCodexRelay
+        && existing_request.status == ApprovalStatus::Pending
+    {
+        if let Err(error) = send_relay_approval_decision(
+            &codex_managed_registry_path(),
+            &existing_request,
+            &decision,
+        ) {
+            return json_response(
+                200,
+                ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+            );
+        }
+    }
     match state.store.decide_approval(
         &request_id,
         decision,
@@ -633,6 +757,70 @@ pub(crate) async fn post_approval_return_to_codex(
     }
 }
 
+pub(crate) async fn post_approval_tool_resolved(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Response {
+    let request = match serde_json::from_slice::<ApprovalToolResolvedBody>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_response(
+                400,
+                ApiResponse::fail(
+                    ApiErrorCode::ParameterFormat,
+                    format!("请求体无法解析：{error}"),
+                ),
+            );
+        }
+    };
+    let request_id = match required_trimmed(&request.request_id, "request_id") {
+        Ok(value) => value,
+        Err(message) => {
+            return json_response(
+                200,
+                ApiResponse::fail(ApiErrorCode::BusinessValidation, message),
+            );
+        }
+    };
+    let resolved_by = match required_trimmed(&request.resolved_by, "resolved_by") {
+        Ok(value) => value,
+        Err(message) => {
+            return json_response(
+                200,
+                ApiResponse::fail(ApiErrorCode::BusinessValidation, message),
+            );
+        }
+    };
+    let reason = shared::trim_optional_string(request.reason);
+
+    match state
+        .store
+        .resolve_approval_in_tool(&request_id, &resolved_by, reason, Utc::now())
+    {
+        Ok(result) => {
+            if result.accepted {
+                let event = approval_event(
+                    &result.request,
+                    EventType::ApprovalResolved,
+                    "info",
+                    "approval-api",
+                );
+                if let Err(error) = state.mutation_service.append_events(vec![event]) {
+                    return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
+                }
+            }
+            json_response(
+                200,
+                ApiResponse::ok(approval_response(&result.request, Some(result.accepted))),
+            )
+        }
+        Err(error) => json_response(
+            200,
+            ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
+        ),
+    }
+}
+
 pub(crate) async fn post_approval_heartbeat(
     State(state): State<AppState>,
     body: Bytes,
@@ -674,9 +862,100 @@ pub(crate) async fn post_approval_heartbeat(
     }
 }
 
+fn send_relay_approval_decision(
+    registry_path: &Path,
+    request: &ApprovalRequest,
+    decision: &ApprovalDecisionKind,
+) -> Result<(), String> {
+    let control_ref = request
+        .control_ref
+        .as_ref()
+        .ok_or_else(|| "relay 授权缺少 control_ref，无法回写 Codex".to_string())?;
+    let control_socket = relay_control_socket_from_registry(registry_path, control_ref)?;
+    send_relay_control_approval_decision(
+        &control_socket,
+        &request.id,
+        relay_decision_value(decision),
+    )
+}
+
+fn relay_control_socket_from_registry(
+    registry_path: &Path,
+    control_ref: &ApprovalControlRef,
+) -> Result<String, String> {
+    let registry = read_registry(registry_path)?;
+    registry
+        .sessions
+        .into_iter()
+        .find(|session| session.wrapper_session_id == control_ref.wrapper_session_id)
+        .map(|session| session.control_socket)
+        .ok_or_else(|| {
+            format!(
+                "找不到 niuma-codex managed session：{}",
+                control_ref.wrapper_session_id
+            )
+        })
+}
+
+fn relay_decision_value(decision: &ApprovalDecisionKind) -> &'static str {
+    match decision {
+        ApprovalDecisionKind::Allow => "accept",
+        ApprovalDecisionKind::Deny => "reject",
+    }
+}
+
+#[cfg(unix)]
+fn send_relay_control_approval_decision(
+    control_socket: &str,
+    request_id: &str,
+    decision: &str,
+) -> Result<(), String> {
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(control_socket)
+        .map_err(|error| format!("连接 niuma-codex control socket 失败：{error}"))?;
+    let command = json!({
+        "type": "approval_decision",
+        "request_id": request_id,
+        "decision": decision
+    });
+    // control socket 使用 JSON Lines 协议；末尾换行是服务端 read_line 的结束条件。
+    stream
+        .write_all(format!("{command}\n").as_bytes())
+        .map_err(|error| format!("写入 niuma-codex control socket 失败：{error}"))?;
+    let mut line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .map_err(|error| format!("读取 niuma-codex control socket 响应失败：{error}"))?;
+    let response: serde_json::Value = serde_json::from_str(line.trim_end())
+        .map_err(|error| format!("解析 niuma-codex control socket 响应失败：{error}"))?;
+    if response.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        Ok(())
+    } else {
+        Err(response
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("niuma-codex control socket 回写失败")
+            .to_string())
+    }
+}
+
+#[cfg(not(unix))]
+fn send_relay_control_approval_decision(
+    _control_socket: &str,
+    _request_id: &str,
+    _decision: &str,
+) -> Result<(), String> {
+    Err("niuma-codex relay control 当前仅支持 Unix socket 平台".to_string())
+}
+
 fn build_approval_request(body: ApprovalRequestBody) -> Result<ApprovalRequest, String> {
     let now = Utc::now();
     let channel = parse_approval_channel(body.channel.as_deref())?;
+    let (proxy_status, last_heartbeat_at) = match channel {
+        ApprovalChannel::HookProxy => (ApprovalProxyStatus::Active, Some(now)),
+        ApprovalChannel::NiumaCodexRelay => (ApprovalProxyStatus::None, None),
+    };
     Ok(ApprovalRequest {
         id: required_trimmed(&body.request_id, "request_id")?,
         tool: ToolId::from_id(required_trimmed(&body.tool, "tool")?),
@@ -694,8 +973,8 @@ fn build_approval_request(body: ApprovalRequestBody) -> Result<ApprovalRequest, 
         created_at: now,
         updated_at: now,
         proxy_timeout_seconds: body.timeout_seconds.unwrap_or(600),
-        proxy_status: ApprovalProxyStatus::Active,
-        last_heartbeat_at: Some(now),
+        proxy_status,
+        last_heartbeat_at,
         proxy_lost_at: None,
         channel,
         control_ref: body.control_ref,
@@ -718,6 +997,27 @@ fn approval_event(
 ) -> NiumaEvent {
     let now = Utc::now();
     let approval_ref = approval_ref(&request.id);
+    let interaction = match event_type {
+        EventType::ApprovalRequested => {
+            Some(EventInteractionDetail::niuma_approval(request.id.clone()))
+        }
+        EventType::ApprovalReturnedToCodex => Some(EventInteractionDetail::tool_approval(
+            "请回到 Codex 中同意或拒绝",
+        )),
+        EventType::ApprovalResolved => match request.status {
+            ApprovalStatus::Allowed => Some(EventInteractionDetail::tool_approval(
+                "已同意，等待 Codex 继续",
+            )),
+            ApprovalStatus::Denied => Some(EventInteractionDetail::tool_approval(
+                "已拒绝，等待 Codex 继续",
+            )),
+            ApprovalStatus::ResolvedInTool => {
+                Some(EventInteractionDetail::tool_approval("已在 Codex 中处理"))
+            }
+            ApprovalStatus::Pending | ApprovalStatus::ReturnedToCodex => None,
+        },
+        _ => None,
+    };
     NiumaEvent {
         id: format!(
             "event_{}_{}_{}",
@@ -749,6 +1049,7 @@ fn approval_event(
         completion_reason: None,
         failure_reason: None,
         payload_ref: Some(approval_ref),
+        interaction,
         created_at: now,
     }
 }
@@ -782,7 +1083,9 @@ fn decision_value_for_status(status: &ApprovalStatus) -> serde_json::Value {
     match status {
         ApprovalStatus::Allowed => json!("allow"),
         ApprovalStatus::Denied => json!("deny"),
-        ApprovalStatus::Pending | ApprovalStatus::ReturnedToCodex => serde_json::Value::Null,
+        ApprovalStatus::Pending
+        | ApprovalStatus::ReturnedToCodex
+        | ApprovalStatus::ResolvedInTool => serde_json::Value::Null,
     }
 }
 
@@ -800,7 +1103,11 @@ fn parse_approval_status(value: &str) -> Result<ApprovalStatus, String> {
         "allowed" => Ok(ApprovalStatus::Allowed),
         "denied" => Ok(ApprovalStatus::Denied),
         "returned_to_codex" => Ok(ApprovalStatus::ReturnedToCodex),
-        _ => Err("status 仅支持 pending、allowed、denied 或 returned_to_codex".to_string()),
+        "resolved_in_tool" => Ok(ApprovalStatus::ResolvedInTool),
+        _ => Err(
+            "status 仅支持 pending、allowed、denied、returned_to_codex 或 resolved_in_tool"
+                .to_string(),
+        ),
     }
 }
 
@@ -843,4 +1150,105 @@ fn sanitize_event_id_part(value: &str) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use niuma_core::codex_managed_session::{
+        update_registry, ManagedCodexSession, ManagedCodexSessionState,
+    };
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn relay_control_socket_is_loaded_from_registry() {
+        let dir = unique_test_dir("relay_control_socket_registry");
+        fs::create_dir_all(&dir).unwrap();
+        let registry_path = dir.join("codex.json");
+        update_registry(&registry_path, |registry| {
+            registry.upsert(managed_session("wrapper-1", "/tmp/control.sock"));
+        })
+        .unwrap();
+        let control_ref = ApprovalControlRef {
+            wrapper_session_id: "wrapper-1".to_string(),
+            codex_session_id: Some("codex-session-1".to_string()),
+            relay_request_id: "7".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+        };
+
+        let socket = relay_control_socket_from_registry(&registry_path, &control_ref).unwrap();
+
+        assert_eq!(socket, "/tmp/control.sock");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relay_control_decision_sends_json_line_command() {
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+        use std::thread;
+
+        let dir = unique_test_dir("relay_control_socket_send");
+        fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("control.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            tx.send(line).unwrap();
+            stream.write_all(b"{\"ok\":true}\n").unwrap();
+        });
+
+        send_relay_control_approval_decision(
+            socket_path.to_str().unwrap(),
+            "codex-relay:wrapper:turn:item",
+            "accept",
+        )
+        .unwrap();
+
+        let line = rx.recv().unwrap();
+        let command: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(command["type"], "approval_decision");
+        assert_eq!(command["request_id"], "codex-relay:wrapper:turn:item");
+        assert_eq!(command["decision"], "accept");
+        handle.join().unwrap();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn managed_session(wrapper_session_id: &str, control_socket: &str) -> ManagedCodexSession {
+        ManagedCodexSession {
+            wrapper_session_id: wrapper_session_id.to_string(),
+            state: ManagedCodexSessionState::Bound,
+            cwd: "/tmp/demo".to_string(),
+            pid: Some(42),
+            real_socket: "/tmp/real.sock".to_string(),
+            relay_socket: "/tmp/relay.sock".to_string(),
+            control_socket: control_socket.to_string(),
+            started_at: Utc::now(),
+            first_user_message_hash: None,
+            first_user_message_preview: None,
+            first_user_message_submitted_at: None,
+            codex_session_id: Some("codex-session-1".to_string()),
+            codex_session_file_path: None,
+            bound_at: Some(Utc::now()),
+            binding_failure_reason: None,
+        }
+    }
+
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let short_name = name.chars().take(8).collect::<String>();
+        std::path::PathBuf::from("/tmp").join(format!("na-{short_name}-{nanos}"))
+    }
 }

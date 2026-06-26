@@ -12,6 +12,9 @@ pub(crate) enum Command {
     Doctor,
     Status { tool: Option<ToolArg> },
     Codex(CodexCommand),
+    CodexSessions,
+    CodexSend(CodexSendCommand),
+    CodexInterrupt(CodexInterruptCommand),
     Hook(HookCommand),
     Internal(InternalRootCommand),
     SampleEvent,
@@ -25,6 +28,18 @@ pub(crate) enum Command {
 pub(crate) struct CodexCommand {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct CodexSendCommand {
+    pub(crate) wrapper_session_id: String,
+    #[arg(allow_hyphen_values = true)]
+    pub(crate) message: String,
+}
+
+#[derive(Args)]
+pub(crate) struct CodexInterruptCommand {
+    pub(crate) wrapper_session_id: String,
 }
 
 #[derive(Args)]
@@ -111,5 +126,47 @@ mod tests {
             parse_codex_args(&["niuma", "codex", "-V"]),
             vec!["-V".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_codex_sessions_as_top_level_command() {
+        let cli = Cli::try_parse_from(["niuma", "codex-sessions"]).unwrap();
+
+        assert!(matches!(cli.command.unwrap(), Command::CodexSessions));
+    }
+
+    #[test]
+    fn parses_codex_send_with_session_and_message() {
+        let cli = Cli::try_parse_from(["niuma", "codex-send", "niuma_codex_1", "继续"]).unwrap();
+
+        match cli.command.unwrap() {
+            Command::CodexSend(command) => {
+                assert_eq!(command.wrapper_session_id, "niuma_codex_1");
+                assert_eq!(command.message, "继续");
+            }
+            _ => panic!("expected codex-send command"),
+        }
+    }
+
+    #[test]
+    fn parses_codex_send_message_that_starts_with_hyphen() {
+        let cli = Cli::try_parse_from(["niuma", "codex-send", "niuma_codex_1", "--继续"]).unwrap();
+
+        match cli.command.unwrap() {
+            Command::CodexSend(command) => assert_eq!(command.message, "--继续"),
+            _ => panic!("expected codex-send command"),
+        }
+    }
+
+    #[test]
+    fn parses_codex_interrupt_with_session() {
+        let cli = Cli::try_parse_from(["niuma", "codex-interrupt", "niuma_codex_1"]).unwrap();
+
+        match cli.command.unwrap() {
+            Command::CodexInterrupt(command) => {
+                assert_eq!(command.wrapper_session_id, "niuma_codex_1");
+            }
+            _ => panic!("expected codex-interrupt command"),
+        }
     }
 }

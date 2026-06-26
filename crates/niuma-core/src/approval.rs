@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 
-use crate::models::{ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus};
+use crate::models::{
+    ApprovalChannel, ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovalMutationResult {
@@ -78,6 +80,33 @@ pub fn return_to_codex(
     })
 }
 
+pub fn resolve_in_tool(
+    requests: &mut [ApprovalRequest],
+    request_id: &str,
+    resolved_by: &str,
+    reason: Option<String>,
+    now: DateTime<Utc>,
+) -> Result<ApprovalMutationResult, String> {
+    let request = find_request_mut(requests, request_id)?;
+    if request.status != ApprovalStatus::Pending {
+        return Ok(ApprovalMutationResult {
+            accepted: false,
+            request: request.clone(),
+        });
+    }
+
+    request.status = ApprovalStatus::ResolvedInTool;
+    request.decided_by = Some(resolved_by.to_string());
+    request.decided_source = Some("tool_resolved".to_string());
+    request.reason = reason;
+    request.updated_at = now;
+
+    Ok(ApprovalMutationResult {
+        accepted: true,
+        request: request.clone(),
+    })
+}
+
 pub fn heartbeat_proxy(
     requests: &mut [ApprovalRequest],
     request_id: &str,
@@ -112,6 +141,9 @@ pub fn return_stale_proxies_to_codex(
         .filter_map(|request| {
             let last_seen = request.last_heartbeat_at?;
             if request.status != ApprovalStatus::Pending {
+                return None;
+            }
+            if request.channel != ApprovalChannel::HookProxy {
                 return None;
             }
             if request.proxy_status != ApprovalProxyStatus::Active {

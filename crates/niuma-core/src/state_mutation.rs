@@ -346,6 +346,7 @@ mod tests {
             completion_reason: None,
             failure_reason: None,
             payload_ref: None,
+            interaction: None,
             created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
         }
     }

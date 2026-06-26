@@ -469,7 +469,166 @@ Runtime overlay rules:
 
 If query parameters have invalid types, the stream endpoint returns the standard error envelope before establishing SSE, for example `HTTP 400` with `code = 100003`. If page bounds fail business validation, it returns `HTTP 200` with a non-zero business code.
 
-`session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`.
+`session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`. The built-in Codex provider filters automatically injected context such as `AGENTS.md` instructions and environment context from `messages`; these entries also do not count as `first_user_message_preview`.
+
+If a session was started through managed `niuma codex` and has been bound to the native Codex session, `session_detail` returns controllability in `data.control`. Mobile clients, trusted LAN helper panels, and external consoles should read this field to decide whether resume or interrupt is supported. Do not hard-code control support from the tool name alone.
+
+Example `control` field:
+
+```json
+{
+  "available": true,
+  "provider": "niuma_codex",
+  "wrapper_session_id": "niuma_codex_xxx",
+  "capabilities": [
+    "answer_input",
+    "approve",
+    "reject",
+    "send_instruction",
+    "interrupt"
+  ],
+  "actions": [
+    {
+      "type": "answer_input",
+      "transport": "local_api",
+      "endpoint": "/api/v1/session-control/answer-input",
+      "debug_command": null
+    },
+    {
+      "type": "send_instruction",
+      "transport": "local_api",
+      "endpoint": "/api/v1/session-control/send-instruction",
+      "debug_command": "niuma codex-send niuma_codex_xxx \"Continue\""
+    },
+    {
+      "type": "interrupt",
+      "transport": "local_api",
+      "endpoint": "/api/v1/session-control/interrupt",
+      "debug_command": "niuma codex-interrupt niuma_codex_xxx"
+    }
+  ]
+}
+```
+
+Field notes:
+
+| Field | Description |
+| --- | --- |
+| `available` | Whether this session is currently controllable through a Niuma control channel. |
+| `provider` | Control-channel provider. Managed Codex sessions use `niuma_codex`. |
+| `wrapper_session_id` | The `niuma codex` wrapper session ID. Control calls must pass it together with `session_id`. |
+| `capabilities` | Supported control capabilities. `answer_input`, `approve`, and `reject` mean Niuma can handle waiting input and approval for this session; `send_instruction` and `interrupt` mean the session supports active resume and interrupt. |
+| `actions` | Recommended invocation methods. Mobile clients and external panels should use the `endpoint` where `transport = local_api`; `debug_command` is for local terminal troubleshooting only. |
+
+Send a new instruction:
+
+```http
+POST /api/v1/session-control/send-instruction
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "tool": "codex",
+  "session_id": "codex-session-id",
+  "wrapper_session_id": "niuma_codex_xxx",
+  "content": "Continue"
+}
+```
+
+Successful response:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "sent": true,
+    "wrapper_session_id": "niuma_codex_xxx",
+    "result": {}
+  }
+}
+```
+
+Answer a waiting input request:
+
+```http
+POST /api/v1/session-control/answer-input
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "tool": "codex",
+  "session_id": "codex-session-id",
+  "wrapper_session_id": "niuma_codex_xxx",
+  "request_id": "codex-input:niuma_codex_xxx:9",
+  "answers": {
+    "app_form": ["Tray resident (Recommended)"]
+  }
+}
+```
+
+Successful response:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "answered": true,
+    "wrapper_session_id": "niuma_codex_xxx",
+    "request_id": "codex-input:niuma_codex_xxx:9",
+    "state_cleared": true,
+    "result": {}
+  }
+}
+```
+
+`answers` uses `Record<string, string[]>`. Each key must come from `interaction.schema.questions[].id` on the waiting input event. For option questions, submit the selected option `label`; for free-text questions, submit the entered text. Empty objects or empty arrays return a business failure.
+
+Interrupt the current turn:
+
+```http
+POST /api/v1/session-control/interrupt
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "tool": "codex",
+  "session_id": "codex-session-id",
+  "wrapper_session_id": "niuma_codex_xxx"
+}
+```
+
+Successful response:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "interrupted": true,
+    "wrapper_session_id": "niuma_codex_xxx",
+    "result": {}
+  }
+}
+```
+
+Control endpoint rules:
+
+- The current implementation supports only `tool = "codex"` sessions controlled by `provider = "niuma_codex"`.
+- `session_id` and `wrapper_session_id` must point to the same bound managed session in the registry. Mismatches return a business failure.
+- The managed session must be bound and its process must still be alive. Expired sessions, exited sessions, or unavailable control sockets return a business failure.
+- Business failures use the standard envelope, usually `HTTP 200` with `code = 100101`; callers must inspect `code` and `message`.
+- Waiting input events can submit structured answers through `interaction.endpoint = "/api/v1/session-control/answer-input"`. Approval still uses the existing `/api/v1/approval-decisions` flow. `send_instruction` and `interrupt` are only for active resume and interruption.
 
 `session_detail/stream` provides an SSE snapshot stream for one exact session:
 
@@ -652,10 +811,8 @@ Request body:
       "summary": "Bash: cargo test",
       "content": "Bash: cargo test",
       "error_message": null,
-      "attention_resolve_key": null,
       "completion_reason": null,
       "failure_reason": null,
-      "payload_ref": null,
       "created_at": "2026-06-18T12:00:00Z"
     }
   ]
@@ -707,10 +864,9 @@ Constraints:
 | `summary` | Yes | Short summary. |
 | `content` | No | Displayable body text or command content. |
 | `error_message` | No | Error detail, preferred for error states. |
-| `attention_resolve_key` | No | Used to precisely clear waiting approval or waiting input attention items. |
 | `completion_reason` | No | Completion reason. |
 | `failure_reason` | No | Failure reason. |
-| `payload_ref` | No | Reference to a large payload. The main app currently stores the reference only and does not read the payload. |
+| `interaction` | No | Interaction details for waiting approval/input events. Consumers must use this field to decide whether and how the event can be handled. |
 | `created_at` | Yes | Event occurrence time in RFC 3339 / ISO 8601 format. |
 
 Supported `event_type` values:
@@ -728,6 +884,45 @@ Supported `event_type` values:
 | `manual_dismissed` | Manually dismissed. State becomes `completed` and attention items are cleared. |
 | `session_staled` | Session became stale. Internal cleanup state. |
 | `session_activity` | Normal activity. State becomes `running`. |
+
+`interaction` describes whether a waiting event can be handled by a consumer:
+
+| Field | Description |
+| --- | --- |
+| `kind` | Interaction kind: `approval` or `input`. |
+| `handling` | Handling owner: `niuma` means it can be handled through the Niuma API, `tool` means the user must return to the original tool, and `none` means display-only. |
+| `actionable` | Whether the consumer may show action controls. |
+| `request_id` | Request ID when `actionable=true`. |
+| `actions` | Available actions, for example `allow` and `deny` for approvals. |
+| `endpoint` | Local API endpoint for submitting the action. |
+| `schema` | Optional structured input schema. For Niuma-handled `kind = "input"` events, it contains `questions`. |
+| `message` | User-facing instruction when the event is not actionable. |
+
+Consumer rules:
+
+- When `interaction.actionable = true`, render controls from `interaction.actions` and submit them to `interaction.endpoint`.
+- When `interaction.kind = "input"`, `interaction.handling = "niuma"`, and `interaction.actionable = true`, consumers may render `interaction.schema.questions` and submit `answers: Record<string, string[]>` to `interaction.endpoint`.
+- When `interaction.actionable = false`, show `interaction.message` only; do not show allow/deny or submit controls.
+- `payload_ref` and `attention_resolve_key` are host-internal correlation/cleanup fields and are not part of the approval handling contract.
+
+Example `interaction.schema.questions`:
+
+```json
+{
+  "questions": [
+    {
+      "id": "app_form",
+      "question": "How should this app primarily run?",
+      "options": [
+        {
+          "label": "Tray resident (Recommended)",
+          "description": "Runs in the background and is suitable for long-running monitoring."
+        }
+      ]
+    }
+  ]
+}
+```
 
 Supported `completion_reason` values:
 
@@ -882,18 +1077,19 @@ Approval handling plugin manifest example:
 ```text
 event: event
 id: event-approval-1
-data: {"id":"event-approval-1","dedupe_key":"approval:codex:s1:t1:Bash:abc123","source":"codex-hook","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"attention_resolve_key":"approval:codex:s1:t1:Bash:abc123","payload_ref":"approval:codex:s1:t1:Bash:abc123","created_at":"2026-06-18T12:00:00Z"}
+data: {"id":"event-approval-1","dedupe_key":"approval_requested:codex:s1:t1:Bash:abc123","source":"approval-api","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"interaction":{"kind":"approval","handling":"niuma","actionable":true,"request_id":"codex:s1:t1:Bash:abc123","actions":["allow","deny"],"endpoint":"/api/v1/approval-decisions"},"created_at":"2026-06-18T12:00:00Z"}
 ```
 
-The event `payload_ref` and `attention_resolve_key` use the `approval:<request_id>` format. Consumers should parse `payload_ref` first; if it is empty, parse `attention_resolve_key`. Events without the `approval:` prefix must not be treated as approval requests.
+Consumers must use `interaction` to decide whether the event can be handled. Show approval actions only when `interaction.handling = "niuma"` and `interaction.actionable = true`, then submit decisions with `interaction.request_id`.
 
 Parsing example:
 
 ```js
-function approvalRequestId(event) {
-  // Prefer payload_ref and fall back to attention_resolve_key.
-  const value = event.payload_ref || event.attention_resolve_key || ''
-  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+function approvalInteraction(event) {
+  const interaction = event.interaction
+  if (event.event_type !== 'approval_requested') return null
+  if (interaction?.kind !== 'approval') return null
+  return interaction
 }
 ```
 
@@ -918,7 +1114,7 @@ Field rules:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `request_id` | Yes | Approval request ID parsed from `approval:<request_id>`. |
+| `request_id` | Yes | Use `interaction.request_id` from the approval event. |
 | `decision` | Yes | `allow` or `deny`. |
 | `decided_by` | Yes | Recommended value is the `NIUMA_PLUGIN_ID` environment variable. |
 | `decided_source` | Yes | Recommended stable source labels include `plugin`, `notification`, `menu_bar`, `webhook`, or `mobile`. |
@@ -1057,10 +1253,12 @@ if (!apiUrl || !pluginId) {
   throw new Error('NIUMA_LOCAL_API_URL and NIUMA_PLUGIN_ID are required')
 }
 
-function approvalRequestId(event) {
-  // Approval events expose the request ID through approval:<request_id>.
-  const value = event.payload_ref || event.attention_resolve_key || ''
-  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+function approvalInteraction(event) {
+  const interaction = event.interaction
+  if (event.event_type !== 'approval_requested') return null
+  if (interaction?.kind !== 'approval') return null
+  if (interaction.handling !== 'niuma' || !interaction.actionable) return null
+  return interaction
 }
 
 async function decide(requestId, decision) {
@@ -1098,11 +1296,10 @@ async function connect() {
     if (currentEventName !== 'event' || currentDataLines.length === 0) return
     const dataText = currentDataLines.join('\n')
     const event = JSON.parse(dataText)
-    if (event.event_type !== 'approval_requested') return
-    const requestId = approvalRequestId(event)
-    if (!requestId) return
+    const interaction = approvalInteraction(event)
+    if (!interaction?.request_id) return
     console.log(`[approval] ${event.project_name}: ${event.summary}`)
-    console.log(`Call decide("${requestId}", "allow") or decide("${requestId}", "deny")`)
+    console.log(`Call decide("${interaction.request_id}", "allow") or decide("${interaction.request_id}", "deny")`)
   }
 
   function resetCurrentFrame() {
@@ -1168,7 +1365,7 @@ Main state event format:
 ```text
 event: state
 id: 12
-data: {"version":12,"status":"waiting_approval","updated_at":"2026-06-18T12:00:00Z","session":{"id":"session-1","tool":"codex","project_name":"repo","project_path":"/repo"},"detail":{"event_id":"event-1","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"payload_ref":null,"completion_reason":null,"failure_reason":null}}
+data: {"version":12,"status":"waiting_approval","updated_at":"2026-06-18T12:00:00Z","session":{"id":"session-1","tool":"codex","project_name":"repo","project_path":"/repo"},"detail":{"event_id":"event-1","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"interaction":{"kind":"approval","handling":"niuma","actionable":true,"request_id":"codex:s1:t1:Bash:abc123","actions":["allow","deny"],"endpoint":"/api/v1/approval-decisions"},"completion_reason":null,"failure_reason":null}}
 ```
 
 Supported `status` values:
@@ -1185,7 +1382,7 @@ error
 Consumption constraints:
 
 - `/api/v1/state/stream` sends the current main state snapshot immediately after connection, then sends updates only when the main state content changes.
-- `/api/v1/state/stream` and `/api/v1/main-state` are for display state only. They must not trigger approval interaction UI.
+- `/api/v1/state/stream` and `/api/v1/main-state` are primarily display-state APIs and may include the current blocker's `interaction` snapshot. Real-time approval popups should still be triggered by `/api/v1/events/stream`.
 - Status indicator plugins should not report events, write notification history, or write NiumaNotifier persistent files directly.
 - Display should be based on `status`. Do not infer main state from plugin ID, raw tool logs, or `event_type`.
 - Plugins can use `NIUMA_PLUGIN_DATA_DIR` to save local runtime state such as window position or display style.
@@ -1471,7 +1668,7 @@ GET /api/v1/state/stream
 GET /api/v1/main-state
 ```
 
-Do not infer main state from plugin ID, raw tool logs, or `event_type`. Approval interaction belongs to `/api/v1/events/stream` and must be triggered by `approval_requested`, not by display-state APIs.
+Do not infer main state from plugin ID, raw tool logs, or `event_type`. Approval popup triggers belong to `/api/v1/events/stream` and should be driven by `approval_requested`; display-state APIs are for recovery or rendering the current snapshot.
 
 ## Development Checklist
 

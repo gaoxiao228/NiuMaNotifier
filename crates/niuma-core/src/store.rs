@@ -240,6 +240,7 @@ impl NiumaStore {
                     completion_reason: None,
                     failure_reason: None,
                     payload_ref: None,
+                    interaction: None,
                     created_at: now,
                 }
             })
@@ -381,6 +382,26 @@ impl NiumaStore {
             request_id,
             returned_by,
             returned_source,
+            reason,
+            now,
+        )?;
+        runtime.state = state;
+        Ok(result)
+    }
+
+    pub fn resolve_approval_in_tool(
+        &self,
+        request_id: &str,
+        resolved_by: &str,
+        reason: Option<String>,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<crate::approval::ApprovalMutationResult, String> {
+        let mut runtime = self.runtime()?;
+        let mut state = runtime.state.clone();
+        let result = crate::approval::resolve_in_tool(
+            &mut state.approval_requests,
+            request_id,
+            resolved_by,
             reason,
             now,
         )?;
@@ -594,6 +615,7 @@ impl NiumaStore {
             completion_reason: None,
             failure_reason: None,
             payload_ref: None,
+            interaction: None,
             created_at: now,
         };
         state.attention_items.clear();

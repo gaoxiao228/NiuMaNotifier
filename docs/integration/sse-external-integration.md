@@ -37,6 +37,10 @@ You can override the bind address with `NIUMA_LOCAL_API_ADDR`. LAN or external a
 | Real-time event SSE | `GET` | `/api/v1/events/stream` | `text/event-stream` | Experimental |
 | Query current main state | `GET` | `/api/v1/main-state` | JSON envelope | Stable |
 | Reset local state | `POST` | `/api/v1/state/reset` | JSON envelope | Stable |
+| Query session detail and control capabilities | `GET` | `/api/v1/session_detail` | JSON envelope | Experimental |
+| Send an instruction to a managed Codex session | `POST` | `/api/v1/session-control/send-instruction` | JSON envelope | Experimental |
+| Answer managed Codex waiting input | `POST` | `/api/v1/session-control/answer-input` | JSON envelope | Experimental |
+| Interrupt a managed Codex turn | `POST` | `/api/v1/session-control/interrupt` | JSON envelope | Experimental |
 
 SSE is the streaming-protocol exception and does not use the unified JSON envelope. Regular HTTP JSON endpoints use:
 
@@ -57,6 +61,8 @@ Common error codes:
 | `100101` | Business validation failed | The reset `confirm` value is incorrect. |
 | `900001` | System error | Reading or calculating local state failed. |
 | `900005` | Route not found | The request path is not registered. |
+
+`session_detail` exposes `data.control` when the current session can be resumed or interrupted through `niuma_codex`. External panels should read that field before calling the matching `session-control` endpoint. See the [plugin development guide](./plugin-development.md#tool-session-reading) for request and response details. For terminal startup, session troubleshooting, and waiting-input handling, see [Managed niuma codex Sessions](./niuma-codex-managed.md).
 
 ## Main-State SSE Stream
 
@@ -117,6 +123,20 @@ data: {"id":"event-1","tool":"codex","session_id":"s1","project_path":"/repo","p
 
 Codex subagent events may include `parent_session_id`. `session_id` always identifies the actual session that produced the event; `parent_session_id` only describes the parent relationship and should not be treated as the event session ID.
 
+Waiting approval or waiting input events may include an `interaction` field. Consumers must use `interaction.actionable`, `interaction.handling`, `interaction.actions`, `interaction.endpoint`, and `interaction.request_id` to decide whether and how the event can be handled.
+
+When an `input_requested` event has `interaction.kind = "input"`, `interaction.handling = "niuma"`, and `interaction.actionable = true`, external panels may render `interaction.schema.questions` and submit `answers: Record<string, string[]>` to `interaction.endpoint`, currently `/api/v1/session-control/answer-input`. Regular JSON responses still use the standard `{ "code": 0, "message": "ok", "data": {} }` envelope; business failures are represented by a non-zero `code`.
+
+Example of an approval event that can be handled through NiumaNotifier:
+
+```text
+event: event
+id: event-approval-1
+data: {"id":"event-approval-1","tool":"codex","session_id":"s1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","interaction":{"kind":"approval","handling":"niuma","actionable":true,"request_id":"codex:s1:t1:Bash:abc123","actions":["allow","deny"],"endpoint":"/api/v1/approval-decisions"},"created_at":"2026-06-19T12:00:00Z"}
+```
+
+Waiting events that can only be handled inside the tool use `handling: "tool"` and `actionable: false`, such as watcher fallback approvals or current input requests. External systems should show `interaction.message` and must not render allow, deny, or submit controls.
+
 ## Main-State Fields
 
 `data` is a `MainStatePayload`:
@@ -150,7 +170,14 @@ Codex subagent events may include `parent_session_id`. `session_id` always ident
   "summary": "Bash: cargo test",
   "content": "Bash: cargo test",
   "error_message": null,
-  "payload_ref": null,
+  "interaction": {
+    "kind": "approval",
+    "handling": "niuma",
+    "actionable": true,
+    "request_id": "codex:s1:t1:Bash:abc123",
+    "actions": ["allow", "deny"],
+    "endpoint": "/api/v1/approval-decisions"
+  },
   "completion_reason": null,
   "failure_reason": null
 }
@@ -166,11 +193,11 @@ Codex subagent events may include `parent_session_id`. `session_id` always ident
 | `summary` | string | Short user-facing summary. |
 | `content` | string/null | Displayable body or command content. |
 | `error_message` | string/null | Error detail. Prefer this field when `status` is `error`. |
-| `payload_ref` | string/null | Optional reference to a larger payload. |
+| `interaction` | object/null | Interaction capability snapshot for the current waiting approval/input item. Use it as the UI action contract. |
 | `completion_reason` | string/null | Completion reason. |
 | `failure_reason` | string/null | Failure reason. |
 
-External systems should use `status` directly to determine the main state. Do not infer the main state from `event_type`.
+External systems should use `status` directly to determine the main state. Do not infer the main state from `event_type`. `detail.interaction` is the display snapshot for the current blocker; for real-time approval popups or decisions, subscribe to `/api/v1/events/stream` and consume the event's own `interaction`.
 
 ## Status Semantics
 

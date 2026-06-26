@@ -333,6 +333,91 @@ select {
   margin-top: 14px;
 }
 
+.input-response-form {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.input-question {
+  border: 1px solid #d5e0ee;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+  padding: 12px;
+}
+
+.input-question legend {
+  color: #17213a;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.input-question p {
+  color: #17213a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.input-question small {
+  color: #53627a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.input-option {
+  align-items: start;
+  color: #17213a;
+  display: grid;
+  gap: 4px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  line-height: 1.45;
+  min-width: 0;
+  width: 100%;
+}
+
+.input-option input {
+  margin-top: 3px;
+}
+
+.input-option span {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.input-option small {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.input-option textarea,
+.input-question > textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: #17213a;
+  font: inherit;
+  line-height: 1.4;
+  min-height: 72px;
+  min-width: 0;
+  padding: 8px 10px;
+  resize: vertical;
+  width: 100%;
+}
+
+.input-option textarea {
+  grid-column: 2;
+}
+
 .approval-action {
   min-height: 36px;
   min-width: 76px;

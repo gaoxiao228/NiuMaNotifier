@@ -469,7 +469,166 @@ data: {"list":[{"tool":"codex","project_path":"/repo","project_name":"repo","nor
 
 如果查询参数类型不合法，stream 接口会在建立 SSE 前返回标准错误 envelope，例如 `HTTP 400` 且 `code = 100003`。如果分页范围触发业务校验失败，则返回 `HTTP 200` 加非 0 业务错误码。
 
-`session_detail` 按 `tool + session_id` 读取归一化消息详情。`messages` 倒序返回，`messages[0]` 是本页最新消息；`next_cursor` 用于继续读取更旧消息。第一版支持的消息角色包括 `user`、`assistant`、`system`、`tool_call`、`tool_result`、`event` 和 `unknown`。
+`session_detail` 按 `tool + session_id` 读取归一化消息详情。`messages` 倒序返回，`messages[0]` 是本页最新消息；`next_cursor` 用于继续读取更旧消息。第一版支持的消息角色包括 `user`、`assistant`、`system`、`tool_call`、`tool_result`、`event` 和 `unknown`。内置 Codex provider 会过滤自动注入上下文，例如 `AGENTS.md` 指令和 environment context；这些内容也不会参与 `first_user_message_preview` 计算。
+
+如果某个 session 是通过 `niuma codex` 托管启动并已绑定到 Codex 原生 session，`session_detail` 会在 `data.control` 返回可控制能力。移动端、局域网辅助面板或外部控制台应优先读取这个字段判断是否支持续写或中断，不要根据工具名称硬编码能力。
+
+`control` 字段示例：
+
+```json
+{
+  "available": true,
+  "provider": "niuma_codex",
+  "wrapper_session_id": "niuma_codex_xxx",
+  "capabilities": [
+    "answer_input",
+    "approve",
+    "reject",
+    "send_instruction",
+    "interrupt"
+  ],
+  "actions": [
+    {
+      "type": "answer_input",
+      "transport": "local_api",
+      "endpoint": "/api/v1/session-control/answer-input",
+      "debug_command": null
+    },
+    {
+      "type": "send_instruction",
+      "transport": "local_api",
+      "endpoint": "/api/v1/session-control/send-instruction",
+      "debug_command": "niuma codex-send niuma_codex_xxx \"继续\""
+    },
+    {
+      "type": "interrupt",
+      "transport": "local_api",
+      "endpoint": "/api/v1/session-control/interrupt",
+      "debug_command": "niuma codex-interrupt niuma_codex_xxx"
+    }
+  ]
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `available` | 当前 session 是否可通过 Niuma 控制通道处理。 |
+| `provider` | 控制通道来源。当前 Codex 托管会话使用 `niuma_codex`。 |
+| `wrapper_session_id` | `niuma codex` 包装层会话 ID。调用控制接口时必须和 `session_id` 一起传入。 |
+| `capabilities` | 可处理能力。`answer_input`、`approve`、`reject` 表示该 session 支持通过 Niuma 处理等待输入和授权；`send_instruction`、`interrupt` 表示支持主动续写和中断。 |
+| `actions` | 推荐调用方式。移动端和外部面板应使用 `transport = local_api` 的 `endpoint`；`debug_command` 仅用于本机终端排查。 |
+
+主动续写接口：
+
+```http
+POST /api/v1/session-control/send-instruction
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "tool": "codex",
+  "session_id": "codex-session-id",
+  "wrapper_session_id": "niuma_codex_xxx",
+  "content": "继续"
+}
+```
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "sent": true,
+    "wrapper_session_id": "niuma_codex_xxx",
+    "result": {}
+  }
+}
+```
+
+回答等待输入接口：
+
+```http
+POST /api/v1/session-control/answer-input
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "tool": "codex",
+  "session_id": "codex-session-id",
+  "wrapper_session_id": "niuma_codex_xxx",
+  "request_id": "codex-input:niuma_codex_xxx:9",
+  "answers": {
+    "app_form": ["托盘常驻 (Recommended)"]
+  }
+}
+```
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "answered": true,
+    "wrapper_session_id": "niuma_codex_xxx",
+    "request_id": "codex-input:niuma_codex_xxx:9",
+    "state_cleared": true,
+    "result": {}
+  }
+}
+```
+
+`answers` 使用 `Record<string, string[]>` 结构，key 必须来自等待输入事件的 `interaction.schema.questions[].id`。有选项的问题提交所选 `label`，自由文本问题提交用户输入文本。空对象或空数组会返回业务失败。
+
+中断接口：
+
+```http
+POST /api/v1/session-control/interrupt
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "tool": "codex",
+  "session_id": "codex-session-id",
+  "wrapper_session_id": "niuma_codex_xxx"
+}
+```
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "interrupted": true,
+    "wrapper_session_id": "niuma_codex_xxx",
+    "result": {}
+  }
+}
+```
+
+控制接口规则：
+
+- 当前只支持 `tool = "codex"` 且 `provider = "niuma_codex"` 的托管会话。
+- `session_id` 必须和 `wrapper_session_id` 在托管会话 registry 中绑定到同一个会话；不匹配时返回业务失败。
+- 会话必须处于已绑定且进程仍存活状态；过期、退出或 control socket 不可用时返回业务失败。
+- 业务失败遵循统一 envelope，通常是 `HTTP 200` 加 `code = 100101`，调用方必须读取 `code` 和 `message`。
+- 等待输入事件可通过 `interaction.endpoint = "/api/v1/session-control/answer-input"` 提交结构化答案；授权仍复用现有 `/api/v1/approval-decisions` 流程；`send_instruction` 和 `interrupt` 只负责主动续写和中断。
 
 `session_detail/stream` 为单个明确 session 提供 SSE 快照流：
 
@@ -652,10 +811,8 @@ Content-Type: application/json
       "summary": "Bash: cargo test",
       "content": "Bash: cargo test",
       "error_message": null,
-      "attention_resolve_key": null,
       "completion_reason": null,
       "failure_reason": null,
-      "payload_ref": null,
       "created_at": "2026-06-18T12:00:00Z"
     }
   ]
@@ -707,10 +864,9 @@ Content-Type: application/json
 | `summary` | 是 | 短摘要。 |
 | `content` | 否 | 可展示正文或命令内容。 |
 | `error_message` | 否 | 错误详情，失败态优先展示。 |
-| `attention_resolve_key` | 否 | 用于精确清理等待授权/输入等关注项。 |
 | `completion_reason` | 否 | 完成原因。 |
 | `failure_reason` | 否 | 失败原因。 |
-| `payload_ref` | 否 | 大 payload 引用。当前主程序只保存引用，不读取内容。 |
+| `interaction` | 否 | 等待授权/等待输入等交互信息。消费者必须用它判断是否可处理以及如何处理。 |
 | `created_at` | 是 | 事件发生时间，RFC 3339 / ISO 8601 格式。 |
 
 `event_type` 支持：
@@ -728,6 +884,45 @@ Content-Type: application/json
 | `manual_dismissed` | 手动忽略，状态为 `completed` 并清理关注项。 |
 | `session_staled` | 会话过期，内部清理态。 |
 | `session_activity` | 普通活动，状态为 `running`。 |
+
+`interaction` 用于表达等待类事件是否可由消费者处理：
+
+| 字段 | 说明 |
+| --- | --- |
+| `kind` | 交互类型：`approval` 或 `input`。 |
+| `handling` | 处理归属：`niuma` 表示可通过 Niuma API 处理，`tool` 表示必须回到原工具处理，`none` 表示仅展示。 |
+| `actionable` | 是否允许消费者展示操作按钮。 |
+| `request_id` | `actionable=true` 时的请求 ID。 |
+| `actions` | 可执行动作，例如授权为 `allow`、`deny`。 |
+| `endpoint` | 提交动作的 Local API endpoint。 |
+| `schema` | 可选结构化输入 schema。`kind = "input"` 且可由 Niuma 处理时，包含 `questions`。 |
+| `message` | 不可处理时展示给用户的说明。 |
+
+消费方规则：
+
+- `interaction.actionable = true` 时，按 `interaction.actions` 和 `interaction.endpoint` 展示操作。
+- 当 `interaction.kind = "input"`、`interaction.handling = "niuma"` 且 `interaction.actionable = true` 时，消费方可以渲染 `interaction.schema.questions`，并向 `interaction.endpoint` 提交 `answers: Record<string, string[]>`。
+- `interaction.actionable = false` 时，只展示 `interaction.message`，不要展示同意/拒绝或提交按钮。
+- `payload_ref` 和 `attention_resolve_key` 是宿主内部关联与清理字段，不属于权限处理消费契约。
+
+`interaction.schema.questions` 示例：
+
+```json
+{
+  "questions": [
+    {
+      "id": "app_form",
+      "question": "这个程序你更希望主要以什么形态运行？",
+      "options": [
+        {
+          "label": "托盘常驻 (Recommended)",
+          "description": "跨平台常驻后台，适合长期监控。"
+        }
+      ]
+    }
+  ]
+}
+```
 
 `completion_reason` 支持：
 
@@ -882,18 +1077,19 @@ data: {"test_id":"manual-test:builtin-ntfy:1","plugin_id":"builtin-ntfy","title"
 ```text
 event: event
 id: event-approval-1
-data: {"id":"event-approval-1","dedupe_key":"approval:codex:s1:t1:Bash:abc123","source":"codex-hook","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"attention_resolve_key":"approval:codex:s1:t1:Bash:abc123","payload_ref":"approval:codex:s1:t1:Bash:abc123","created_at":"2026-06-18T12:00:00Z"}
+data: {"id":"event-approval-1","dedupe_key":"approval_requested:codex:s1:t1:Bash:abc123","source":"approval-api","tool":"codex","session_id":"session-1","project_path":"/repo","project_name":"repo","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"interaction":{"kind":"approval","handling":"niuma","actionable":true,"request_id":"codex:s1:t1:Bash:abc123","actions":["allow","deny"],"endpoint":"/api/v1/approval-decisions"},"created_at":"2026-06-18T12:00:00Z"}
 ```
 
-事件的 `payload_ref` 和 `attention_resolve_key` 会使用 `approval:<request_id>` 格式。消费者应优先从 `payload_ref` 解析；如果它为空，再从 `attention_resolve_key` 解析。没有 `approval:` 前缀的事件不能当作授权请求处理。
+消费者必须通过 `interaction` 判断是否可处理。`interaction.handling = "niuma"` 且 `interaction.actionable = true` 时，才展示授权操作，并使用 `interaction.request_id` 提交决策。
 
 解析规则示例：
 
 ```js
-function approvalRequestId(event) {
-  // payload_ref 优先；没有时再使用 attention_resolve_key 兜底。
-  const value = event.payload_ref || event.attention_resolve_key || ''
-  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+function approvalInteraction(event) {
+  const interaction = event.interaction
+  if (event.event_type !== 'approval_requested') return null
+  if (interaction?.kind !== 'approval') return null
+  return interaction
 }
 ```
 
@@ -918,7 +1114,7 @@ Content-Type: application/json
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `request_id` | 是 | 从 `approval:<request_id>` 中解析出的授权请求 ID。 |
+| `request_id` | 是 | 使用授权事件中的 `interaction.request_id`。 |
 | `decision` | 是 | `allow` 或 `deny`。 |
 | `decided_by` | 是 | 推荐使用环境变量 `NIUMA_PLUGIN_ID`。 |
 | `decided_source` | 是 | 推荐使用稳定来源标识，例如 `plugin`、`notification`、`menu_bar`、`webhook`、`mobile`。 |
@@ -1057,10 +1253,12 @@ if (!apiUrl || !pluginId) {
   throw new Error('NIUMA_LOCAL_API_URL 和 NIUMA_PLUGIN_ID 必须存在')
 }
 
-function approvalRequestId(event) {
-  // 授权事件通过 approval:<request_id> 暴露可提交决策的请求 ID。
-  const value = event.payload_ref || event.attention_resolve_key || ''
-  return value.startsWith('approval:') ? value.slice('approval:'.length) : null
+function approvalInteraction(event) {
+  const interaction = event.interaction
+  if (event.event_type !== 'approval_requested') return null
+  if (interaction?.kind !== 'approval') return null
+  if (interaction.handling !== 'niuma' || !interaction.actionable) return null
+  return interaction
 }
 
 async function decide(requestId, decision) {
@@ -1098,11 +1296,10 @@ async function connect() {
     if (currentEventName !== 'event' || currentDataLines.length === 0) return
     const dataText = currentDataLines.join('\n')
     const event = JSON.parse(dataText)
-    if (event.event_type !== 'approval_requested') return
-    const requestId = approvalRequestId(event)
-    if (!requestId) return
+    const interaction = approvalInteraction(event)
+    if (!interaction?.request_id) return
     console.log(`[approval] ${event.project_name}: ${event.summary}`)
-    console.log(`调用 decide("${requestId}", "allow") 或 decide("${requestId}", "deny")`)
+    console.log(`调用 decide("${interaction.request_id}", "allow") 或 decide("${interaction.request_id}", "deny")`)
   }
 
   function resetCurrentFrame() {
@@ -1168,7 +1365,7 @@ Accept: text/event-stream
 ```text
 event: state
 id: 12
-data: {"version":12,"status":"waiting_approval","updated_at":"2026-06-18T12:00:00Z","session":{"id":"session-1","tool":"codex","project_name":"repo","project_path":"/repo"},"detail":{"event_id":"event-1","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"payload_ref":null,"completion_reason":null,"failure_reason":null}}
+data: {"version":12,"status":"waiting_approval","updated_at":"2026-06-18T12:00:00Z","session":{"id":"session-1","tool":"codex","project_name":"repo","project_path":"/repo"},"detail":{"event_id":"event-1","event_type":"approval_requested","severity":"urgent","summary":"Bash: cargo test","content":"Bash: cargo test","error_message":null,"interaction":{"kind":"approval","handling":"niuma","actionable":true,"request_id":"codex:s1:t1:Bash:abc123","actions":["allow","deny"],"endpoint":"/api/v1/approval-decisions"},"completion_reason":null,"failure_reason":null}}
 ```
 
 `status` 支持：
@@ -1185,7 +1382,7 @@ error
 消费约束：
 
 - `/api/v1/state/stream` 连接建立后会先发送一次当前主状态快照，后续仅在主状态内容变化时发送。
-- `/api/v1/state/stream` 和 `/api/v1/main-state` 只用于展示状态，不能触发授权交互 UI。
+- `/api/v1/state/stream` 和 `/api/v1/main-state` 主要用于展示状态，可能包含当前阻塞项的 `interaction` 快照；实时授权弹窗仍应由 `/api/v1/events/stream` 触发。
 - 状态指示插件不应上报事件、不应写通知历史，也不应直接写 NiumaNotifier 的持久化文件。
 - 状态展示应以 `status` 为准；不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。
 - 插件可以使用 `NIUMA_PLUGIN_DATA_DIR` 保存窗口位置、展示样式等本地运行状态。
@@ -1471,7 +1668,7 @@ GET /api/v1/state/stream
 GET /api/v1/main-state
 ```
 
-不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。授权交互属于 `/api/v1/events/stream`，必须由 `approval_requested` 事件触发，不能由展示状态接口触发。
+不要根据插件 ID、工具原始日志或 `event_type` 自行推导主状态。授权弹窗触发属于 `/api/v1/events/stream`，应由 `approval_requested` 事件触发；展示状态接口只适合恢复或展示当前快照。
 
 ## 开发检查清单
 

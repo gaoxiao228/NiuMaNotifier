@@ -93,6 +93,7 @@ fn sample_event(
         completion_reason: None,
         failure_reason: None,
         payload_ref: None,
+        interaction: None,
         created_at,
     }
 }

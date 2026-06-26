@@ -2486,6 +2486,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "libc",
  "niuma-api",
  "niuma-core",
  "serde",
@@ -2517,6 +2518,7 @@ dependencies = [
  "chrono",
  "dirs",
  "fs2",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

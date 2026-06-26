@@ -1,6 +1,9 @@
 use super::*;
 use crate::codex::session_protocol::{detect_session_protocol_family, CodexProtocolFamily};
-use niuma_core::models::{CompletionReason, EventSessionScope, EventType, FailureReason};
+use niuma_core::models::{
+    CompletionReason, EventInteractionHandling, EventInteractionKind, EventSessionScope, EventType,
+    FailureReason,
+};
 use std::io::Write;
 
 #[test]
@@ -420,6 +423,15 @@ fn parses_request_user_input_function_call_as_input_requested() {
         )
     );
     assert_eq!(event.attention_resolve_key, None);
+    let interaction = event
+        .interaction
+        .as_ref()
+        .expect("input_requested 应显式说明交互处理方式");
+    assert_eq!(interaction.kind, EventInteractionKind::Input);
+    assert_eq!(interaction.handling, EventInteractionHandling::Tool);
+    assert!(!interaction.actionable);
+    assert!(interaction.actions.is_empty());
+    assert_eq!(interaction.endpoint, None);
     assert_eq!(
         event.dedupe_key,
         "codex_file:session-123:call-input-1:function_call"
@@ -591,6 +603,15 @@ fn parses_escalated_function_call_as_watcher_fallback_approval() {
             .starts_with("codex_watcher_approval:"),
         "watcher fallback approval 应携带 arbiter 可识别的 payload_ref"
     );
+    let interaction = approval
+        .interaction
+        .as_ref()
+        .expect("watcher fallback approval 应显式说明只能回工具处理");
+    assert_eq!(interaction.kind, EventInteractionKind::Approval);
+    assert_eq!(interaction.handling, EventInteractionHandling::Tool);
+    assert!(!interaction.actionable);
+    assert!(interaction.actions.is_empty());
+    assert_eq!(interaction.endpoint, None);
 
     let resolved = parser
         .parse_line(

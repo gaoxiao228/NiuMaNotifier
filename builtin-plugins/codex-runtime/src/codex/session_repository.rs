@@ -1,17 +1,18 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use niuma_core::codex_managed_session::{
-    first_user_message_hash, read_registry, ManagedCodexRegistry, ManagedCodexSessionState,
+    first_user_message_hash, match_managed_session, read_registry, update_registry, BindingMatch,
+    CodexSessionBindingCandidate, ManagedCodexRegistry, ManagedCodexSessionState,
 };
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{
-    ToolSessionControl, ToolSessionDetail, ToolSessionListItem, ToolSessionMessageRole,
-    ToolSessionStatus,
+    ToolSessionControl, ToolSessionControlAction, ToolSessionDetail, ToolSessionListItem,
+    ToolSessionMessageRole, ToolSessionStatus,
 };
 use niuma_core::tool_session_rpc::SessionDetailParams;
 use serde::Deserialize;
@@ -36,6 +37,8 @@ const SESSION_DAY_DIR_LIMIT: usize = 180;
 const ACTIVE_MODIFIED_WINDOW: Duration = Duration::from_secs(60);
 const PRIME_METADATA_MAX_BYTES: u64 = 64 * 1024;
 const FIRST_USER_MESSAGE_PREVIEW_CHARS: usize = 200;
+const MANAGED_BINDING_WINDOW: chrono::Duration = chrono::Duration::seconds(10);
+const BINDING_DIAGNOSTIC_LOG_PATH: &str = "/tmp/niuma-codex-binding-diagnostic.log";
 
 pub(crate) struct CodexSessionRepository {
     codex_home: PathBuf,
@@ -50,6 +53,7 @@ pub(crate) struct CodexSessionRepository {
 pub(crate) struct SessionIndex {
     pub(crate) list_item: ToolSessionListItem,
     pub(crate) file_index: CodexSessionFileIndex,
+    first_user_message_hash: Option<String>,
 }
 
 pub(crate) struct CodexSnapshotContext {
@@ -119,7 +123,6 @@ struct ParsedSessionFile {
 #[derive(Clone)]
 struct FirstUserMessage {
     preview: String,
-    #[allow(dead_code)]
     hash: String,
     created_at: DateTime<Utc>,
 }
@@ -183,7 +186,7 @@ impl CodexSessionRepository {
         context: CodexSnapshotContext,
     ) -> Result<CodexSnapshotRefresh, String> {
         let now = Utc::now();
-        let managed_registry =
+        let mut managed_registry =
             read_registry(&context.managed_registry_path).unwrap_or_else(|error| {
                 if context.managed_registry_path.exists() {
                     eprintln!("NiumaNotifier Codex managed registry 读取失败：{error}");
@@ -209,9 +212,7 @@ impl CodexSessionRepository {
                     Self::scan_session_file_index(&path, file_signature, now)
                 });
             match result {
-                Ok(mut index) => {
-                    index.list_item.control =
-                        control_for_session(&index.list_item.session_id, &managed_registry);
+                Ok(index) => {
                     next_index.insert(index.list_item.session_id.clone(), index);
                 }
                 Err(error) => {
@@ -221,6 +222,17 @@ impl CodexSessionRepository {
                     );
                 }
             }
+        }
+        let candidates = managed_binding_candidates(&next_index);
+        if !candidates.is_empty() {
+            match bind_managed_registry_sessions(&context.managed_registry_path, &candidates) {
+                Ok(registry) => managed_registry = registry,
+                Err(error) => eprintln!("NiumaNotifier Codex managed registry 绑定失败：{error}"),
+            }
+        }
+        for index in next_index.values_mut() {
+            index.list_item.control =
+                control_for_session(&index.list_item.session_id, &managed_registry);
         }
 
         let mut sessions = next_index
@@ -450,6 +462,10 @@ impl CodexSessionRepository {
         };
 
         Ok(SessionIndex {
+            first_user_message_hash: parsed
+                .first_user_message
+                .as_ref()
+                .map(|message| message.hash.clone()),
             list_item,
             file_index: CodexSessionFileIndex {
                 signature: file_signature,
@@ -458,6 +474,95 @@ impl CodexSessionRepository {
             },
         })
     }
+}
+
+fn managed_binding_candidates(
+    next_index: &HashMap<String, SessionIndex>,
+) -> Vec<CodexSessionBindingCandidate> {
+    next_index
+        .values()
+        .map(|index| CodexSessionBindingCandidate {
+            session_id: index.list_item.session_id.clone(),
+            session_file_path: index.list_item.file_path.clone(),
+            project_path: index.list_item.project_path.clone(),
+            first_user_message_hash: index.first_user_message_hash.clone(),
+            first_user_message_at: index.list_item.first_user_message_at,
+        })
+        .collect()
+}
+
+fn bind_managed_registry_sessions(
+    registry_path: &Path,
+    candidates: &[CodexSessionBindingCandidate],
+) -> Result<ManagedCodexRegistry, String> {
+    update_registry(registry_path, |registry| {
+        for session in registry.sessions.iter_mut() {
+            if session.state != ManagedCodexSessionState::BindingPending {
+                continue;
+            }
+            match match_managed_session(session, candidates, MANAGED_BINDING_WINDOW) {
+                BindingMatch::Unique {
+                    session_id,
+                    session_file_path,
+                } => {
+                    if let Err(error) = append_binding_diagnostic_log(
+                        Path::new(BINDING_DIAGNOSTIC_LOG_PATH),
+                        &session.wrapper_session_id,
+                        session.codex_session_id.as_deref(),
+                        &session_id,
+                        &session_file_path,
+                    ) {
+                        eprintln!("NiumaNotifier Codex binding diagnostic 写入失败：{error}");
+                    }
+                    session.state = ManagedCodexSessionState::Bound;
+                    session.codex_session_id = Some(session_id);
+                    session.codex_session_file_path = Some(session_file_path);
+                    session.bound_at = Some(Utc::now());
+                    session.binding_failure_reason = None;
+                }
+                BindingMatch::Ambiguous => {
+                    session.state = ManagedCodexSessionState::Ambiguous;
+                    session.binding_failure_reason =
+                        Some("第一条用户消息和时间窗口匹配到多个 Codex session".to_string());
+                }
+                BindingMatch::None => {}
+            }
+        }
+    })
+}
+
+fn binding_diagnostic_log_line(
+    wrapper_session_id: &str,
+    relay_thread_id: Option<&str>,
+    session_meta_id: &str,
+    session_file_path: &str,
+) -> String {
+    let relay_thread_id = relay_thread_id.unwrap_or("<none>");
+    format!(
+        "NiumaNotifier niuma-codex binding diagnostic: wrapper_session_id={wrapper_session_id} relay_thread_id={relay_thread_id} session_meta_id={session_meta_id} session_file_path={session_file_path} thread_id_matches_session_id={}",
+        relay_thread_id == session_meta_id
+    )
+}
+
+fn append_binding_diagnostic_log(
+    log_path: &Path,
+    wrapper_session_id: &str,
+    relay_thread_id: Option<&str>,
+    session_meta_id: &str,
+    session_file_path: &str,
+) -> Result<(), String> {
+    let line = binding_diagnostic_log_line(
+        wrapper_session_id,
+        relay_thread_id,
+        session_meta_id,
+        session_file_path,
+    );
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|error| format!("打开诊断日志失败：{error}"))?;
+    writeln!(file, "{line}").map_err(|error| format!("写入诊断日志失败：{error}"))
 }
 
 fn refresh_cached_index(mut index: SessionIndex, discovered_at: DateTime<Utc>) -> SessionIndex {
@@ -694,6 +799,28 @@ fn control_for_session(
                 "answer_input".to_string(),
                 "approve".to_string(),
                 "reject".to_string(),
+                "send_instruction".to_string(),
+                "interrupt".to_string(),
+            ],
+            actions: vec![
+                ToolSessionControlAction {
+                    action_type: "send_instruction".to_string(),
+                    transport: "local_api".to_string(),
+                    endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
+                    debug_command: Some(format!(
+                        "niuma codex-send {} \"继续\"",
+                        session.wrapper_session_id
+                    )),
+                },
+                ToolSessionControlAction {
+                    action_type: "interrupt".to_string(),
+                    transport: "local_api".to_string(),
+                    endpoint: Some("/api/v1/session-control/interrupt".to_string()),
+                    debug_command: Some(format!(
+                        "niuma codex-interrupt {}",
+                        session.wrapper_session_id
+                    )),
+                },
             ],
         })
 }
@@ -936,5 +1063,45 @@ impl ProviderError {
 
     pub(crate) fn provider_disabled() -> Self {
         Self::new("session_provider_disabled", "Codex 监听已关闭")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    #[test]
+    fn binding_diagnostic_log_line_reports_thread_id_match() {
+        let line = super::binding_diagnostic_log_line(
+            "niuma_codex_1",
+            Some("session-1"),
+            "session-1",
+            "/tmp/session.jsonl",
+        );
+
+        assert!(line.contains("wrapper_session_id=niuma_codex_1"));
+        assert!(line.contains("relay_thread_id=session-1"));
+        assert!(line.contains("session_meta_id=session-1"));
+        assert!(line.contains("session_file_path=/tmp/session.jsonl"));
+        assert!(line.contains("thread_id_matches_session_id=true"));
+    }
+
+    #[test]
+    fn append_binding_diagnostic_log_writes_line_to_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let log_path = temp.path().join("binding.log");
+
+        super::append_binding_diagnostic_log(
+            &log_path,
+            "niuma_codex_1",
+            Some("session-1"),
+            "session-1",
+            "/tmp/session.jsonl",
+        )
+        .unwrap();
+
+        let body = fs::read_to_string(log_path).unwrap();
+        assert!(body.contains("wrapper_session_id=niuma_codex_1"));
+        assert!(body.ends_with('\n'));
     }
 }

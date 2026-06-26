@@ -2,6 +2,7 @@ pub mod api_response;
 pub mod approval;
 pub mod approval_arbitration;
 pub mod codex_hook;
+pub mod codex_managed_control;
 pub mod codex_managed_session;
 pub mod config;
 pub mod dashboard;

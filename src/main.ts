@@ -12,8 +12,10 @@ import {
   savePluginConfig,
   saveListenerConfig,
   selectAndImportPluginDir,
+  submitInputAnswer,
   sendTestNotification,
   submitApprovalDecision,
+  type EventInteractionQuestion,
   type ListenerToolConfig,
   type MainStatePayload,
   type NotificationRecord,
@@ -31,6 +33,7 @@ import {
   renderNotificationPage as renderNotificationPageView
 } from './notificationView'
 import {
+  blockerActionLabel,
   isBlockingStatus,
   renderListenerTools,
   renderRequestDetail,
@@ -106,6 +109,8 @@ let notificationRecordsLoaded = false
 let localApiUrlText = ''
 let localSseConnected = false
 let approvingApprovalRequestId: string | null = null
+let submittingInputRequestId: string | null = null
+const CUSTOM_INPUT_VALUE = '__niuma_custom_answer__'
 
 app.innerHTML = renderDashboardShell()
 
@@ -234,7 +239,8 @@ function renderDashboard() {
       actionsElement: approvalActionsEl,
       state: latestMainState,
       language: currentLanguage,
-      approving: latestMainState.detail?.approval?.request_id === approvingApprovalRequestId
+      approving: latestMainState.detail?.interaction?.request_id === approvingApprovalRequestId,
+      inputSubmitting: latestMainState.detail?.interaction?.request_id === submittingInputRequestId
     })
   } else {
     updatedEl!.textContent = '-'
@@ -249,7 +255,8 @@ function renderDashboard() {
       actionsElement: approvalActionsEl,
       state: null,
       language: currentLanguage,
-      approving: false
+      approving: false,
+      inputSubmitting: false
     })
   }
   renderToolListeners()
@@ -406,7 +413,7 @@ function applyLanguage() {
   }
   clearBlockerButton!.textContent = clearBlockerNeedsConfirm
     ? t.clearBlockerConfirmAgain
-    : t.clearBlocker
+    : blockerActionLabel(latestMainState, currentLanguage)
   clearBlockerButton!.title = t.clearBlockerConfirm
   currentStatusLabelEl!.textContent = t.mainStatus
   listenerHealthTitleEl!.textContent = t.listenerStatus
@@ -472,6 +479,101 @@ dashboardViewEl?.addEventListener('click', async (event) => {
     renderDashboard()
   }
 })
+
+dashboardViewEl?.addEventListener('submit', async (event) => {
+  const form =
+    event.target instanceof HTMLFormElement
+      ? event.target.closest<HTMLFormElement>('form[data-input-request-id]')
+      : null
+  if (!form) {
+    return
+  }
+  event.preventDefault()
+  const requestId = form.dataset.inputRequestId
+  if (!requestId || submittingInputRequestId) {
+    return
+  }
+  const interaction = latestMainState?.detail?.interaction
+  const questions = interaction?.kind === 'input' ? interaction.schema?.questions : null
+  const sessionId = latestMainState?.session?.id
+  const wrapperSessionId = parseWrapperSessionId(requestId)
+  if (!questions?.length || !sessionId || !wrapperSessionId) {
+    updatedEl!.textContent = translations[currentLanguage].error
+    return
+  }
+  if (!validateCustomInputAnswers(form, questions)) {
+    return
+  }
+  submittingInputRequestId = requestId
+  renderDashboard()
+  try {
+    await submitInputAnswer(
+      sessionId,
+      wrapperSessionId,
+      requestId,
+      collectInputAnswers(form, questions)
+    )
+    await refreshDashboard()
+  } catch (error) {
+    updatedEl!.textContent = error instanceof Error ? error.message : String(error)
+  } finally {
+    submittingInputRequestId = null
+    renderDashboard()
+  }
+})
+
+function parseWrapperSessionId(requestId: string) {
+  // Codex input request_id 内嵌 wrapper session id，提交答案时后端需要它定位 wrapper 会话。
+  return requestId.match(/codex-input:(niuma_codex_[^:]+):/)?.[1] ?? null
+}
+
+function collectInputAnswers(
+  form: HTMLFormElement,
+  questions: EventInteractionQuestion[]
+) {
+  const formData = new FormData(form)
+  const answers: Record<string, string[]> = {}
+  for (const question of questions) {
+    const selected = formData.get(question.id)
+    const rawValues =
+      selected === CUSTOM_INPUT_VALUE
+        ? formData.getAll(customInputName(question.id))
+        : formData.getAll(question.id)
+    const values = rawValues
+      .map(String)
+      .map((value) => value.trim())
+      .filter((value) => value !== '' && value !== CUSTOM_INPUT_VALUE)
+    if (values.length > 0) {
+      answers[question.id] = values
+    }
+  }
+  return answers
+}
+
+function validateCustomInputAnswers(
+  form: HTMLFormElement,
+  questions: EventInteractionQuestion[]
+) {
+  const formData = new FormData(form)
+  for (const question of questions) {
+    const textarea = form.querySelector<HTMLTextAreaElement>(
+      `textarea[data-custom-input-for="${cssEscape(question.id)}"]`
+    )
+    if (!textarea) {
+      continue
+    }
+    textarea.required = formData.get(question.id) === CUSTOM_INPUT_VALUE
+    if (textarea.required && textarea.value.trim() === '') {
+      textarea.reportValidity()
+      return false
+    }
+  }
+  return true
+}
+
+function customInputName(questionId: string) {
+  return `${questionId}__custom`
+}
 
 settingsViewEl?.addEventListener('click', async (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null
@@ -826,7 +928,7 @@ function resetClearBlockerButton() {
   clearBlockerNeedsConfirm = false
   clearBlockerButton?.classList.remove('needs-confirm')
   if (clearBlockerButton && !clearBlockerButton.disabled) {
-    clearBlockerButton.textContent = t.clearBlocker
+    clearBlockerButton.textContent = blockerActionLabel(latestMainState, currentLanguage)
     clearBlockerButton.title = t.clearBlockerConfirm
   }
 }

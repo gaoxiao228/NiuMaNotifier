@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::models::{CompletionReason, EventType, NiumaEvent, ToolKind};
+use crate::models::{CompletionReason, EventInteractionDetail, EventType, NiumaEvent, ToolKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HookToolHint {
@@ -54,6 +54,7 @@ impl HookPayloadParser {
                     let approval_ref = format!("approval:{}", request.id);
                     event.payload_ref = Some(approval_ref.clone());
                     event.attention_resolve_key = Some(approval_ref);
+                    event.interaction = Some(EventInteractionDetail::niuma_approval(request.id));
                 }
                 Ok(Some(event))
             }
@@ -62,14 +63,18 @@ impl HookPayloadParser {
                     string_field(&payload, "tool_name").unwrap_or_else(|| "Tool".into());
                 let command = tool_input_summary(&payload)
                     .unwrap_or_else(|| "Claude Code 正在等待批准".into());
-                Ok(Some(build_event(
+                let mut event = build_event(
                     &payload,
                     tool,
                     EventType::ApprovalRequested,
                     "urgent",
                     format!("{tool_name}: {command}"),
                     now,
-                )))
+                );
+                event.interaction = Some(EventInteractionDetail::tool_approval(
+                    "请回到 Claude Code 中同意或拒绝",
+                ));
+                Ok(Some(event))
             }
             (HookToolHint::ClaudeCode, "Stop") => {
                 let summary = string_field(&payload, "last_assistant_message")
@@ -195,6 +200,7 @@ fn build_event(
         completion_reason: None,
         failure_reason: None,
         payload_ref: None,
+        interaction: None,
         created_at: now,
     }
 }

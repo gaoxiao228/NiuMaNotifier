@@ -110,6 +110,7 @@ pub enum ApprovalStatus {
     Allowed,
     Denied,
     ReturnedToCodex,
+    ResolvedInTool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -296,6 +297,119 @@ pub enum EventSessionScope {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventInteractionKind {
+    Approval,
+    Input,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventInteractionHandling {
+    Niuma,
+    Tool,
+    None,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EventInteractionSchema {
+    pub questions: Vec<EventInteractionQuestion>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EventInteractionQuestion {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<EventInteractionOption>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EventInteractionOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EventInteractionDetail {
+    /// 等待类事件的统一交互契约，消费方不再从 payload_ref 推导可操作性。
+    pub kind: EventInteractionKind,
+    pub handling: EventInteractionHandling,
+    pub actionable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<EventInteractionSchema>,
+}
+
+impl EventInteractionDetail {
+    /// 通过 Niuma Local API 可直接处理的授权请求。
+    pub fn niuma_approval(request_id: impl Into<String>) -> Self {
+        Self {
+            kind: EventInteractionKind::Approval,
+            handling: EventInteractionHandling::Niuma,
+            actionable: true,
+            request_id: Some(request_id.into()),
+            actions: vec!["allow".to_string(), "deny".to_string()],
+            endpoint: Some("/api/v1/approval-decisions".to_string()),
+            message: None,
+            schema: None,
+        }
+    }
+
+    /// 只能回到原工具处理的授权提示，例如 watcher fallback 检测到的等待授权。
+    pub fn tool_approval(message: impl Into<String>) -> Self {
+        Self {
+            kind: EventInteractionKind::Approval,
+            handling: EventInteractionHandling::Tool,
+            actionable: false,
+            request_id: None,
+            actions: Vec::new(),
+            endpoint: None,
+            message: Some(message.into()),
+            schema: None,
+        }
+    }
+
+    /// 通过 Niuma Local API 可直接提交的结构化输入请求。
+    pub fn niuma_input(request_id: impl Into<String>, schema: EventInteractionSchema) -> Self {
+        Self {
+            kind: EventInteractionKind::Input,
+            handling: EventInteractionHandling::Niuma,
+            actionable: true,
+            request_id: Some(request_id.into()),
+            actions: vec!["submit".to_string()],
+            endpoint: Some("/api/v1/session-control/answer-input".to_string()),
+            message: None,
+            schema: Some(schema),
+        }
+    }
+
+    /// 只能回到原工具继续输入的等待提示。
+    pub fn tool_input(message: impl Into<String>) -> Self {
+        Self {
+            kind: EventInteractionKind::Input,
+            handling: EventInteractionHandling::Tool,
+            actionable: false,
+            request_id: None,
+            actions: Vec::new(),
+            endpoint: None,
+            message: Some(message.into()),
+            schema: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NiumaEvent {
     pub id: String,
     pub dedupe_key: String,
@@ -332,6 +446,8 @@ pub struct NiumaEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<FailureReason>,
     pub payload_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interaction: Option<EventInteractionDetail>,
     pub created_at: DateTime<Utc>,
 }
 

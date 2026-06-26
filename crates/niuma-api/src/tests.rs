@@ -2,6 +2,9 @@ use axum::body::{to_bytes, Body};
 use axum::http::Request;
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
+use niuma_core::codex_managed_session::{
+    write_registry_atomic, ManagedCodexRegistry, ManagedCodexSession, ManagedCodexSessionState,
+};
 use niuma_core::listener_config::ListenerConfig;
 use niuma_core::models::{
     ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, EventSessionScope, EventType, NiumaEvent,
@@ -10,16 +13,17 @@ use niuma_core::models::{
 use niuma_core::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
 };
+use niuma_core::platform::paths::codex_managed_registry_path;
 use niuma_core::runtime_event::{PluginNotificationTestRequest, RuntimeEvent, RuntimeEventBus};
 use niuma_core::state_mutation::StateMutationService;
 use niuma_core::store::NiumaStore;
 use niuma_core::tool_session::{
-    ToolSessionDetail, ToolSessionListItem, ToolSessionMessage, ToolSessionMessageRole,
-    ToolSessionStatus,
+    ToolSessionControl, ToolSessionControlAction, ToolSessionDetail, ToolSessionListItem,
+    ToolSessionMessage, ToolSessionMessageRole, ToolSessionStatus,
 };
 use serde_json::Value;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -361,12 +365,16 @@ async fn approval_request_create_lists_pending_and_updates_main_state() {
 
     let main_state = get_json(&router, "/api/v1/main-state").await;
     assert_eq!(main_state["data"]["state"]["status"], "waiting_approval");
+    assert!(!main_state["data"]["state"]["detail"]
+        .as_object()
+        .unwrap()
+        .contains_key("approval"));
     assert_eq!(
-        main_state["data"]["state"]["detail"]["approval"]["request_id"],
+        main_state["data"]["state"]["detail"]["interaction"]["request_id"],
         "approval-1"
     );
     assert_eq!(
-        main_state["data"]["state"]["detail"]["approval"]["can_decide"],
+        main_state["data"]["state"]["detail"]["interaction"]["actionable"],
         true
     );
 }
@@ -477,13 +485,61 @@ async fn approval_return_to_codex_keeps_main_state_without_actions() {
 
     let main_state = get_json(&router, "/api/v1/main-state").await;
     assert_eq!(main_state["data"]["state"]["status"], "waiting_approval");
+    assert!(!main_state["data"]["state"]["detail"]
+        .as_object()
+        .unwrap()
+        .contains_key("approval"));
     assert_eq!(
-        main_state["data"]["state"]["detail"]["approval"]["can_decide"],
+        main_state["data"]["state"]["detail"]["interaction"]["actionable"],
         false
     );
     assert_eq!(
-        main_state["data"]["state"]["detail"]["approval"]["message"],
+        main_state["data"]["state"]["detail"]["interaction"]["message"],
         "Niuma 已停止代处理，请回到 Codex 中同意或拒绝"
+    );
+}
+
+#[tokio::test]
+async fn approval_tool_resolved_clears_relay_attention() {
+    let store = NiumaStore::new(test_path("api_approval_tool_resolved"));
+    enable_codex_listener(&store);
+    let router = app(store);
+    let mut relay_body = sample_approval_request_body("approval-relay-tool-resolved");
+    relay_body["channel"] = serde_json::json!("niuma_codex_relay");
+    relay_body["control_ref"] = serde_json::json!({
+        "wrapper_session_id": "wrapper-1",
+        "relay_request_id": "7",
+        "turn_id": "turn-1",
+        "item_id": "item-1"
+    });
+    post_json(&router, "/api/v1/approval-requests", relay_body).await;
+
+    let resolved = post_json(
+        &router,
+        "/api/v1/approval-requests/tool-resolved",
+        serde_json::json!({
+            "request_id": "approval-relay-tool-resolved",
+            "resolved_by": "niuma-codex-relay",
+            "reason": "user_decided_in_codex"
+        }),
+    )
+    .await;
+
+    assert_eq!(resolved["code"], 0);
+    assert_eq!(resolved["data"]["accepted"], true);
+    assert_eq!(resolved["data"]["status"], "resolved_in_tool");
+    let decision = get_json(
+        &router,
+        "/api/v1/approval-decisions?request_id=approval-relay-tool-resolved",
+    )
+    .await;
+    assert_eq!(decision["data"]["status"], "resolved_in_tool");
+
+    let main_state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(main_state["data"]["state"]["status"], "running");
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["interaction"]["message"],
+        "已在 Codex 中处理"
     );
 }
 
@@ -539,12 +595,24 @@ async fn approval_proxy_watchdog_returns_stale_request_to_codex() {
     let router = app_with_bus(store, bus);
     let main_state = get_json(&router, "/api/v1/main-state").await;
     assert_eq!(main_state["data"]["state"]["status"], "waiting_approval");
+    assert!(!main_state["data"]["state"]["detail"]
+        .as_object()
+        .unwrap()
+        .contains_key("approval"));
     assert_eq!(
-        main_state["data"]["state"]["detail"]["approval"]["status"],
-        "returned_to_codex"
+        main_state["data"]["state"]["detail"]["interaction"]["actionable"],
+        false
     );
     assert_eq!(
-        main_state["data"]["state"]["detail"]["approval"]["can_decide"],
+        main_state["data"]["state"]["detail"]["interaction"]["kind"],
+        "approval"
+    );
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["interaction"]["handling"],
+        "tool"
+    );
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["interaction"]["actionable"],
         false
     );
 }
@@ -584,6 +652,18 @@ async fn watcher_approval_unknown_is_delayed_then_fallback_applied() {
 
     let state_after = get_json(&router, "/api/v1/main-state").await;
     assert_eq!(state_after["data"]["state"]["status"], "waiting_approval");
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["kind"],
+        "approval"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["handling"],
+        "tool"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["actionable"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -629,12 +709,97 @@ async fn watcher_approval_after_hook_is_suppressed() {
 
     let state_after = get_json(&router, "/api/v1/main-state").await;
     assert_eq!(state_after["data"]["state"]["status"], "waiting_approval");
+    assert!(!state_after["data"]["state"]["detail"]
+        .as_object()
+        .unwrap()
+        .contains_key("approval"));
     assert_eq!(
-        state_after["data"]["state"]["detail"]["approval"]["request_id"],
+        state_after["data"]["state"]["detail"]["interaction"]["request_id"],
         "approval-hook-first"
     );
     assert_eq!(
-        state_after["data"]["state"]["detail"]["approval"]["can_decide"],
+        state_after["data"]["state"]["detail"]["interaction"]["actionable"],
+        true
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["kind"],
+        "approval"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["handling"],
+        "niuma"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["actionable"],
+        true
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["endpoint"],
+        "/api/v1/approval-decisions"
+    );
+}
+
+#[tokio::test]
+async fn late_hook_approval_replaces_existing_watcher_fallback() {
+    let store = NiumaStore::new(test_path("api_late_hook_replaces_watcher"));
+    enable_codex_listener(&store);
+    let router = app(store);
+
+    let mut watcher = sample_event_with_type(
+        "watcher-approval-before-hook",
+        "watcher-dedupe-before-hook",
+        EventType::ApprovalRequested,
+        1_001,
+    );
+    watcher.source = "codex-session-file".to_string();
+    watcher.summary = "exec_command: cargo test".to_string();
+    watcher.content = Some("exec_command: cargo test".to_string());
+    watcher.attention_resolve_key = Some("codex_permission:s1:call-1".to_string());
+    watcher.payload_ref = Some("codex_watcher_approval:early".to_string());
+
+    let watcher_response = post_json(
+        &router,
+        "/api/v1/events",
+        serde_json::to_value(watcher).unwrap(),
+    )
+    .await;
+    assert_eq!(watcher_response["code"], 0);
+    assert_eq!(watcher_response["data"]["delayed"], true);
+
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+
+    let fallback_state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(
+        fallback_state["data"]["state"]["status"],
+        "waiting_approval"
+    );
+    assert_eq!(
+        fallback_state["data"]["state"]["detail"]["interaction"]["handling"],
+        "tool"
+    );
+
+    let created = post_json(
+        &router,
+        "/api/v1/approval-requests",
+        sample_approval_request_body("approval-hook-late"),
+    )
+    .await;
+    assert_eq!(created["code"], 0);
+    assert_eq!(created["data"]["accepted"], true);
+    assert_eq!(created["data"]["replaced_channel"], "session_watch");
+
+    let state_after = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(state_after["data"]["state"]["status"], "waiting_approval");
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["request_id"],
+        "approval-hook-late"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["handling"],
+        "niuma"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["actionable"],
         true
     );
 }
@@ -669,6 +834,91 @@ async fn relay_approval_request_reuses_existing_hook_pending_approval() {
     assert_eq!(response["data"]["accepted"], true);
     assert_eq!(response["data"]["deduped_by_channel"], "hook_proxy");
     assert_eq!(response["data"]["request_id"], "approval-hook-existing");
+}
+
+#[tokio::test]
+async fn relay_approval_request_is_not_created_as_hook_proxy() {
+    let store = NiumaStore::new(test_path("api_relay_not_hook_proxy"));
+    enable_codex_listener(&store);
+    let router = app(store);
+
+    let mut relay_body = sample_approval_request_body("approval-relay-no-heartbeat");
+    relay_body["channel"] = serde_json::json!("niuma_codex_relay");
+    relay_body["control_ref"] = serde_json::json!({
+        "wrapper_session_id": "wrapper-1",
+        "relay_request_id": "7",
+        "turn_id": "turn-1",
+        "item_id": "item-1"
+    });
+
+    let created = post_json(&router, "/api/v1/approval-requests", relay_body).await;
+    assert_eq!(created["code"], 0);
+    assert_eq!(created["data"]["accepted"], true);
+
+    let list = get_json(&router, "/api/v1/approval-requests?status=pending").await;
+    let request = &list["data"]["list"][0];
+    assert_eq!(request["channel"], "niuma_codex_relay");
+    assert_eq!(request["proxy_status"], "none");
+    assert!(request.get("last_heartbeat_at").is_none());
+}
+
+#[tokio::test]
+async fn watcher_approval_after_relay_is_suppressed_by_description() {
+    let store = NiumaStore::new(test_path("api_relay_first_suppresses_watcher"));
+    enable_codex_listener(&store);
+    let router = app(store);
+    let description = "是否允许执行用于模拟真实授权弹框的命令： echo \"1234\"?";
+
+    let mut relay_body = sample_approval_request_body("approval-relay-first");
+    relay_body["channel"] = serde_json::json!("niuma_codex_relay");
+    relay_body["command"] = serde_json::json!("/bin/zsh -lc 'echo \"1234\"'");
+    relay_body["description"] = serde_json::json!(description);
+    relay_body["control_ref"] = serde_json::json!({
+        "wrapper_session_id": "wrapper-1",
+        "relay_request_id": "7",
+        "turn_id": "turn-1",
+        "item_id": "item-1"
+    });
+    let created = post_json(&router, "/api/v1/approval-requests", relay_body).await;
+    assert_eq!(created["code"], 0);
+    assert_eq!(created["data"]["accepted"], true);
+    assert_eq!(created["data"]["ownership"], "niuma_codex_relay");
+
+    let mut watcher = sample_event_with_type(
+        "watcher-approval-after-relay",
+        "watcher-dedupe-after-relay",
+        EventType::ApprovalRequested,
+        1_001,
+    );
+    watcher.source = "codex-session-file".to_string();
+    watcher.summary = format!("exec_command: {description}");
+    watcher.content = Some(format!("exec_command: {description}"));
+    watcher.attention_resolve_key = Some("codex_permission:s1:call-1".to_string());
+    watcher.payload_ref = Some("codex_watcher_approval:relay-late".to_string());
+
+    let response = post_json(
+        &router,
+        "/api/v1/events",
+        serde_json::to_value(watcher).unwrap(),
+    )
+    .await;
+
+    assert_eq!(response["code"], 0);
+    assert_eq!(response["data"]["accepted"], true);
+    assert_eq!(response["data"]["suppressed"], true);
+    assert_eq!(response["data"]["reason"], "hook_approval_already_emitted");
+
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
+
+    let state_after = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["request_id"],
+        "approval-relay-first"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["handling"],
+        "niuma"
+    );
 }
 
 #[tokio::test]
@@ -768,7 +1018,7 @@ async fn watcher_approval_after_hook_matches_approval_description() {
 }
 
 #[tokio::test]
-async fn late_hook_approval_after_watcher_fallback_returns_to_codex() {
+async fn late_hook_approval_after_watcher_fallback_replaces_watcher() {
     let store = NiumaStore::new(test_path("api_late_hook_fallback"));
     enable_codex_listener(&store);
     let router = app(store);
@@ -781,6 +1031,7 @@ async fn late_hook_approval_after_watcher_fallback_returns_to_codex() {
     watcher.source = "codex-session-file".to_string();
     watcher.summary = "exec_command: cargo test".to_string();
     watcher.content = Some("exec_command: cargo test".to_string());
+    watcher.attention_resolve_key = Some("codex_permission:s1:call-1".to_string());
     watcher.payload_ref = Some("codex_watcher_approval:pending".to_string());
 
     let response = post_json(
@@ -802,9 +1053,20 @@ async fn late_hook_approval_after_watcher_fallback_returns_to_codex() {
     .await;
 
     assert_eq!(created["code"], 0);
-    assert_eq!(created["data"]["accepted"], false);
-    assert_eq!(created["data"]["ownership"], "watcher_fallback");
-    assert_eq!(created["data"]["hook_action"], "return_to_codex");
+    assert_eq!(created["data"]["accepted"], true);
+    assert_eq!(created["data"]["ownership"], "hook");
+    assert_eq!(created["data"]["hook_action"], "wait_for_decision");
+    assert_eq!(created["data"]["replaced_channel"], "session_watch");
+
+    let state_after = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["request_id"],
+        "approval-late"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["handling"],
+        "niuma"
+    );
 }
 
 #[tokio::test]
@@ -2789,6 +3051,302 @@ async fn session_detail_existing_snapshot_with_fake_provider_returns_detail() {
 }
 
 #[tokio::test]
+async fn session_detail_returns_control_actions_for_mobile_resume() {
+    let mut detail = sample_tool_session_detail("existing-session");
+    detail.control = Some(ToolSessionControl {
+        available: true,
+        provider: Some("niuma_codex".to_string()),
+        wrapper_session_id: Some("niuma_codex_1".to_string()),
+        capabilities: vec!["send_instruction".to_string(), "interrupt".to_string()],
+        actions: vec![
+            ToolSessionControlAction {
+                action_type: "send_instruction".to_string(),
+                transport: "local_api".to_string(),
+                endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
+                debug_command: Some("niuma codex-send niuma_codex_1 \"继续\"".to_string()),
+            },
+            ToolSessionControlAction {
+                action_type: "interrupt".to_string(),
+                transport: "local_api".to_string(),
+                endpoint: Some("/api/v1/session-control/interrupt".to_string()),
+                debug_command: Some("niuma codex-interrupt niuma_codex_1".to_string()),
+            },
+        ],
+    });
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![tool_session_item(
+            "existing-session",
+            ToolKind::Codex,
+            30,
+            20,
+            true,
+            false,
+        )],
+    );
+    registry.register_detail_provider(
+        ToolKind::Codex,
+        Arc::new(FakeDetailProvider {
+            detail,
+            calls: Arc::new(StdMutex::new(Vec::new())),
+        }),
+    );
+    let router = app_with_tool_sessions(
+        NiumaStore::new(test_path("session_detail_control_actions")),
+        registry,
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["control"]["available"], true);
+    assert_eq!(
+        value["data"]["control"]["capabilities"],
+        serde_json::json!(["send_instruction", "interrupt"])
+    );
+    assert_eq!(
+        value["data"]["control"]["actions"][0]["type"],
+        "send_instruction"
+    );
+    assert_eq!(
+        value["data"]["control"]["actions"][0]["endpoint"],
+        "/api/v1/session-control/send-instruction"
+    );
+}
+
+#[tokio::test]
+async fn session_control_send_instruction_rejects_invalid_wrapper_id() {
+    let router = app(NiumaStore::new(test_path("session_control_send_invalid")));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/send-instruction",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "session-1",
+            "wrapper_session_id": "invalid",
+            "content": "继续"
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(
+        value["message"],
+        "wrapper_session_id 必须以 niuma_codex_ 开头"
+    );
+}
+
+#[tokio::test]
+async fn session_control_interrupt_rejects_invalid_wrapper_id() {
+    let router = app(NiumaStore::new(test_path(
+        "session_control_interrupt_invalid",
+    )));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/interrupt",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "session-1",
+            "wrapper_session_id": "invalid"
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(
+        value["message"],
+        "wrapper_session_id 必须以 niuma_codex_ 开头"
+    );
+}
+
+#[tokio::test]
+async fn session_control_answer_input_rejects_invalid_wrapper_id() {
+    let router = app(NiumaStore::new(test_path("session_control_answer_invalid")));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/answer-input",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "session-1",
+            "wrapper_session_id": "invalid",
+            "request_id": "request-1",
+            "answers": { "choice": ["yes"] }
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(
+        value["message"],
+        "wrapper_session_id 必须以 niuma_codex_ 开头"
+    );
+}
+
+#[tokio::test]
+async fn session_control_answer_input_rejects_empty_answers() {
+    let router = app(NiumaStore::new(test_path("session_control_answer_empty")));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/answer-input",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "session-1",
+            "wrapper_session_id": "niuma_codex_1",
+            "request_id": "request-1",
+            "answers": {}
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(value["message"], "answers 不能为空");
+}
+
+#[tokio::test]
+async fn session_control_answer_input_rejects_non_codex_tool() {
+    let router = app(NiumaStore::new(test_path(
+        "session_control_answer_non_codex",
+    )));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/answer-input",
+        serde_json::json!({
+            "tool": "claude",
+            "session_id": "session-1",
+            "wrapper_session_id": "niuma_codex_1",
+            "request_id": "request-1",
+            "answers": { "choice": ["yes"] }
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(value["message"], "当前仅支持 codex 输入回答");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn session_control_answer_input_clears_waiting_input_after_success() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::thread;
+
+    let _env_guard = TestEnvGuard::with_home("session_control_answer_home");
+
+    let dir = std::env::temp_dir().join(format!(
+        "nas-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let control_socket = dir.join("control.sock");
+    let listener = UnixListener::bind(&control_socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(result) => break result,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("等待 answer-input control socket 连接超时");
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept control socket 失败：{error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let command: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(command["type"], "answer_input");
+        assert_eq!(command["request_id"], "request-1");
+        assert_eq!(command["answers"], serde_json::json!({ "choice": ["yes"] }));
+        writeln!(
+            stream,
+            "{}",
+            serde_json::json!({ "ok": true, "result": { "accepted": true } })
+        )
+        .unwrap();
+    });
+
+    let registry_path = codex_managed_registry_path();
+    write_registry_atomic(
+        &registry_path,
+        &ManagedCodexRegistry {
+            version: 1,
+            sessions: vec![managed_codex_session_for_api_test(
+                "niuma_codex_1",
+                "session-1",
+                control_socket.to_string_lossy().as_ref(),
+            )],
+        },
+    )
+    .unwrap();
+
+    let store = NiumaStore::new(test_path("session_control_answer_clears_waiting_input"));
+    let mut waiting_input = sample_event_with_type(
+        "answer-waiting-input",
+        "answer-waiting-input",
+        EventType::InputRequested,
+        1_000,
+    );
+    waiting_input.session_id = "session-1".to_string();
+    waiting_input.attention_resolve_key = Some("input:request-1".to_string());
+    store.append_event(waiting_input).unwrap();
+    let router = app(store);
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/answer-input",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": " session-1 ",
+            "wrapper_session_id": " niuma_codex_1 ",
+            "request_id": " request-1 ",
+            "answers": { "choice": ["yes"] }
+        }),
+    )
+    .await;
+    server.join().unwrap();
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["answered"], true);
+    assert_eq!(value["data"]["wrapper_session_id"], "niuma_codex_1");
+    assert_eq!(value["data"]["request_id"], "request-1");
+    assert_eq!(value["data"]["state_cleared"], true);
+    assert_eq!(
+        value["data"]["result"],
+        serde_json::json!({ "accepted": true })
+    );
+
+    let state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(state["data"]["state"]["status"], "running");
+    let runtime = get_json(&router, "/api/v1/runtime_state_list").await;
+    assert_eq!(runtime["data"]["list"][0]["session_id"], "session-1");
+    assert_eq!(runtime["data"]["list"][0]["status"], "running");
+}
+
+#[tokio::test]
 async fn session_detail_default_limit_passes_100_to_provider() {
     let calls = Arc::new(StdMutex::new(Vec::new()));
     let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
@@ -3311,6 +3869,7 @@ fn sample_event_with_type(
         completion_reason: None,
         failure_reason: None,
         payload_ref: None,
+        interaction: None,
         created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
     }
 }
@@ -3511,11 +4070,78 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+struct TestEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous_home: Option<String>,
+    previous_xdg_data_home: Option<String>,
+    previous_appdata: Option<String>,
+}
+
+impl TestEnvGuard {
+    fn with_home(name: &str) -> Self {
+        let lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = test_dir(name);
+        let guard = Self {
+            _lock: lock,
+            previous_home: std::env::var("HOME").ok(),
+            previous_xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
+            previous_appdata: std::env::var("APPDATA").ok(),
+        };
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_DATA_HOME", home.join(".local").join("share"));
+        std::env::set_var("APPDATA", home.join("AppData").join("Roaming"));
+        guard
+    }
+}
+
+impl Drop for TestEnvGuard {
+    fn drop(&mut self) {
+        restore_env_var("HOME", self.previous_home.clone());
+        restore_env_var("XDG_DATA_HOME", self.previous_xdg_data_home.clone());
+        restore_env_var("APPDATA", self.previous_appdata.clone());
+    }
+}
+
 fn restore_codex_home(previous_codex_home: Option<String>) {
     if let Some(value) = previous_codex_home {
         std::env::set_var("CODEX_HOME", value);
     } else {
         std::env::remove_var("CODEX_HOME");
+    }
+}
+
+fn restore_env_var(key: &str, previous: Option<String>) {
+    if let Some(value) = previous {
+        std::env::set_var(key, value);
+    } else {
+        std::env::remove_var(key);
+    }
+}
+
+fn managed_codex_session_for_api_test(
+    wrapper_session_id: &str,
+    codex_session_id: &str,
+    control_socket: &str,
+) -> ManagedCodexSession {
+    ManagedCodexSession {
+        wrapper_session_id: wrapper_session_id.to_string(),
+        state: ManagedCodexSessionState::Bound,
+        cwd: "/tmp/demo".to_string(),
+        // 使用当前测试进程 PID，避免 control helper 在连接 socket 前拒绝会话。
+        pid: Some(std::process::id()),
+        real_socket: "/tmp/real.sock".to_string(),
+        relay_socket: "/tmp/relay.sock".to_string(),
+        control_socket: control_socket.to_string(),
+        started_at: Utc.timestamp_opt(1_000, 0).single().unwrap(),
+        first_user_message_hash: None,
+        first_user_message_preview: None,
+        first_user_message_submitted_at: None,
+        codex_session_id: Some(codex_session_id.to_string()),
+        codex_session_file_path: None,
+        bound_at: None,
+        binding_failure_reason: None,
     }
 }
 

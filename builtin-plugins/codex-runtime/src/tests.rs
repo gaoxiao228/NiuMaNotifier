@@ -173,6 +173,119 @@ fn codex_session_snapshot_marks_bound_managed_session_control_available() {
     assert_eq!(control.provider.as_deref(), Some("niuma_codex"));
     assert_eq!(control.wrapper_session_id.as_deref(), Some("niuma_codex_1"));
     assert!(control.capabilities.contains(&"answer_input".to_string()));
+    assert!(control
+        .capabilities
+        .contains(&"send_instruction".to_string()));
+    assert!(control.capabilities.contains(&"interrupt".to_string()));
+    assert!(control.actions.iter().any(|action| {
+        action.action_type == "send_instruction"
+            && action.endpoint.as_deref() == Some("/api/v1/session-control/send-instruction")
+    }));
+    assert!(control.actions.iter().any(|action| {
+        action.action_type == "interrupt"
+            && action.endpoint.as_deref() == Some("/api/v1/session-control/interrupt")
+    }));
+}
+
+#[test]
+fn codex_session_snapshot_binds_pending_managed_session_by_first_message_and_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let session_path = write_codex_session_file(
+        temp.path(),
+        "rollout-2026-06-22-44444444-4444-4444-4444-444444444444.jsonl",
+        "session-pending-managed",
+        "/tmp/managed-repo",
+        "请继续",
+        "好的",
+    );
+    let registry_path = temp.path().join("managed-sessions/codex.json");
+    std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &registry_path,
+        serde_json::json!({
+            "version": 1,
+            "sessions": [{
+                "wrapper_session_id": "niuma_codex_pending",
+                "state": "binding_pending",
+                "cwd": "/tmp/managed-repo",
+                "pid": 42,
+                "real_socket": "/tmp/real.sock",
+                "relay_socket": "/tmp/relay.sock",
+                "control_socket": "/tmp/control.sock",
+                "started_at": "2026-06-22T01:00:00Z",
+                "first_user_message_hash": niuma_core::codex_managed_session::first_user_message_hash("请继续"),
+                "first_user_message_preview": "请继续",
+                "first_user_message_submitted_at": "2026-06-22T01:00:02Z"
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home_and_registry_path(
+        temp.path().into(),
+        registry_path.clone(),
+    );
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "session-pending-managed")
+        .expect("managed session should be discovered");
+
+    assert_eq!(
+        session
+            .control
+            .as_ref()
+            .and_then(|control| control.provider.as_deref()),
+        Some("niuma_codex")
+    );
+    let registry = niuma_core::codex_managed_session::read_registry(&registry_path).unwrap();
+    let managed = &registry.sessions[0];
+    assert_eq!(
+        managed.state,
+        niuma_core::codex_managed_session::ManagedCodexSessionState::Bound
+    );
+    assert_eq!(
+        managed.codex_session_id.as_deref(),
+        Some("session-pending-managed")
+    );
+    assert_eq!(
+        managed.codex_session_file_path.as_deref(),
+        Some(session_path.to_string_lossy().as_ref())
+    );
+    assert!(managed.bound_at.is_some());
+}
+
+#[test]
+fn codex_session_provider_snapshot_skips_agents_context_for_first_user_message() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    std::fs::write(
+        day_dir.join("rollout-2026-06-22-22222222-2222-2222-2222-222222222222.jsonl"),
+        "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-agents-context\",\"cwd\":\"/tmp/fixture-project\"}}\n\
+         {\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions\\n\\n<INSTRUCTIONS>\\n# Global Rules\\n\\n- 始终使用简体中文与我交流\\n</INSTRUCTIONS>\\n<environment_context>\\n  <cwd>/tmp/demo</cwd>\\n</environment_context>\"}]}}\n\
+         {\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"真正的用户问题\"}]}}\n",
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "session-agents-context")
+        .expect("agents context session should be discovered");
+
+    assert_eq!(
+        session.first_user_message_preview.as_deref(),
+        Some("真正的用户问题")
+    );
+    assert_eq!(
+        session.first_user_message_at,
+        Some(Utc.with_ymd_and_hms(2026, 6, 22, 1, 0, 2).unwrap())
+    );
 }
 
 #[test]
@@ -237,6 +350,63 @@ fn codex_session_provider_detail_skips_empty_reasoning_rows() {
         .messages
         .iter()
         .all(|message| !message.content.is_empty()));
+    assert_eq!(detail.messages[0].role, ToolSessionMessageRole::Assistant);
+    assert_eq!(detail.messages[0].content, "助手回答");
+    assert_eq!(detail.messages[1].role, ToolSessionMessageRole::User);
+    assert_eq!(detail.messages[1].content, "用户问题");
+    assert_eq!(detail.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_detail_skips_turn_aborted_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join("rollout-2026-06-22-11111111-1111-1111-1111-111111111111.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-turn-aborted\",\"cwd\":\"/tmp/demo\",\"thread_source\":\"user\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"<turn_aborted>\\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background.\\n</turn_aborted>\"}]}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"turn-1\",\"reason\":\"interrupted\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let detail = provider_detail(&mut provider, "session-turn-aborted", 20, None);
+
+    assert_eq!(detail.messages.len(), 2);
+    assert_eq!(detail.messages[0].role, ToolSessionMessageRole::Assistant);
+    assert_eq!(detail.messages[0].content, "助手回答");
+    assert_eq!(detail.messages[1].role, ToolSessionMessageRole::User);
+    assert_eq!(detail.messages[1].content, "用户问题");
+    assert_eq!(detail.next_cursor, None);
+}
+
+#[test]
+fn codex_session_provider_detail_skips_subagent_notification_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let day_dir = temp.path().join("sessions/2026/06/22");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join("rollout-2026-06-22-11111111-1111-1111-1111-111111111111.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"timestamp\":\"2026-06-22T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-subagent-notification\",\"cwd\":\"/tmp/demo\",\"thread_source\":\"user\"}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"用户问题\"}]}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"<subagent_notification>\\n{\\\"agent_path\\\":\\\"agent-1\\\",\\\"status\\\":{\\\"completed\\\":\\\"审查完成\\\"}}\\n</subagent_notification>\"}]}}\n",
+            "{\"timestamp\":\"2026-06-22T01:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"助手回答\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home(temp.path().into());
+
+    let detail = provider_detail(&mut provider, "session-subagent-notification", 20, None);
+
+    assert_eq!(detail.messages.len(), 2);
     assert_eq!(detail.messages[0].role, ToolSessionMessageRole::Assistant);
     assert_eq!(detail.messages[0].content, "助手回答");
     assert_eq!(detail.messages[1].role, ToolSessionMessageRole::User);
