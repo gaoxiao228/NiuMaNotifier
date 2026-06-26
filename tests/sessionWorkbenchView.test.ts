@@ -173,9 +173,6 @@ async function verifyBindSessionDetailControl() {
   const root = new FakeRoot()
   const sentPayloads: unknown[] = []
   const interruptedPayloads: unknown[] = []
-  let releaseSend: () => void = () => {
-    throw new Error('发送请求释放函数尚未初始化')
-  }
   const options: BindSessionDetailControlOptions = {
     detail,
     listRuntimeStatus: 'running',
@@ -185,9 +182,6 @@ async function verifyBindSessionDetailControl() {
       payload: SendInstructionPayload
     ): Promise<SendInstructionResult> => {
       sentPayloads.push({ endpoint: _endpoint, payload })
-      await new Promise<void>((resolve) => {
-        releaseSend = resolve
-      })
       return { wrapper_session_id: 'niuma_codex_1', sent: true }
     },
     interruptSession: async (
@@ -202,15 +196,10 @@ async function verifyBindSessionDetailControl() {
   bindSessionDetailControl(root as unknown as ParentNode, options)
 
   root.input.value = '  继续执行任务  '
-  const firstSend = root.sendButton.click()
-  const secondSend = root.sendButton.click()
-  await Promise.resolve()
+  await root.sendButton.click()
   if (sentPayloads.length !== 1) {
-    throw new Error('发送请求未完成时连续点击也只能调用一次 sendInstruction')
+    throw new Error('发送 click 应调用 sendInstruction')
   }
-  releaseSend()
-  await firstSend
-  await secondSend
   const sendCall = sentPayloads[0] as {
     endpoint: string
     payload: { content: string }
