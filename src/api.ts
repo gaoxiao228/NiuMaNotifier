@@ -45,17 +45,16 @@ export type MainStateDetail = {
   payload_ref: string | null
   completion_reason: string | null
   failure_reason: string | null
-  interaction?: EventInteractionDetail | null
+  approval?: StateApprovalDetail | null
 }
 
-export type EventInteractionDetail = {
-  kind: 'approval' | 'input'
-  handling: 'niuma' | 'tool' | 'none'
-  actionable: boolean
-  request_id?: string | null
-  actions?: string[]
-  endpoint?: string | null
-  message?: string | null
+export type StateApprovalDetail = {
+  request_id: string
+  status: string
+  can_decide: boolean
+  message: string | null
+  decided_by: string | null
+  decided_source: string | null
 }
 
 export type ApprovalDecisionResult = {
