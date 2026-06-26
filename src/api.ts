@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { InterruptPayload, SendInstructionPayload, SessionControl } from './sessionControl'
 
 export type ApiResponse<T> = {
   code: number
@@ -81,38 +80,6 @@ export type RuntimeStateItem = {
 
 export type RuntimeStateListPayload = {
   list: RuntimeStateItem[]
-}
-
-export type ToolSessionMessage = {
-  role: string
-  content: string | null
-  created_at?: string | null
-}
-
-export type ToolSessionDetail = {
-  tool: string
-  session_id: string
-  project_name?: string | null
-  project_path?: string | null
-  status?: string | null
-  runtime_status?: string | null
-  updated_at?: string | null
-  messages: ToolSessionMessage[]
-  next_cursor?: string | null
-  control?: SessionControl | null
-}
-
-export type SessionControlResult = {
-  wrapper_session_id: string
-  result?: unknown
-}
-
-export type SendInstructionResult = SessionControlResult & {
-  sent: boolean
-}
-
-export type InterruptSessionResult = SessionControlResult & {
-  interrupted: boolean
 }
 
 export type RecentEvents = {
@@ -266,21 +233,6 @@ async function requestLocalApi<T>(path: string, init?: RequestInit) {
   return body.data
 }
 
-async function postLocalApi<T>(path: string, payload: unknown) {
-  // 统一封装 Local API 的 JSON POST 响应解析，保持错误处理和 GET helper 一致。
-  const apiUrl = await getLocalApiUrl()
-  const response = await fetch(`${apiUrl}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
-  const body = (await response.json()) as ApiResponse<T>
-  if (body.code !== 0) {
-    throw new Error(body.message)
-  }
-  return body.data
-}
-
 export async function refreshMainState() {
   try {
     return (await requestLocalApi<{ state: MainStatePayload }>('/api/v1/main-state')).state
@@ -349,34 +301,6 @@ export async function submitApprovalDecision(
       reason
     })
   })
-}
-
-export async function getSessionDetail(input: {
-  tool: string
-  sessionId: string
-  limit?: number
-  cursor?: string | null
-}) {
-  const params = new URLSearchParams({
-    tool: input.tool,
-    session_id: input.sessionId,
-    limit: String(input.limit ?? 100)
-  })
-  if (input.cursor) {
-    params.set('cursor', input.cursor)
-  }
-  return await requestLocalApi<ToolSessionDetail>(`/api/v1/session_detail?${params.toString()}`)
-}
-
-export async function sendSessionInstruction(
-  endpoint: string,
-  payload: SendInstructionPayload
-) {
-  return await postLocalApi<SendInstructionResult>(endpoint, payload)
-}
-
-export async function interruptSession(endpoint: string, payload: InterruptPayload) {
-  return await postLocalApi<InterruptSessionResult>(endpoint, payload)
 }
 
 export async function getListenerConfig() {
