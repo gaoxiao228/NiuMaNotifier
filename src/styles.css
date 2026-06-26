@@ -19,7 +19,8 @@ body {
 
 button,
 select,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -43,14 +44,16 @@ button:hover:not(:disabled) {
 
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.18);
   outline-offset: 1px;
 }
 
 button:disabled,
 input:disabled,
-select:disabled {
+select:disabled,
+textarea:disabled {
   cursor: wait;
   opacity: 0.65;
 }
@@ -326,6 +329,11 @@ select {
   overflow-wrap: anywhere;
 }
 
+.request-detail .interaction-message {
+  color: #b45309;
+  font-weight: 650;
+}
+
 .request-actions {
   display: flex;
   flex-wrap: wrap;
@@ -351,9 +359,158 @@ select {
 }
 
 .approval-message {
-  color: #53627a;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 7px;
+  color: #92400e;
   font-size: 13px;
   line-height: 1.45;
+  margin: 0;
+  padding: 9px 11px;
+}
+
+.input-response-form {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  width: min(100%, 520px);
+}
+
+.input-question {
+  border: 1px solid #d6e0ec;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  padding: 10px 11px 11px;
+}
+
+.input-question legend {
+  color: #17213a;
+  font-size: 13px;
+  font-weight: 650;
+  padding: 0 4px;
+}
+
+.input-question > small {
+  color: #53627a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.input-option {
+  align-items: start;
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.input-option input {
+  margin-top: 3px;
+}
+
+.input-option span {
+  color: #17213a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.input-option small {
+  color: #667085;
+  font-size: 12px;
+  grid-column: 2;
+  line-height: 1.35;
+}
+
+.input-custom-answer textarea {
+  display: none;
+  grid-column: 2;
+  margin-top: 4px;
+}
+
+.input-custom-answer input:checked ~ textarea {
+  display: block;
+}
+
+.input-question textarea {
+  background: #ffffff;
+  border: 1px solid #cbd7e6;
+  border-radius: 6px;
+  color: #263755;
+  min-height: 76px;
+  padding: 8px 9px;
+  resize: vertical;
+  width: 100%;
+}
+
+/* 会话详情控制区承载发送指令与中断操作，保持输入区和按钮区稳定对齐。 */
+.session-detail-control {
+  border-top: 1px solid #d6e0ec;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px;
+}
+
+.session-detail-control input,
+.session-detail-control textarea {
+  background: #ffffff;
+  border: 1px solid #cbd7e6;
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: #263755;
+  min-height: 72px;
+  min-width: 0;
+  padding: 8px 9px;
+  resize: vertical;
+  width: 100%;
+}
+
+.session-detail-control input:focus-visible,
+.session-detail-control textarea:focus-visible {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  outline: none;
+}
+
+.session-detail-control input:disabled,
+.session-detail-control textarea:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.session-detail-control-actions {
+  align-self: end;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.session-detail-control button {
+  min-height: 36px;
+  min-width: 76px;
+}
+
+.session-detail-control button.interrupt,
+.session-detail-control button[data-session-action='interrupt'] {
+  background: #ffffff;
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.session-detail-control button.interrupt:hover:not(:disabled),
+.session-detail-control button[data-session-action='interrupt']:hover:not(:disabled) {
+  border-color: #b91c1c;
+  color: #b91c1c;
+}
+
+.session-detail-control-message {
+  color: #53627a;
+  font-size: 12px;
+  grid-column: 1 / -1;
+  line-height: 1.4;
   margin: 0;
 }
 
@@ -1470,6 +1627,14 @@ select {
   .secondary-action {
     margin-top: 14px;
     position: static;
+  }
+
+  .session-detail-control {
+    grid-template-columns: 1fr;
+  }
+
+  .session-detail-control-actions {
+    justify-content: flex-end;
   }
 
   .plugin-config-fields,

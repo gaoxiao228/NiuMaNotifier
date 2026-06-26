@@ -98,13 +98,24 @@ export type Translation = {
   language: string
   refresh: string
   clearBlocker: string
+  clearBlockerAfterTool: string
   clearBlockerConfirm: string
   clearBlockerConfirmAgain: string
   clearBlockerClearing: string
   approveApproval: string
   denyApproval: string
   approvalSubmitting: string
+  submitInputAnswer: string
+  customInputAnswer: string
+  inputTextPlaceholder: string
+  // 会话详情控制区文案由 sessionWorkbenchView 通过 text 注入使用。
+  sessionControlPlaceholder: string
+  sessionControlSend: string
+  sessionControlInterrupt: string
+  sessionControlUnsupported: string
+  sessionControlFailed: string
   currentRequest: string
+  handlingHint: string
   project: string
   path: string
   toolLabel: string
@@ -240,6 +251,7 @@ export const translations: Record<LanguageCode, Translation> = {
     language: '语言',
     refresh: '刷新',
     clearBlocker: '我已处理',
+    clearBlockerAfterTool: '我已在 {tool} 中处理',
     clearBlockerConfirm:
       '这只会清除 NiumaNotifier 中当前所有待处理提醒，不会在 AI 工具中批准、拒绝或输入内容。',
     clearBlockerConfirmAgain: '再次点击确认',
@@ -247,7 +259,16 @@ export const translations: Record<LanguageCode, Translation> = {
     approveApproval: '同意',
     denyApproval: '拒绝',
     approvalSubmitting: '提交中...',
+    submitInputAnswer: '提交输入',
+    customInputAnswer: '自定义答案',
+    inputTextPlaceholder: '请输入回复',
+    sessionControlPlaceholder: '输入要发送给当前会话的指令',
+    sessionControlSend: '发送',
+    sessionControlInterrupt: '中断',
+    sessionControlUnsupported: '当前会话不支持发送指令',
+    sessionControlFailed: '控制请求失败',
     currentRequest: '当前请求',
+    handlingHint: '处理提示',
     project: '项目',
     path: '路径',
     toolLabel: '工具',
@@ -408,6 +429,7 @@ export const translations: Record<LanguageCode, Translation> = {
     language: '語言',
     refresh: '重新整理',
     clearBlocker: '我已處理',
+    clearBlockerAfterTool: '我已在 {tool} 中處理',
     clearBlockerConfirm:
       '這只會清除 NiumaNotifier 中目前所有待處理提醒，不會在 AI 工具中批准、拒絕或輸入內容。',
     clearBlockerConfirmAgain: '再次點擊確認',
@@ -415,7 +437,16 @@ export const translations: Record<LanguageCode, Translation> = {
     approveApproval: '同意',
     denyApproval: '拒絕',
     approvalSubmitting: '提交中...',
+    submitInputAnswer: '提交輸入',
+    customInputAnswer: '自訂答案',
+    inputTextPlaceholder: '請輸入回覆',
+    sessionControlPlaceholder: '輸入要傳送給目前會話的指令',
+    sessionControlSend: '傳送',
+    sessionControlInterrupt: '中斷',
+    sessionControlUnsupported: '目前會話不支援傳送指令',
+    sessionControlFailed: '控制請求失敗',
     currentRequest: '目前請求',
+    handlingHint: '處理提示',
     project: '專案',
     path: '路徑',
     toolLabel: '工具',
@@ -577,6 +608,7 @@ export const translations: Record<LanguageCode, Translation> = {
     language: 'Language',
     refresh: 'Refresh',
     clearBlocker: 'Handled',
+    clearBlockerAfterTool: 'Handled in {tool}',
     clearBlockerConfirm:
       'This only clears all current attention reminders in NiumaNotifier. It does not approve, deny, or enter anything in the AI tool.',
     clearBlockerConfirmAgain: 'Click again to confirm',
@@ -584,7 +616,16 @@ export const translations: Record<LanguageCode, Translation> = {
     approveApproval: 'Allow',
     denyApproval: 'Deny',
     approvalSubmitting: 'Submitting...',
+    submitInputAnswer: 'Submit input',
+    customInputAnswer: 'Custom answer',
+    inputTextPlaceholder: 'Enter a response',
+    sessionControlPlaceholder: 'Enter an instruction for this session',
+    sessionControlSend: 'Send',
+    sessionControlInterrupt: 'Interrupt',
+    sessionControlUnsupported: 'This session does not support sending instructions',
+    sessionControlFailed: 'Control request failed',
     currentRequest: 'Current request',
+    handlingHint: 'Handling hint',
     project: 'Project',
     path: 'Path',
     toolLabel: 'Tool',
@@ -746,6 +787,7 @@ export const translations: Record<LanguageCode, Translation> = {
     language: '言語',
     refresh: '更新',
     clearBlocker: '処理済み',
+    clearBlockerAfterTool: '{tool} で処理済み',
     clearBlockerConfirm:
       'これは NiumaNotifier の現在の未処理リマインダーをすべて消すだけです。AI ツールで承認、拒否、入力は行いません。',
     clearBlockerConfirmAgain: 'もう一度クリックして確認',
@@ -753,7 +795,16 @@ export const translations: Record<LanguageCode, Translation> = {
     approveApproval: '承認',
     denyApproval: '拒否',
     approvalSubmitting: '送信中...',
+    submitInputAnswer: '入力を送信',
+    customInputAnswer: 'カスタム回答',
+    inputTextPlaceholder: '返信を入力',
+    sessionControlPlaceholder: 'このセッションに送信する指示を入力',
+    sessionControlSend: '送信',
+    sessionControlInterrupt: '中断',
+    sessionControlUnsupported: 'このセッションは指示の送信に対応していません',
+    sessionControlFailed: '制御リクエストに失敗しました',
     currentRequest: '現在のリクエスト',
+    handlingHint: '処理方法',
     project: 'プロジェクト',
     path: 'パス',
     toolLabel: 'ツール',
@@ -915,6 +966,7 @@ export const translations: Record<LanguageCode, Translation> = {
     language: '언어',
     refresh: '새로고침',
     clearBlocker: '처리 완료',
+    clearBlockerAfterTool: '{tool}에서 처리 완료',
     clearBlockerConfirm:
       '이 작업은 NiumaNotifier의 현재 처리 필요 알림만 모두 지웁니다. AI 도구에서 승인, 거부 또는 입력을 수행하지 않습니다.',
     clearBlockerConfirmAgain: '다시 클릭해 확인',
@@ -922,7 +974,16 @@ export const translations: Record<LanguageCode, Translation> = {
     approveApproval: '승인',
     denyApproval: '거부',
     approvalSubmitting: '제출 중...',
+    submitInputAnswer: '입력 제출',
+    customInputAnswer: '직접 입력',
+    inputTextPlaceholder: '응답을 입력하세요',
+    sessionControlPlaceholder: '이 세션에 보낼 지시를 입력하세요',
+    sessionControlSend: '보내기',
+    sessionControlInterrupt: '중단',
+    sessionControlUnsupported: '이 세션은 지시 보내기를 지원하지 않습니다',
+    sessionControlFailed: '제어 요청 실패',
     currentRequest: '현재 요청',
+    handlingHint: '처리 안내',
     project: '프로젝트',
     path: '경로',
     toolLabel: '도구',
@@ -1084,6 +1145,7 @@ export const translations: Record<LanguageCode, Translation> = {
     language: 'Sprache',
     refresh: 'Aktualisieren',
     clearBlocker: 'Erledigt',
+    clearBlockerAfterTool: 'In {tool} erledigt',
     clearBlockerConfirm:
       'Dies entfernt nur alle aktuellen Hinweise in NiumaNotifier. Im KI-Tool wird nichts genehmigt, abgelehnt oder eingegeben.',
     clearBlockerConfirmAgain: 'Zum Bestätigen erneut klicken',
@@ -1091,7 +1153,16 @@ export const translations: Record<LanguageCode, Translation> = {
     approveApproval: 'Erlauben',
     denyApproval: 'Ablehnen',
     approvalSubmitting: 'Wird gesendet...',
+    submitInputAnswer: 'Eingabe senden',
+    customInputAnswer: 'Eigene Antwort',
+    inputTextPlaceholder: 'Antwort eingeben',
+    sessionControlPlaceholder: 'Anweisung für diese Sitzung eingeben',
+    sessionControlSend: 'Senden',
+    sessionControlInterrupt: 'Unterbrechen',
+    sessionControlUnsupported: 'Diese Sitzung unterstützt das Senden von Anweisungen nicht',
+    sessionControlFailed: 'Steuerungsanfrage fehlgeschlagen',
     currentRequest: 'Aktuelle Anfrage',
+    handlingHint: 'Hinweis',
     project: 'Projekt',
     path: 'Pfad',
     toolLabel: 'Tool',
