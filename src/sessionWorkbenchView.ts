@@ -84,10 +84,12 @@ export function bindSessionDetailControl(
   const interruptButton = root.querySelector<HTMLButtonElement>('[data-session-action="interrupt"]')
   const state = getSessionControlState(options.detail.control, options.listRuntimeStatus)
   const wrapperSessionId = options.detail.control?.wrapper_session_id ?? null
+  let requestBusy = false
 
   sendButton?.addEventListener('click', async () => {
     const content = input?.value.trim() ?? ''
     if (
+      requestBusy ||
       !content ||
       sendButton.disabled ||
       !state.canSendInstruction ||
@@ -97,6 +99,7 @@ export function bindSessionDetailControl(
       return
     }
 
+    requestBusy = true
     try {
       await options.rerender(null, true)
       // API 模块依赖 Tauri runtime；延迟加载可让纯字符串渲染测试在 Node 中运行。
@@ -117,11 +120,14 @@ export function bindSessionDetailControl(
       await options.rerender(null, false)
     } catch (error) {
       await options.rerender(getErrorMessage(error), false)
+    } finally {
+      requestBusy = false
     }
   })
 
   interruptButton?.addEventListener('click', async () => {
     if (
+      requestBusy ||
       interruptButton.disabled ||
       !state.canInterrupt ||
       !state.interruptEndpoint ||
@@ -130,6 +136,7 @@ export function bindSessionDetailControl(
       return
     }
 
+    requestBusy = true
     try {
       await options.rerender(null, true)
       // API 模块依赖 Tauri runtime；延迟加载可让纯字符串渲染测试在 Node 中运行。
@@ -146,6 +153,8 @@ export function bindSessionDetailControl(
       await options.rerender(null, false)
     } catch (error) {
       await options.rerender(getErrorMessage(error), false)
+    } finally {
+      requestBusy = false
     }
   })
 }
