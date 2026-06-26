@@ -31,7 +31,7 @@ export type BindSessionDetailControlOptions = {
     endpoint: string,
     payload: SendInstructionPayload
   ) => Promise<SendInstructionResult>
-  interrupt?: (
+  interruptSession?: (
     endpoint: string,
     payload: InterruptPayload
   ) => Promise<InterruptSessionResult>
@@ -133,8 +133,9 @@ export function bindSessionDetailControl(
     try {
       await options.rerender(null, true)
       // API 模块依赖 Tauri runtime；延迟加载可让纯字符串渲染测试在 Node 中运行。
-      const interrupt = options.interrupt ?? (await import('./api')).interruptSession
-      await interrupt(
+      const interruptSession =
+        options.interruptSession ?? (await import('./api')).interruptSession
+      await interruptSession(
         state.interruptEndpoint,
         buildInterruptPayload({
           tool: options.detail.tool,

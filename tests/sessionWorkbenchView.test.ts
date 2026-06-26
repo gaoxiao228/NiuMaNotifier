@@ -1,5 +1,10 @@
-import { bindSessionDetailControl, renderSessionDetailControl } from '../src/sessionWorkbenchView'
-import type { ToolSessionDetail } from '../src/api'
+import {
+  bindSessionDetailControl,
+  renderSessionDetailControl,
+  type BindSessionDetailControlOptions
+} from '../src/sessionWorkbenchView'
+import type { InterruptSessionResult, SendInstructionResult, ToolSessionDetail } from '../src/api'
+import type { InterruptPayload, SendInstructionPayload } from '../src/sessionControl'
 
 const text = {
   placeholder: '发送指令',
@@ -126,3 +131,104 @@ if (!escapedHtml.includes('&lt;send&gt;') || escapedHtml.includes('<script>')) {
 if (typeof bindSessionDetailControl !== 'function') {
   throw new Error('控制区应导出 DOM 事件绑定函数')
 }
+
+type ClickHandler = () => void | Promise<void>
+
+class FakeButton {
+  disabled = false
+  private clickHandler: ClickHandler | null = null
+
+  addEventListener(eventName: string, handler: ClickHandler) {
+    if (eventName === 'click') {
+      this.clickHandler = handler
+    }
+  }
+
+  async click() {
+    await this.clickHandler?.()
+  }
+}
+
+class FakeRoot {
+  readonly input = { value: '' }
+  readonly sendButton = new FakeButton()
+  readonly interruptButton = new FakeButton()
+
+  querySelector(selector: string) {
+    // 只实现绑定函数依赖的选择器，让 Node 环境测试不需要真实 document。
+    if (selector === '[data-session-control-input]') {
+      return this.input
+    }
+    if (selector === '[data-session-action="send"]') {
+      return this.sendButton
+    }
+    if (selector === '[data-session-action="interrupt"]') {
+      return this.interruptButton
+    }
+    return null
+  }
+}
+
+async function verifyBindSessionDetailControl() {
+  const root = new FakeRoot()
+  const sentPayloads: unknown[] = []
+  const interruptedPayloads: unknown[] = []
+  const options: BindSessionDetailControlOptions = {
+    detail,
+    listRuntimeStatus: 'running',
+    rerender: () => {},
+    sendInstruction: async (
+      _endpoint: string,
+      payload: SendInstructionPayload
+    ): Promise<SendInstructionResult> => {
+      sentPayloads.push({ endpoint: _endpoint, payload })
+      return { wrapper_session_id: 'niuma_codex_1', sent: true }
+    },
+    interruptSession: async (
+      _endpoint: string,
+      payload: InterruptPayload
+    ): Promise<InterruptSessionResult> => {
+      interruptedPayloads.push({ endpoint: _endpoint, payload })
+      return { wrapper_session_id: 'niuma_codex_1', interrupted: true }
+    }
+  }
+
+  bindSessionDetailControl(root as unknown as ParentNode, options)
+
+  root.input.value = '  继续执行任务  '
+  await root.sendButton.click()
+  if (sentPayloads.length !== 1) {
+    throw new Error('发送 click 应调用 sendInstruction')
+  }
+  const sendCall = sentPayloads[0] as {
+    endpoint: string
+    payload: { content: string }
+  }
+  if (
+    sendCall.endpoint !== '/api/v1/session-control/send-instruction' ||
+    sendCall.payload.content !== '继续执行任务'
+  ) {
+    throw new Error('发送 click 应 trim 输入并传入正确 endpoint 和 payload')
+  }
+  if (root.input.value !== '') {
+    throw new Error('发送成功后应清空输入框')
+  }
+
+  await root.sendButton.click()
+  if (sentPayloads.length !== 1) {
+    throw new Error('空内容不应调用 sendInstruction')
+  }
+
+  await root.interruptButton.click()
+  if (interruptedPayloads.length !== 1) {
+    throw new Error('中断 click 应调用 interruptSession')
+  }
+  const interruptCall = interruptedPayloads[0] as { endpoint: string }
+  if (interruptCall.endpoint !== '/api/v1/session-control/interrupt') {
+    throw new Error('中断 click 应传入正确 endpoint')
+  }
+}
+
+verifyBindSessionDetailControl().catch((error: unknown) => {
+  throw error
+})
