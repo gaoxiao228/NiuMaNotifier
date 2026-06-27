@@ -14,7 +14,9 @@ use niuma_core::plugin::{
     resolve_plugin_config, PluginCapability, PluginManifest, PluginRegistry, PluginRuntimeState,
     BUILTIN_BARK_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
 };
-use niuma_core::runtime_event::{RuntimeEvent, RuntimeEventBus, StateChangeReason};
+use niuma_core::runtime_event::{
+    RuntimeEvent, RuntimeEventBus, StateChangeReason, ToolSessionControlChangeReason,
+};
 use niuma_core::store::NiumaStore;
 use niuma_core::tool_session::ToolSessionDetail;
 use niuma_core::tool_session_rpc::{
@@ -658,6 +660,7 @@ fn bootstrap_session_provider(
         manifest.id.clone(),
         stdout,
         guard.clone(),
+        runtime_events.clone(),
         tool_sessions.clone(),
         pending.clone(),
     );
@@ -777,6 +780,7 @@ fn spawn_provider_stdout_reader(
     plugin_id: String,
     stdout: ChildStdout,
     guard: SessionProviderInstanceGuard,
+    runtime_events: RuntimeEventBus,
     tool_sessions: ToolSessionRegistry,
     pending: ProviderPendingResponses,
 ) {
@@ -789,6 +793,7 @@ fn spawn_provider_stdout_reader(
                 match line {
                     Ok(line) => handle_provider_stdout_line(
                         &tool_sessions,
+                        Some(&runtime_events),
                         Some(&pending),
                         Some(&guard),
                         &line,
@@ -809,6 +814,7 @@ fn spawn_provider_stdout_reader(
 
 fn handle_provider_stdout_line(
     tool_sessions: &ToolSessionRegistry,
+    runtime_events: Option<&RuntimeEventBus>,
     pending: Option<&ProviderPendingResponses>,
     provider_guard: Option<&SessionProviderInstanceGuard>,
     line: &str,
@@ -837,9 +843,12 @@ fn handle_provider_stdout_line(
 
     if value.get("method").is_some() && value.get("id").is_none() {
         match serde_json::from_value::<ProviderRpcNotification>(value) {
-            Ok(notification) => {
-                handle_provider_notification(tool_sessions, provider_guard, notification)
-            }
+            Ok(notification) => handle_provider_notification(
+                tool_sessions,
+                runtime_events,
+                provider_guard,
+                notification,
+            ),
             Err(error) => eprintln!("NiumaNotifier provider notification parse failed: {error}"),
         }
         return;
@@ -850,6 +859,7 @@ fn handle_provider_stdout_line(
 
 fn handle_provider_notification(
     tool_sessions: &ToolSessionRegistry,
+    runtime_events: Option<&RuntimeEventBus>,
     provider_guard: Option<&SessionProviderInstanceGuard>,
     notification: ProviderRpcNotification,
 ) {
@@ -862,7 +872,17 @@ fn handle_provider_notification(
                     );
                     return;
                 };
-                if !replace_session_provider_snapshot(tool_sessions, provider_guard, snapshot) {
+                if replace_session_provider_snapshot(tool_sessions, provider_guard, snapshot) {
+                    if let Some(runtime_events) = runtime_events {
+                        runtime_events.publish_tool_session_control_changed(
+                            provider_guard.tool.clone(),
+                            None,
+                            None,
+                            None,
+                            ToolSessionControlChangeReason::SnapshotRefreshed,
+                        );
+                    }
+                } else {
                     eprintln!(
                         "NiumaNotifier provider {} snapshot notification ignored",
                         provider_guard.plugin_id
@@ -1277,6 +1297,8 @@ mod tests {
     #[test]
     fn provider_notification_updates_session_snapshot() {
         let registry = niuma_api::tool_sessions::ToolSessionRegistry::new();
+        let runtime_events = RuntimeEventBus::new();
+        let mut receiver = runtime_events.subscribe();
         let line = serde_json::json!({
             "method": "session_snapshot_updated",
             "params": {
@@ -1287,7 +1309,7 @@ mod tests {
         .to_string();
         let guard = active_provider_guard("provider-notify", ToolKind::Codex);
 
-        handle_provider_stdout_line(&registry, None, Some(&guard), &line);
+        handle_provider_stdout_line(&registry, Some(&runtime_events), None, Some(&guard), &line);
 
         let sessions = registry
             .list(niuma_api::tool_sessions::ToolSessionListQuery {
@@ -1297,6 +1319,14 @@ mod tests {
             .unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "s1");
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            RuntimeEvent::ToolSessionControlChanged {
+                tool: ToolKind::Codex,
+                reason: ToolSessionControlChangeReason::SnapshotRefreshed,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1305,9 +1335,10 @@ mod tests {
         let guard = active_provider_guard("provider-notify", ToolKind::Codex);
 
         // provider stdout 可能混入日志或半行 JSON；解析失败不能终止后续合法通知处理。
-        handle_provider_stdout_line(&registry, None, Some(&guard), "{not-json");
+        handle_provider_stdout_line(&registry, None, None, Some(&guard), "{not-json");
         handle_provider_stdout_line(
             &registry,
+            None,
             None,
             Some(&guard),
             &serde_json::json!({
@@ -1341,6 +1372,7 @@ mod tests {
         handle_provider_stdout_line(
             &registry,
             None,
+            None,
             Some(&guard),
             &serde_json::json!({
                 "method": "session_snapshot_updated",
@@ -1366,6 +1398,7 @@ mod tests {
         // provider manifest 只允许上报 expected tool，错 tool 通知不能替换其他工具缓存。
         handle_provider_stdout_line(
             &registry,
+            None,
             None,
             Some(&guard),
             &serde_json::json!({
@@ -1397,12 +1430,14 @@ mod tests {
         // provider stdout 混入非法 JSON 后，合法 response 仍必须完成对应 pending 请求。
         handle_provider_stdout_line(
             &niuma_api::tool_sessions::ToolSessionRegistry::new(),
+            None,
             Some(&pending),
             None,
             "not-json",
         );
         handle_provider_stdout_line(
             &niuma_api::tool_sessions::ToolSessionRegistry::new(),
+            None,
             Some(&pending),
             None,
             &serde_json::json!({
@@ -1435,6 +1470,7 @@ mod tests {
 
         handle_provider_stdout_line(
             &niuma_api::tool_sessions::ToolSessionRegistry::new(),
+            None,
             Some(&pending),
             None,
             &line,
@@ -1644,6 +1680,7 @@ mod tests {
         // manager 尚未清理时，失败实例的 stdout 线程仍可能读到通知，guard 必须先阻止写入。
         handle_provider_stdout_line(
             &registry,
+            None,
             None,
             Some(&guard),
             &serde_json::json!({

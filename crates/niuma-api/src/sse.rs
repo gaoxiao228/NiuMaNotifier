@@ -277,7 +277,8 @@ pub(crate) async fn session_project_groups_stream(
                 Ok(RuntimeEvent::NiumaEventsAppended { .. })
                 | Ok(RuntimeEvent::AttentionDismissed { .. })
                 | Ok(RuntimeEvent::StateReset { .. })
-                | Ok(RuntimeEvent::StateChanged { .. }) => {
+                | Ok(RuntimeEvent::StateChanged { .. })
+                | Ok(RuntimeEvent::ToolSessionControlChanged { .. }) => {
                     if let Some(event) =
                         next_session_project_groups_event(&state, &query, &mut client, false)
                     {
@@ -357,6 +358,24 @@ pub(crate) async fn session_detail_stream(
                         next_session_detail_event(&state, &request, &mut client, false)
                     {
                         yield Ok::<Event, std::convert::Infallible>(event);
+                    }
+                }
+                Ok(RuntimeEvent::ToolSessionControlChanged {
+                    tool,
+                    session_id,
+                    normalized_session_id,
+                    ..
+                }) => {
+                    if tool == request.tool
+                        && (session_id.as_deref() == Some(request.session_id.as_str())
+                            || normalized_session_id.as_deref() == Some(request.session_id.as_str())
+                            || (session_id.is_none() && normalized_session_id.is_none()))
+                    {
+                        if let Some(event) =
+                            next_session_detail_event(&state, &request, &mut client, false)
+                        {
+                            yield Ok::<Event, std::convert::Infallible>(event);
+                        }
                     }
                 }
                 Ok(RuntimeEvent::AttentionDismissed { .. })

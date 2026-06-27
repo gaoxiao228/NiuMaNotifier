@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::models::NiumaEvent;
+use crate::models::ToolKind;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -25,6 +26,14 @@ pub enum RuntimeEvent {
         version: u64,
         reason: StateChangeReason,
     },
+    ToolSessionControlChanged {
+        version: u64,
+        tool: ToolKind,
+        session_id: Option<String>,
+        normalized_session_id: Option<String>,
+        channel_id: Option<String>,
+        reason: ToolSessionControlChangeReason,
+    },
     PluginNotificationTestRequested {
         version: u64,
         request: PluginNotificationTestRequest,
@@ -45,6 +54,15 @@ pub enum StateChangeReason {
     StaleSweep,
     ListenerConfigChanged,
     PluginConfigChanged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolSessionControlChangeReason {
+    ChannelRegistered,
+    ChannelAvailable,
+    ChannelUnavailable,
+    ChannelRemoved,
+    SnapshotRefreshed,
 }
 
 #[derive(Clone)]
@@ -92,6 +110,24 @@ impl RuntimeEventBus {
         self.publish(|version| RuntimeEvent::StateChanged { version, reason });
     }
 
+    pub fn publish_tool_session_control_changed(
+        &self,
+        tool: ToolKind,
+        session_id: Option<String>,
+        normalized_session_id: Option<String>,
+        channel_id: Option<String>,
+        reason: ToolSessionControlChangeReason,
+    ) {
+        self.publish(|version| RuntimeEvent::ToolSessionControlChanged {
+            version,
+            tool,
+            session_id,
+            normalized_session_id,
+            channel_id,
+            reason,
+        });
+    }
+
     pub fn publish_plugin_notification_test(&self, request: PluginNotificationTestRequest) {
         self.publish(|version| RuntimeEvent::PluginNotificationTestRequested { version, request });
     }
@@ -136,6 +172,32 @@ mod tests {
             RuntimeEvent::StateChanged {
                 version: 2,
                 reason: StateChangeReason::StaleSweep
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_event_bus_publishes_tool_session_control_changed() {
+        let bus = RuntimeEventBus::new();
+        let mut receiver = bus.subscribe();
+
+        bus.publish_tool_session_control_changed(
+            ToolKind::Codex,
+            Some("session-1".to_string()),
+            Some("session-1".to_string()),
+            Some("niuma_codex_managed:niuma_codex_1".to_string()),
+            ToolSessionControlChangeReason::ChannelUnavailable,
+        );
+
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            RuntimeEvent::ToolSessionControlChanged {
+                version: 1,
+                tool: ToolKind::Codex,
+                session_id: Some("session-1".to_string()),
+                normalized_session_id: Some("session-1".to_string()),
+                channel_id: Some("niuma_codex_managed:niuma_codex_1".to_string()),
+                reason: ToolSessionControlChangeReason::ChannelUnavailable,
             }
         );
     }

@@ -860,6 +860,7 @@ mod tests {
             completion_reason: Some(CompletionReason::Normal),
             failure_reason: None,
             payload_ref: None,
+            interaction: None,
             created_at: at(timestamp),
         }
     }
