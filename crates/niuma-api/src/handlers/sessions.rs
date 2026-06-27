@@ -43,7 +43,7 @@ pub(crate) struct SessionDetailQuery {
 pub(crate) struct SessionSendInstructionBody {
     tool: String,
     session_id: String,
-    wrapper_session_id: String,
+    channel_id: String,
     content: String,
 }
 
@@ -51,14 +51,14 @@ pub(crate) struct SessionSendInstructionBody {
 pub(crate) struct SessionInterruptBody {
     tool: String,
     session_id: String,
-    wrapper_session_id: String,
+    channel_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct SessionAnswerInputBody {
     tool: String,
     session_id: String,
-    wrapper_session_id: String,
+    channel_id: String,
     request_id: String,
     answers: Value,
 }
@@ -227,18 +227,18 @@ pub(crate) async fn post_session_send_instruction(body: Bytes) -> Response {
         );
     }
     let session_id = request.session_id.trim();
-    let wrapper_session_id = request.wrapper_session_id.trim();
+    let channel_id = request.channel_id.trim();
     match codex_managed_control::send_instruction(
         &codex_managed_registry_path(),
         session_id,
-        wrapper_session_id,
+        channel_id,
         &request.content,
     ) {
         Ok(result) => json_response(
             200,
             ApiResponse::ok(json!({
                 "sent": true,
-                "wrapper_session_id": wrapper_session_id,
+                "channel_id": channel_id,
                 "result": result.get("result").cloned().unwrap_or(result)
             })),
         ),
@@ -272,17 +272,13 @@ pub(crate) async fn post_session_interrupt(body: Bytes) -> Response {
         );
     }
     let session_id = request.session_id.trim();
-    let wrapper_session_id = request.wrapper_session_id.trim();
-    match codex_managed_control::interrupt(
-        &codex_managed_registry_path(),
-        session_id,
-        wrapper_session_id,
-    ) {
+    let channel_id = request.channel_id.trim();
+    match codex_managed_control::interrupt(&codex_managed_registry_path(), session_id, channel_id) {
         Ok(result) => json_response(
             200,
             ApiResponse::ok(json!({
                 "interrupted": true,
-                "wrapper_session_id": wrapper_session_id,
+                "channel_id": channel_id,
                 "result": result.get("result").cloned().unwrap_or(result)
             })),
         ),
@@ -320,12 +316,12 @@ pub(crate) async fn post_session_answer_input(
     }
 
     let session_id = request.session_id.trim();
-    let wrapper_session_id = request.wrapper_session_id.trim();
+    let channel_id = request.channel_id.trim();
     let request_id = request.request_id.trim();
     match codex_managed_control::answer_input(
         &codex_managed_registry_path(),
         session_id,
-        wrapper_session_id,
+        channel_id,
         request_id,
         &request.answers,
     ) {
@@ -335,7 +331,7 @@ pub(crate) async fn post_session_answer_input(
                 200,
                 ApiResponse::ok(json!({
                     "answered": true,
-                    "wrapper_session_id": wrapper_session_id,
+                    "channel_id": channel_id,
                     "request_id": request_id,
                     "state_cleared": state_cleared,
                     "result": result.get("result").cloned().unwrap_or(result)

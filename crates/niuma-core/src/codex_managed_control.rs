@@ -2,20 +2,23 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::codex_managed_session::{read_registry, ManagedCodexSession, ManagedCodexSessionState};
+use crate::codex_managed_session::{
+    read_registry, wrapper_session_id_from_channel_id, ManagedCodexSession,
+    ManagedCodexSessionState,
+};
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn send_instruction(
     registry_path: &Path,
     session_id: &str,
-    wrapper_session_id: &str,
+    channel_id: &str,
     content: &str,
 ) -> Result<Value, String> {
     if content.trim().is_empty() {
         return Err("content 不能为空".to_string());
     }
-    let session = managed_session_for_control(registry_path, session_id, wrapper_session_id)?;
+    let session = managed_session_for_control(registry_path, session_id, channel_id)?;
     let command = json!({
         "type": "send_instruction",
         "content": content
@@ -26,7 +29,7 @@ pub fn send_instruction(
 pub fn answer_input(
     registry_path: &Path,
     session_id: &str,
-    wrapper_session_id: &str,
+    channel_id: &str,
     request_id: &str,
     answers: &Value,
 ) -> Result<Value, String> {
@@ -43,7 +46,7 @@ pub fn answer_input(
     if !answer_map.values().all(is_non_empty_string_array) {
         return Err("answers 必须是字符串数组对象".to_string());
     }
-    let session = managed_session_for_control(registry_path, session_id, wrapper_session_id)?;
+    let session = managed_session_for_control(registry_path, session_id, channel_id)?;
     let command = json!({
         "type": "answer_input",
         "request_id": request_id,
@@ -55,9 +58,9 @@ pub fn answer_input(
 pub fn interrupt(
     registry_path: &Path,
     session_id: &str,
-    wrapper_session_id: &str,
+    channel_id: &str,
 ) -> Result<Value, String> {
-    let session = managed_session_for_control(registry_path, session_id, wrapper_session_id)?;
+    let session = managed_session_for_control(registry_path, session_id, channel_id)?;
     ensure_control_ok(relay_control_command(
         &session.control_socket,
         &json!({ "type": "interrupt" }),
@@ -67,28 +70,28 @@ pub fn interrupt(
 fn managed_session_for_control(
     registry_path: &Path,
     session_id: &str,
-    wrapper_session_id: &str,
+    channel_id: &str,
 ) -> Result<ManagedCodexSession, String> {
     if session_id.trim().is_empty() {
         return Err("session_id 不能为空".to_string());
     }
-    if !wrapper_session_id.starts_with("niuma_codex_") {
-        return Err("wrapper_session_id 必须以 niuma_codex_ 开头".to_string());
-    }
+    let channel_id = channel_id.trim();
+    let wrapper_session_id = wrapper_session_id_from_channel_id(channel_id)
+        .ok_or_else(|| format!("不支持的 session control channel：{channel_id}"))?;
     let registry = read_registry(registry_path)?;
     let session = registry
         .sessions
         .iter()
         .find(|session| session.wrapper_session_id == wrapper_session_id)
-        .ok_or_else(|| format!("找不到 niuma-codex 会话：{wrapper_session_id}"))?;
+        .ok_or_else(|| format!("找不到 session control channel：{channel_id}"))?;
     if session.codex_session_id.as_deref() != Some(session_id) {
-        return Err("wrapper_session_id 与 session_id 不匹配".to_string());
+        return Err("channel_id 与 session_id 不匹配".to_string());
     }
     if session.state != ManagedCodexSessionState::Bound {
-        return Err(format!("会话不可控制：{}", session.wrapper_session_id));
+        return Err(format!("session control channel 不可用：{channel_id}"));
     }
     if !process_exists(session.pid) {
-        return Err(format!("会话进程不存在：{}", session.wrapper_session_id));
+        return Err(format!("session control channel 进程不存在：{channel_id}"));
     }
     Ok(session.clone())
 }
@@ -166,7 +169,7 @@ fn relay_control_command(_control_socket: &str, _command: &Value) -> Result<Valu
 mod tests {
     use super::*;
     use crate::codex_managed_session::{
-        write_registry_atomic, ManagedCodexRegistry, ManagedCodexSession,
+        managed_codex_channel_id, write_registry_atomic, ManagedCodexRegistry, ManagedCodexSession,
     };
     use chrono::{TimeZone, Utc};
 
@@ -208,10 +211,11 @@ mod tests {
         )
         .unwrap();
 
+        let channel_id = managed_codex_channel_id("niuma_codex_1");
         let error =
-            send_instruction(&registry_path, "other-session", "niuma_codex_1", "继续").unwrap_err();
+            send_instruction(&registry_path, "other-session", &channel_id, "继续").unwrap_err();
 
-        assert_eq!(error, "wrapper_session_id 与 session_id 不匹配");
+        assert_eq!(error, "channel_id 与 session_id 不匹配");
     }
 
     #[test]
@@ -227,7 +231,7 @@ mod tests {
         let error = answer_input(
             &registry_path,
             "session-1",
-            "niuma_codex_1",
+            &managed_codex_channel_id("niuma_codex_1"),
             "request-1",
             &json!({}),
         )
@@ -249,13 +253,13 @@ mod tests {
         let error = answer_input(
             &registry_path,
             "other-session",
-            "niuma_codex_1",
+            &managed_codex_channel_id("niuma_codex_1"),
             "request-1",
             &json!({ "choice": ["yes"] }),
         )
         .unwrap_err();
 
-        assert_eq!(error, "wrapper_session_id 与 session_id 不匹配");
+        assert_eq!(error, "channel_id 与 session_id 不匹配");
     }
 
     #[test]
@@ -271,7 +275,7 @@ mod tests {
         let error = answer_input(
             &registry_path,
             "session-1",
-            "niuma_codex_1",
+            &managed_codex_channel_id("niuma_codex_1"),
             "  ",
             &json!({ "choice": ["yes"] }),
         )
@@ -293,7 +297,7 @@ mod tests {
         let error = answer_input(
             &registry_path,
             "session-1",
-            "niuma_codex_1",
+            &managed_codex_channel_id("niuma_codex_1"),
             "request-1",
             &json!({ "choice": "yes" }),
         )
@@ -337,7 +341,7 @@ mod tests {
         let error = answer_input(
             &registry_path,
             "session-1",
-            "niuma_codex_1",
+            &managed_codex_channel_id("niuma_codex_1"),
             " request-1 ",
             &json!({ "choice": ["yes"] }),
         )
@@ -366,8 +370,13 @@ mod tests {
         session.control_socket = control_socket.to_string_lossy().to_string();
         write_registry_atomic(&registry_path, &registry_with_session(session)).unwrap();
 
-        let error =
-            send_instruction(&registry_path, "session-1", "niuma_codex_1", "继续").unwrap_err();
+        let error = send_instruction(
+            &registry_path,
+            "session-1",
+            &managed_codex_channel_id("niuma_codex_1"),
+            "继续",
+        )
+        .unwrap_err();
         server.join().unwrap();
 
         assert_eq!(error, "发送失败");
@@ -392,7 +401,12 @@ mod tests {
         session.control_socket = control_socket.to_string_lossy().to_string();
         write_registry_atomic(&registry_path, &registry_with_session(session)).unwrap();
 
-        let error = interrupt(&registry_path, "session-1", "niuma_codex_1").unwrap_err();
+        let error = interrupt(
+            &registry_path,
+            "session-1",
+            &managed_codex_channel_id("niuma_codex_1"),
+        )
+        .unwrap_err();
         server.join().unwrap();
 
         assert_eq!(error, "中断失败");

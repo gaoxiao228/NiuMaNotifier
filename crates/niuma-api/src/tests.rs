@@ -3,7 +3,8 @@ use axum::http::Request;
 use chrono::{TimeZone, Utc};
 use http_body_util::BodyExt;
 use niuma_core::codex_managed_session::{
-    write_registry_atomic, ManagedCodexRegistry, ManagedCodexSession, ManagedCodexSessionState,
+    managed_codex_channel_id, write_registry_atomic, ManagedCodexRegistry, ManagedCodexSession,
+    ManagedCodexSessionState,
 };
 use niuma_core::listener_config::ListenerConfig;
 use niuma_core::models::{
@@ -3124,7 +3125,7 @@ async fn session_detail_returns_control_actions_for_mobile_resume() {
 }
 
 #[tokio::test]
-async fn session_control_send_instruction_rejects_invalid_wrapper_id() {
+async fn session_control_send_instruction_rejects_unknown_channel_prefix_legacy_invalid_case() {
     let router = app(NiumaStore::new(test_path("session_control_send_invalid")));
 
     let value = post_json(
@@ -3133,7 +3134,7 @@ async fn session_control_send_instruction_rejects_invalid_wrapper_id() {
         serde_json::json!({
             "tool": "codex",
             "session_id": "session-1",
-            "wrapper_session_id": "invalid",
+            "channel_id": "invalid",
             "content": "继续"
         }),
     )
@@ -3142,12 +3143,54 @@ async fn session_control_send_instruction_rejects_invalid_wrapper_id() {
     assert_eq!(value["code"], 100101);
     assert_eq!(
         value["message"],
-        "wrapper_session_id 必须以 niuma_codex_ 开头"
+        "不支持的 session control channel：invalid"
     );
 }
 
 #[tokio::test]
-async fn session_control_interrupt_rejects_invalid_wrapper_id() {
+async fn session_control_send_instruction_rejects_unknown_channel_prefix() {
+    let router = app(NiumaStore::new(test_path(
+        "session_control_send_unknown_channel",
+    )));
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/send-instruction",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "session-1",
+            "channel_id": "other:1",
+            "content": "继续"
+        }),
+    )
+    .await;
+    assert_ne!(value["code"], 0);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("不支持的 session control channel"));
+}
+
+#[tokio::test]
+async fn session_control_send_instruction_rejects_old_wrapper_session_id_body() {
+    let router = app(NiumaStore::new(test_path("session_control_send_old_body")));
+    let response = post_json_response(
+        &router,
+        "/api/v1/session-control/send-instruction",
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "session-1",
+            "wrapper_session_id": "niuma_codex_1",
+            "content": "继续"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let value = response_json(response).await;
+    assert_ne!(value["code"], 0);
+}
+
+#[tokio::test]
+async fn session_control_interrupt_rejects_unknown_channel_prefix() {
     let router = app(NiumaStore::new(test_path(
         "session_control_interrupt_invalid",
     )));
@@ -3158,7 +3201,7 @@ async fn session_control_interrupt_rejects_invalid_wrapper_id() {
         serde_json::json!({
             "tool": "codex",
             "session_id": "session-1",
-            "wrapper_session_id": "invalid"
+            "channel_id": "invalid"
         }),
     )
     .await;
@@ -3166,12 +3209,12 @@ async fn session_control_interrupt_rejects_invalid_wrapper_id() {
     assert_eq!(value["code"], 100101);
     assert_eq!(
         value["message"],
-        "wrapper_session_id 必须以 niuma_codex_ 开头"
+        "不支持的 session control channel：invalid"
     );
 }
 
 #[tokio::test]
-async fn session_control_answer_input_rejects_invalid_wrapper_id() {
+async fn session_control_answer_input_rejects_unknown_channel_prefix() {
     let router = app(NiumaStore::new(test_path("session_control_answer_invalid")));
 
     let value = post_json(
@@ -3180,7 +3223,7 @@ async fn session_control_answer_input_rejects_invalid_wrapper_id() {
         serde_json::json!({
             "tool": "codex",
             "session_id": "session-1",
-            "wrapper_session_id": "invalid",
+            "channel_id": "invalid",
             "request_id": "request-1",
             "answers": { "choice": ["yes"] }
         }),
@@ -3190,7 +3233,7 @@ async fn session_control_answer_input_rejects_invalid_wrapper_id() {
     assert_eq!(value["code"], 100101);
     assert_eq!(
         value["message"],
-        "wrapper_session_id 必须以 niuma_codex_ 开头"
+        "不支持的 session control channel：invalid"
     );
 }
 
@@ -3204,7 +3247,7 @@ async fn session_control_answer_input_rejects_empty_answers() {
         serde_json::json!({
             "tool": "codex",
             "session_id": "session-1",
-            "wrapper_session_id": "niuma_codex_1",
+            "channel_id": managed_codex_channel_id("niuma_codex_1"),
             "request_id": "request-1",
             "answers": {}
         }),
@@ -3227,7 +3270,7 @@ async fn session_control_answer_input_rejects_non_codex_tool() {
         serde_json::json!({
             "tool": "claude",
             "session_id": "session-1",
-            "wrapper_session_id": "niuma_codex_1",
+            "channel_id": managed_codex_channel_id("niuma_codex_1"),
             "request_id": "request-1",
             "answers": { "choice": ["yes"] }
         }),
@@ -3325,7 +3368,7 @@ async fn session_control_answer_input_clears_waiting_input_after_success() {
         serde_json::json!({
             "tool": "codex",
             "session_id": " session-1 ",
-            "wrapper_session_id": " niuma_codex_1 ",
+            "channel_id": format!(" {} ", managed_codex_channel_id("niuma_codex_1")),
             "request_id": " request-1 ",
             "answers": { "choice": ["yes"] }
         }),
@@ -3335,7 +3378,10 @@ async fn session_control_answer_input_clears_waiting_input_after_success() {
 
     assert_eq!(value["code"], 0);
     assert_eq!(value["data"]["answered"], true);
-    assert_eq!(value["data"]["wrapper_session_id"], "niuma_codex_1");
+    assert_eq!(
+        value["data"]["channel_id"],
+        managed_codex_channel_id("niuma_codex_1")
+    );
     assert_eq!(value["data"]["request_id"], "request-1");
     assert_eq!(value["data"]["state_cleared"], true);
     assert_eq!(
@@ -3779,6 +3825,15 @@ async fn response_json(response: axum::response::Response) -> Value {
 }
 
 async fn post_json(router: &axum::Router, uri: &str, body: Value) -> Value {
+    let response = post_json_response(router, uri, body).await;
+    response_json(response).await
+}
+
+async fn post_json_response(
+    router: &axum::Router,
+    uri: &str,
+    body: Value,
+) -> axum::response::Response {
     let response = router
         .clone()
         .oneshot(
@@ -3791,7 +3846,7 @@ async fn post_json(router: &axum::Router, uri: &str, body: Value) -> Value {
         )
         .await
         .unwrap();
-    response_json(response).await
+    response
 }
 
 async fn get_json(router: &axum::Router, uri: &str) -> Value {
