@@ -181,6 +181,7 @@ mod tests {
         ManagedCodexSession {
             wrapper_session_id: wrapper_session_id.to_string(),
             state: ManagedCodexSessionState::Bound,
+            state_changed_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             cwd: "/tmp/repo".to_string(),
             pid: Some(std::process::id()),
             real_socket: "/tmp/real.sock".to_string(),

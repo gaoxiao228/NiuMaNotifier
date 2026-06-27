@@ -598,6 +598,7 @@ fn run_app_control_inner(real_codex: PathBuf, args: Vec<String>) -> Result<i32, 
     let session = ManagedCodexSession {
         wrapper_session_id: wrapper_session_id.clone(),
         state: ManagedCodexSessionState::WaitingFirstUserMessage,
+        state_changed_at: now,
         cwd,
         pid: Some(std::process::id()),
         real_socket: base_dir.join("real.sock").to_string_lossy().to_string(),
@@ -660,6 +661,7 @@ fn mark_session_exited_after_failure(
     wrapper_session_id: &str,
     reason: &str,
 ) -> Result<(), String> {
+    let changed_at = chrono::Utc::now();
     update_registry(registry_path, |registry| {
         if let Some(session) = registry
             .sessions
@@ -667,6 +669,7 @@ fn mark_session_exited_after_failure(
             .find(|session| session.wrapper_session_id == wrapper_session_id)
         {
             session.state = ManagedCodexSessionState::Exited;
+            session.state_changed_at = changed_at;
             session.binding_failure_reason = Some(reason.to_string());
         }
     })
@@ -689,6 +692,7 @@ fn mark_first_user_message_submitted(
         {
             if session.first_user_message_hash.is_none() {
                 session.state = ManagedCodexSessionState::BindingPending;
+                session.state_changed_at = submitted_at;
                 session.first_user_message_hash = Some(hash);
                 session.first_user_message_preview = Some(preview);
                 session.first_user_message_submitted_at = Some(submitted_at);
@@ -2039,6 +2043,7 @@ mod tests {
             registry.upsert(ManagedCodexSession {
                 wrapper_session_id: wrapper_session_id.clone(),
                 state: ManagedCodexSessionState::WaitingFirstUserMessage,
+                state_changed_at: chrono::Utc::now(),
                 cwd: "/tmp/project".to_string(),
                 pid: Some(42),
                 real_socket: "/tmp/real.sock".to_string(),
@@ -2199,6 +2204,7 @@ mod tests {
             registry.upsert(ManagedCodexSession {
                 wrapper_session_id: "wrapper-test".to_string(),
                 state: ManagedCodexSessionState::Bound,
+                state_changed_at: chrono::Utc::now(),
                 cwd: "/tmp/demo-project".to_string(),
                 pid: Some(42),
                 real_socket: "/tmp/real.sock".to_string(),
@@ -2246,6 +2252,7 @@ mod tests {
             registry.upsert(ManagedCodexSession {
                 wrapper_session_id: "wrapper-test".to_string(),
                 state: ManagedCodexSessionState::Bound,
+                state_changed_at: chrono::Utc::now(),
                 cwd: "/tmp/demo-project".to_string(),
                 pid: Some(42),
                 real_socket: "/tmp/real.sock".to_string(),
@@ -2329,6 +2336,7 @@ mod tests {
             registry.upsert(ManagedCodexSession {
                 wrapper_session_id: "wrapper-test".to_string(),
                 state: ManagedCodexSessionState::BindingPending,
+                state_changed_at: chrono::Utc::now(),
                 cwd: "/tmp/demo-project".to_string(),
                 pid: Some(42),
                 real_socket: "/tmp/real.sock".to_string(),
@@ -2468,6 +2476,7 @@ mod tests {
             registry.upsert(ManagedCodexSession {
                 wrapper_session_id: wrapper_session_id.clone(),
                 state: ManagedCodexSessionState::WaitingFirstUserMessage,
+                state_changed_at: chrono::Utc::now(),
                 cwd: "/tmp/repo".to_string(),
                 pid: Some(42),
                 real_socket: "/tmp/real.sock".to_string(),

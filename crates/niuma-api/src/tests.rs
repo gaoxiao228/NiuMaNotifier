@@ -4179,6 +4179,7 @@ fn managed_codex_session_for_api_test(
     ManagedCodexSession {
         wrapper_session_id: wrapper_session_id.to_string(),
         state: ManagedCodexSessionState::Bound,
+        state_changed_at: Utc.timestamp_opt(1_000, 0).single().unwrap(),
         cwd: "/tmp/demo".to_string(),
         // 使用当前测试进程 PID，避免 control helper 在连接 socket 前拒绝会话。
         pid: Some(std::process::id()),

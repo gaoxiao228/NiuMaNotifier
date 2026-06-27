@@ -146,6 +146,7 @@ mod tests {
         ManagedCodexSession {
             wrapper_session_id: wrapper_session_id.to_string(),
             state,
+            state_changed_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             cwd: "/repo".to_string(),
             pid,
             real_socket: "/tmp/real.sock".to_string(),

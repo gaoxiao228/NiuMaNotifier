@@ -500,6 +500,7 @@ fn bind_managed_registry_sessions(
             if session.state != ManagedCodexSessionState::BindingPending {
                 continue;
             }
+            let changed_at = Utc::now();
             match match_managed_session(session, candidates, MANAGED_BINDING_WINDOW) {
                 BindingMatch::Unique {
                     session_id,
@@ -515,13 +516,15 @@ fn bind_managed_registry_sessions(
                         eprintln!("NiumaNotifier Codex binding diagnostic 写入失败：{error}");
                     }
                     session.state = ManagedCodexSessionState::Bound;
+                    session.state_changed_at = changed_at;
                     session.codex_session_id = Some(session_id);
                     session.codex_session_file_path = Some(session_file_path);
-                    session.bound_at = Some(Utc::now());
+                    session.bound_at = Some(changed_at);
                     session.binding_failure_reason = None;
                 }
                 BindingMatch::Ambiguous => {
                     session.state = ManagedCodexSessionState::Ambiguous;
+                    session.state_changed_at = changed_at;
                     session.binding_failure_reason =
                         Some("第一条用户消息和时间窗口匹配到多个 Codex session".to_string());
                 }

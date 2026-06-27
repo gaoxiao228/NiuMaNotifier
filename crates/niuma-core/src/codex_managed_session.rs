@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const REGISTRY_VERSION: u32 = 1;
+pub const MANAGED_CODEX_CHANNEL_PREFIX: &str = "niuma_codex_managed:";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ManagedCodexRegistry {
@@ -40,6 +41,8 @@ pub enum ManagedCodexSessionState {
 pub struct ManagedCodexSession {
     pub wrapper_session_id: String,
     pub state: ManagedCodexSessionState,
+    #[serde(default = "default_state_changed_at")]
+    pub state_changed_at: DateTime<Utc>,
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
@@ -113,6 +116,18 @@ pub fn normalize_first_user_message(value: &str) -> String {
         .join(" ")
 }
 
+pub fn managed_codex_channel_id(wrapper_session_id: &str) -> String {
+    format!("{MANAGED_CODEX_CHANNEL_PREFIX}{wrapper_session_id}")
+}
+
+pub fn wrapper_session_id_from_channel_id(channel_id: &str) -> Option<String> {
+    channel_id
+        .strip_prefix(MANAGED_CODEX_CHANNEL_PREFIX)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 pub fn read_registry(path: &Path) -> Result<ManagedCodexRegistry, String> {
     if !path.exists() {
         return Ok(ManagedCodexRegistry::default());
@@ -120,8 +135,26 @@ pub fn read_registry(path: &Path) -> Result<ManagedCodexRegistry, String> {
 
     let body = fs::read_to_string(path)
         .map_err(|error| format!("读取 Codex managed registry 失败：{error}"))?;
-    serde_json::from_str(&body)
-        .map_err(|error| format!("解析 Codex managed registry 失败：{error}"))
+    let mut registry: ManagedCodexRegistry = serde_json::from_str(&body)
+        .map_err(|error| format!("解析 Codex managed registry 失败：{error}"))?;
+    for session in &mut registry.sessions {
+        normalize_state_changed_at(session);
+    }
+    Ok(registry)
+}
+
+fn default_state_changed_at() -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_else(Utc::now)
+}
+
+fn normalize_state_changed_at(session: &mut ManagedCodexSession) {
+    if session.state_changed_at.timestamp() != 0 {
+        return;
+    }
+    session.state_changed_at = session
+        .bound_at
+        .or(session.first_user_message_submitted_at)
+        .unwrap_or(session.started_at);
 }
 
 pub fn write_registry_atomic(path: &Path, registry: &ManagedCodexRegistry) -> Result<(), String> {
@@ -316,6 +349,7 @@ mod tests {
         ManagedCodexSession {
             wrapper_session_id: "niuma_codex_1".to_string(),
             state: ManagedCodexSessionState::BindingPending,
+            state_changed_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             cwd: "/repo".into(),
             pid: Some(42),
             real_socket: "/tmp/real.sock".into(),
@@ -379,6 +413,45 @@ mod tests {
             "hello world"
         );
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn managed_channel_id_round_trips_wrapper_session_id() {
+        let channel_id = managed_codex_channel_id("niuma_codex_1");
+        assert_eq!(channel_id, "niuma_codex_managed:niuma_codex_1");
+        assert_eq!(
+            wrapper_session_id_from_channel_id(&channel_id).as_deref(),
+            Some("niuma_codex_1")
+        );
+        assert!(wrapper_session_id_from_channel_id("other:niuma_codex_1").is_none());
+    }
+
+    #[test]
+    fn legacy_registry_populates_state_changed_at_on_read() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("managed.json");
+        let started_at = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "sessions": [{
+                    "wrapper_session_id": "niuma_codex_1",
+                    "state": "waiting_first_user_message",
+                    "cwd": "/tmp/project",
+                    "pid": 123,
+                    "real_socket": "/tmp/real.sock",
+                    "relay_socket": "/tmp/relay.sock",
+                    "control_socket": "/tmp/control.sock",
+                    "started_at": started_at
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let registry = read_registry(&path).unwrap();
+        assert_eq!(registry.sessions[0].state_changed_at, started_at);
     }
 
     #[test]

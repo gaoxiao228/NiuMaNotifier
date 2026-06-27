@@ -1227,6 +1227,7 @@ mod tests {
         ManagedCodexSession {
             wrapper_session_id: wrapper_session_id.to_string(),
             state: ManagedCodexSessionState::Bound,
+            state_changed_at: Utc::now(),
             cwd: "/tmp/demo".to_string(),
             pid: Some(42),
             real_socket: "/tmp/real.sock".to_string(),
