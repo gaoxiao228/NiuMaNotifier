@@ -2915,6 +2915,48 @@ async fn session_project_groups_returns_project_normalized_sessions() {
 }
 
 #[tokio::test]
+async fn session_project_groups_prefers_waiting_approval_over_waiting_input() {
+    let store = NiumaStore::new(test_path("session_project_groups_prefers_waiting_approval"));
+    let registry = ToolSessionRegistry::new();
+    registry.replace_snapshot(
+        ToolKind::Codex,
+        vec![
+            tool_session_item("parent-session", ToolKind::Codex, 30, 20, true, false),
+            tool_session_item("child-session", ToolKind::Codex, 50, 50, true, true),
+        ],
+    );
+    let mut approval = sample_event_with_type(
+        "approval-event",
+        "approval-dedupe",
+        EventType::ApprovalRequested,
+        1_000,
+    );
+    approval.session_id = "parent-session".to_string();
+    let mut input = sample_event_with_type(
+        "input-event",
+        "input-dedupe",
+        EventType::InputRequested,
+        1_001,
+    );
+    input.session_id = "child-session".to_string();
+    // input 事件更晚，用于证明 approval 依靠优先级胜出，而不是依靠时间胜出。
+    store.append_event(approval).unwrap();
+    store.append_event(input).unwrap();
+    let router = app_with_tool_sessions(store, registry);
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_project_groups?tool=codex&include_subagents=true&page=1&page_size=10",
+    )
+    .await;
+
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["runtime_status"],
+        "waiting_approval"
+    );
+}
+
+#[tokio::test]
 async fn session_project_groups_zero_page_returns_business_failure_envelope() {
     let router = app_with_tool_sessions(
         NiumaStore::new(test_path("session_project_groups_zero_page")),

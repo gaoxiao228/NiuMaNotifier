@@ -131,7 +131,15 @@ pub(crate) async fn get_session_project_groups(
         page_size: query.page_size,
     };
 
-    match state.tool_sessions.project_groups(query) {
+    // HTTP 列表和 SSE 列表都叠加同一份运行时状态，避免同一接口族返回不一致。
+    let runtime_states = match state.store.runtime_state_list() {
+        Ok(runtime_states) => runtime_states,
+        Err(error) => return json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+    match state
+        .tool_sessions
+        .project_groups_with_runtime(query, &runtime_states)
+    {
         Ok(page) => json_response(200, ApiResponse::ok(page)),
         Err(error) => json_response(
             200,

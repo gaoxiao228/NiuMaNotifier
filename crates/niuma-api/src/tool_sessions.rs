@@ -714,7 +714,8 @@ fn compare_runtime_priority(
 
 fn runtime_status_priority(status: &RuntimeStateStatus) -> usize {
     match status {
-        RuntimeStateStatus::WaitingApproval | RuntimeStateStatus::WaitingInput => 6,
+        RuntimeStateStatus::WaitingApproval => 7,
+        RuntimeStateStatus::WaitingInput => 6,
         RuntimeStateStatus::Error => 5,
         RuntimeStateStatus::Running => 4,
         RuntimeStateStatus::Completed => 3,
