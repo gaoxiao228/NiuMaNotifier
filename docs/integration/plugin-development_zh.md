@@ -303,6 +303,8 @@ NiumaNotifier 启动插件时会注入：
 
 ## Local API 约定
 
+完整插件 API 清单见 [`plugin-api-reference_zh.md`](./plugin-api-reference_zh.md)。本节只说明插件调用 Local API 时必须遵守的通用响应与错误处理约定。
+
 除 SSE 流外，插件相关 JSON 接口都使用统一响应结构：
 
 ```json
