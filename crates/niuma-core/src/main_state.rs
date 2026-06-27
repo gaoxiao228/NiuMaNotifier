@@ -338,7 +338,9 @@ fn interaction_from_approval_request(request: &ApprovalRequest) -> EventInteract
     // 主状态展示的是当前阻塞项快照；授权已返回 Codex 时必须覆盖原始事件的可操作性。
     match request.status {
         crate::models::ApprovalStatus::Pending => {
-            EventInteractionDetail::niuma_approval(request.id.clone())
+            let mut interaction = EventInteractionDetail::niuma_approval(request.id.clone());
+            interaction.control_ref = request.control_ref.clone();
+            interaction
         }
         crate::models::ApprovalStatus::Allowed => {
             EventInteractionDetail::tool_approval("已同意，等待 Codex 继续")

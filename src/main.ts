@@ -496,8 +496,8 @@ dashboardViewEl?.addEventListener('submit', async (event) => {
   const interaction = latestMainState?.detail?.interaction
   const questions = interaction?.kind === 'input' ? interaction.schema?.questions : null
   const sessionId = latestMainState?.session?.id
-  const wrapperSessionId = parseWrapperSessionId(requestId)
-  if (!questions?.length || !sessionId || !wrapperSessionId) {
+  const channelId = interaction?.control_ref?.channel_id?.trim()
+  if (!questions?.length || !sessionId || !channelId) {
     updatedEl!.textContent = translations[currentLanguage].error
     return
   }
@@ -509,7 +509,7 @@ dashboardViewEl?.addEventListener('submit', async (event) => {
   try {
     await submitInputAnswer(
       sessionId,
-      wrapperSessionId,
+      channelId,
       requestId,
       collectInputAnswers(form, questions)
     )
@@ -521,11 +521,6 @@ dashboardViewEl?.addEventListener('submit', async (event) => {
     renderDashboard()
   }
 })
-
-function parseWrapperSessionId(requestId: string) {
-  // Codex input request_id 内嵌 wrapper session id，提交答案时后端需要它定位 wrapper 会话。
-  return requestId.match(/codex-input:(niuma_codex_[^:]+):/)?.[1] ?? null
-}
 
 function collectInputAnswers(
   form: HTMLFormElement,

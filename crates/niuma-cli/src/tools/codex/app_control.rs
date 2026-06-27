@@ -1,7 +1,7 @@
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::codex_managed_session::{
-    first_user_message_hash, read_registry, update_registry, ManagedCodexSession,
-    ManagedCodexSessionState,
+    first_user_message_hash, managed_codex_channel_id, read_registry, update_registry,
+    ManagedCodexSession, ManagedCodexSessionState,
 };
 use niuma_core::local_api_client::post_local_api;
 use niuma_core::platform::paths::codex_managed_registry_path;
@@ -805,7 +805,7 @@ fn relay_approval_request_body(
         .clone()
         .unwrap_or_else(|| approval.relay_request_id.clone());
     let mut control_ref = json!({
-        "wrapper_session_id": wrapper_session_id,
+        "channel_id": managed_codex_channel_id(wrapper_session_id),
         "relay_request_id": approval.relay_request_id,
         "turn_id": approval.turn_id,
         "item_id": approval.item_id
@@ -883,6 +883,10 @@ fn relay_input_event_body(
                 "handling": "niuma",
                 "actionable": true,
                 "request_id": input.request_id,
+                "control_ref": {
+                    "channel_id": managed_codex_channel_id(wrapper_session_id),
+                    "relay_request_id": input.relay_request_id
+                },
                 "actions": ["submit"],
                 "endpoint": "/api/v1/session-control/answer-input",
                 "schema": {
@@ -2238,7 +2242,10 @@ mod tests {
         assert_eq!(body["session_id"], "codex-session-1");
         assert_eq!(body["project_path"], "/tmp/demo-project");
         assert_eq!(body["project_name"], "demo-project");
-        assert_eq!(body["control_ref"]["wrapper_session_id"], "wrapper-test");
+        assert_eq!(
+            body["control_ref"]["channel_id"],
+            "niuma_codex_managed:wrapper-test"
+        );
         assert_eq!(body["control_ref"]["codex_session_id"], "codex-session-1");
         assert_eq!(body["control_ref"]["relay_request_id"], "7");
         assert_eq!(body["description"], "运行测试");
@@ -2310,6 +2317,10 @@ mod tests {
                 "handling": "niuma",
                 "actionable": true,
                 "request_id": "codex-input:wrapper-test:9",
+                "control_ref": {
+                    "channel_id": "niuma_codex_managed:wrapper-test",
+                    "relay_request_id": "9"
+                },
                 "actions": ["submit"],
                 "endpoint": "/api/v1/session-control/answer-input",
                 "schema": {

@@ -63,10 +63,19 @@ export type EventInteractionDetail = {
   handling: 'niuma' | 'tool' | 'none'
   actionable: boolean
   request_id?: string | null
+  control_ref?: ApprovalControlRef | null
   actions?: string[]
   endpoint?: string | null
   message?: string | null
   schema?: EventInteractionSchema | null
+}
+
+export type ApprovalControlRef = {
+  channel_id: string
+  codex_session_id?: string | null
+  relay_request_id: string
+  turn_id?: string | null
+  item_id?: string | null
 }
 
 export type EventInteractionSchema = {
@@ -98,7 +107,7 @@ export type ApprovalDecisionResult = {
 
 export type AnswerInputResult = {
   answered: boolean
-  wrapper_session_id: string
+  channel_id: string
   request_id: string
   state_cleared: boolean
   result: unknown
@@ -341,7 +350,7 @@ export async function submitApprovalDecision(
 
 export async function submitInputAnswer(
   sessionId: string,
-  wrapperSessionId: string,
+  channelId: string,
   requestId: string,
   answers: Record<string, string[]>
 ) {
@@ -351,7 +360,7 @@ export async function submitInputAnswer(
     body: JSON.stringify({
       tool: 'codex',
       session_id: sessionId,
-      wrapper_session_id: wrapperSessionId,
+      channel_id: channelId,
       request_id: requestId,
       answers
     })

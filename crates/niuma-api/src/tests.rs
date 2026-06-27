@@ -508,7 +508,7 @@ async fn approval_tool_resolved_clears_relay_attention() {
     let mut relay_body = sample_approval_request_body("approval-relay-tool-resolved");
     relay_body["channel"] = serde_json::json!("niuma_codex_relay");
     relay_body["control_ref"] = serde_json::json!({
-        "wrapper_session_id": "wrapper-1",
+        "channel_id": managed_codex_channel_id("wrapper-1"),
         "relay_request_id": "7",
         "turn_id": "turn-1",
         "item_id": "item-1"
@@ -823,7 +823,7 @@ async fn relay_approval_request_reuses_existing_hook_pending_approval() {
     let mut relay_body = sample_approval_request_body("approval-relay-duplicate");
     relay_body["channel"] = serde_json::json!("niuma_codex_relay");
     relay_body["control_ref"] = serde_json::json!({
-        "wrapper_session_id": "wrapper-1",
+        "channel_id": managed_codex_channel_id("wrapper-1"),
         "relay_request_id": "7",
         "turn_id": "turn-1",
         "item_id": "item-1"
@@ -846,7 +846,7 @@ async fn relay_approval_request_is_not_created_as_hook_proxy() {
     let mut relay_body = sample_approval_request_body("approval-relay-no-heartbeat");
     relay_body["channel"] = serde_json::json!("niuma_codex_relay");
     relay_body["control_ref"] = serde_json::json!({
-        "wrapper_session_id": "wrapper-1",
+        "channel_id": managed_codex_channel_id("wrapper-1"),
         "relay_request_id": "7",
         "turn_id": "turn-1",
         "item_id": "item-1"
@@ -875,7 +875,7 @@ async fn watcher_approval_after_relay_is_suppressed_by_description() {
     relay_body["command"] = serde_json::json!("/bin/zsh -lc 'echo \"1234\"'");
     relay_body["description"] = serde_json::json!(description);
     relay_body["control_ref"] = serde_json::json!({
-        "wrapper_session_id": "wrapper-1",
+        "channel_id": managed_codex_channel_id("wrapper-1"),
         "relay_request_id": "7",
         "turn_id": "turn-1",
         "item_id": "item-1"
@@ -919,6 +919,10 @@ async fn watcher_approval_after_relay_is_suppressed_by_description() {
     assert_eq!(
         state_after["data"]["state"]["detail"]["interaction"]["handling"],
         "niuma"
+    );
+    assert_eq!(
+        state_after["data"]["state"]["detail"]["interaction"]["control_ref"]["channel_id"],
+        managed_codex_channel_id("wrapper-1")
     );
 }
 

@@ -154,7 +154,7 @@ fn default_approval_channel() -> ApprovalChannel {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalControlRef {
-    pub wrapper_session_id: String,
+    pub channel_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_session_id: Option<String>,
     pub relay_request_id: String,
@@ -341,6 +341,8 @@ pub struct EventInteractionDetail {
     pub actionable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_ref: Option<ApprovalControlRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -359,6 +361,7 @@ impl EventInteractionDetail {
             handling: EventInteractionHandling::Niuma,
             actionable: true,
             request_id: Some(request_id.into()),
+            control_ref: None,
             actions: vec!["allow".to_string(), "deny".to_string()],
             endpoint: Some("/api/v1/approval-decisions".to_string()),
             message: None,
@@ -373,6 +376,7 @@ impl EventInteractionDetail {
             handling: EventInteractionHandling::Tool,
             actionable: false,
             request_id: None,
+            control_ref: None,
             actions: Vec::new(),
             endpoint: None,
             message: Some(message.into()),
@@ -387,6 +391,7 @@ impl EventInteractionDetail {
             handling: EventInteractionHandling::Niuma,
             actionable: true,
             request_id: Some(request_id.into()),
+            control_ref: None,
             actions: vec!["submit".to_string()],
             endpoint: Some("/api/v1/session-control/answer-input".to_string()),
             message: None,
@@ -401,6 +406,7 @@ impl EventInteractionDetail {
             handling: EventInteractionHandling::Tool,
             actionable: false,
             request_id: None,
+            control_ref: None,
             actions: Vec::new(),
             endpoint: None,
             message: Some(message.into()),

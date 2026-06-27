@@ -6,7 +6,7 @@ use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::approval_arbitration::{
     ApprovalFingerprint, ExpiredWatcherApproval, HookApprovalDecision, WatcherApprovalDecision,
 };
-use niuma_core::codex_managed_session::read_registry;
+use niuma_core::codex_managed_session::{read_registry, wrapper_session_id_from_channel_id};
 use niuma_core::models::{
     ApprovalChannel, ApprovalControlRef, ApprovalDecisionKind, ApprovalProxyStatus,
     ApprovalRequest, ApprovalStatus, EventInteractionDetail, EventType, NiumaEvent,
@@ -884,17 +884,19 @@ fn relay_control_socket_from_registry(
     control_ref: &ApprovalControlRef,
 ) -> Result<String, String> {
     let registry = read_registry(registry_path)?;
+    let wrapper_session_id = wrapper_session_id_from_channel_id(&control_ref.channel_id)
+        .ok_or_else(|| {
+            format!(
+                "不支持的 session control channel：{}",
+                control_ref.channel_id
+            )
+        })?;
     registry
         .sessions
         .into_iter()
-        .find(|session| session.wrapper_session_id == control_ref.wrapper_session_id)
+        .find(|session| session.wrapper_session_id == wrapper_session_id)
         .map(|session| session.control_socket)
-        .ok_or_else(|| {
-            format!(
-                "找不到 niuma-codex managed session：{}",
-                control_ref.wrapper_session_id
-            )
-        })
+        .ok_or_else(|| format!("找不到 session control channel：{}", control_ref.channel_id))
 }
 
 fn relay_decision_value(decision: &ApprovalDecisionKind) -> &'static str {
@@ -999,7 +1001,9 @@ fn approval_event(
     let approval_ref = approval_ref(&request.id);
     let interaction = match event_type {
         EventType::ApprovalRequested => {
-            Some(EventInteractionDetail::niuma_approval(request.id.clone()))
+            let mut interaction = EventInteractionDetail::niuma_approval(request.id.clone());
+            interaction.control_ref = request.control_ref.clone();
+            Some(interaction)
         }
         EventType::ApprovalReturnedToCodex => Some(EventInteractionDetail::tool_approval(
             "请回到 Codex 中同意或拒绝",
@@ -1157,7 +1161,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use niuma_core::codex_managed_session::{
-        update_registry, ManagedCodexSession, ManagedCodexSessionState,
+        managed_codex_channel_id, update_registry, ManagedCodexSession, ManagedCodexSessionState,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1172,7 +1176,7 @@ mod tests {
         })
         .unwrap();
         let control_ref = ApprovalControlRef {
-            wrapper_session_id: "wrapper-1".to_string(),
+            channel_id: managed_codex_channel_id("wrapper-1"),
             codex_session_id: Some("codex-session-1".to_string()),
             relay_request_id: "7".to_string(),
             turn_id: Some("turn-1".to_string()),
