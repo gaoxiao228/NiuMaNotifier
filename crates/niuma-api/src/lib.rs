@@ -9,6 +9,7 @@ use niuma_core::store::NiumaStore;
 mod approval_proxy_watchdog;
 mod handlers;
 mod manual_test;
+mod pending_action;
 mod response;
 mod routes;
 mod sse;
