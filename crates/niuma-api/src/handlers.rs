@@ -20,7 +20,8 @@ pub(crate) use plugins::{
 };
 pub(crate) use sessions::{
     get_session_detail, get_session_list, get_session_project_groups, post_session_answer_input,
-    post_session_interrupt, post_session_send_instruction,
+    post_session_interrupt, post_session_send_instruction, session_detail_with_pending_action,
+    SessionDetailError,
 };
 pub(crate) use state::{
     dismiss_blocker, get_events, get_main_state, get_notification_records, get_runtime_state_list,

@@ -10,6 +10,7 @@ use niuma_core::runtime_event::RuntimeEvent;
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::handlers::{session_detail_with_pending_action, SessionDetailError};
 use crate::response::apply_cors_headers;
 use crate::response::json_response;
 use crate::state::AppState;
@@ -326,14 +327,8 @@ pub(crate) async fn session_detail_stream(
             );
         }
     };
-    if let Err(error) = session_detail_payload(&state, &request) {
-        return json_response(
-            200,
-            niuma_core::api_response::ApiResponse::fail(
-                niuma_core::api_response::ApiErrorCode::BusinessValidation,
-                error,
-            ),
-        );
+    if let Err(error) = session_detail_payload_result(&state, &request) {
+        return session_detail_error_response(error);
     }
 
     let event_stream = stream! {
@@ -417,7 +412,13 @@ fn next_session_detail_event(
     client: &mut MainStateClient,
     force: bool,
 ) -> Option<Event> {
-    let content = session_detail_payload(state, request).ok()?;
+    let content = match session_detail_payload_result(state, request) {
+        Ok(content) => content,
+        Err(SessionDetailError::Business(_)) => return None,
+        Err(SessionDetailError::System(error)) => {
+            return Some(session_detail_system_error_event(error))
+        }
+    };
     if !client.should_send(&content, force) {
         return None;
     }
@@ -433,6 +434,17 @@ fn next_session_detail_event(
             .id(id)
             .data(serde_json::to_string(&data).ok()?),
     )
+}
+
+fn session_detail_system_error_event(error: String) -> Event {
+    let data = serde_json::to_string(&niuma_core::api_response::ApiResponse::fail(
+        niuma_core::api_response::ApiErrorCode::System,
+        error,
+    ))
+    .unwrap_or_else(|_| {
+        r#"{"code":900001,"message":"session detail 系统错误","data":null}"#.to_string()
+    });
+    Event::default().event("session_detail_error").data(data)
 }
 
 fn next_session_project_groups_event(
@@ -473,22 +485,38 @@ fn session_detail_stream_request(
     })
 }
 
-fn session_detail_payload(
+fn session_detail_payload_result(
     state: &AppState,
     request: &SessionDetailStreamRequest,
-) -> Result<String, String> {
-    if state
-        .tool_sessions
-        .find_session(&request.tool, &request.session_id)
-        .is_none()
-    {
-        return Err("session_id 不存在".to_string());
+) -> Result<String, SessionDetailError> {
+    let detail = session_detail_with_pending_action(
+        state,
+        &request.tool,
+        &request.session_id,
+        request.limit,
+        None,
+    )?;
+    serde_json::to_string(&detail)
+        .map_err(|error| SessionDetailError::System(format!("session detail 序列化失败：{error}")))
+}
+
+fn session_detail_error_response(error: SessionDetailError) -> Response {
+    match error {
+        SessionDetailError::Business(error) => json_response(
+            200,
+            niuma_core::api_response::ApiResponse::fail(
+                niuma_core::api_response::ApiErrorCode::BusinessValidation,
+                error,
+            ),
+        ),
+        SessionDetailError::System(error) => json_response(
+            500,
+            niuma_core::api_response::ApiResponse::fail(
+                niuma_core::api_response::ApiErrorCode::System,
+                error,
+            ),
+        ),
     }
-    let detail =
-        state
-            .tool_sessions
-            .detail(&request.tool, &request.session_id, request.limit, None)?;
-    serde_json::to_string(&detail).map_err(|error| format!("session detail 序列化失败：{error}"))
 }
 
 fn session_detail_event_matches(request: &SessionDetailStreamRequest, event: &NiumaEvent) -> bool {

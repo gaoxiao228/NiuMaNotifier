@@ -7,9 +7,11 @@ use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::codex_managed_control;
 use niuma_core::models::{EventType, NiumaEvent, ToolKind};
 use niuma_core::platform::paths::codex_managed_registry_path;
+use niuma_core::tool_session::ToolSessionDetail;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::pending_action::pending_action_for_session;
 use crate::response::json_response;
 use crate::state::AppState;
 use crate::tool_sessions::{capped_limit, ToolSessionListQuery, ToolSessionProjectGroupsQuery};
@@ -61,6 +63,11 @@ pub(crate) struct SessionAnswerInputBody {
     channel_id: String,
     request_id: String,
     answers: Value,
+}
+
+pub(crate) enum SessionDetailError {
+    Business(String),
+    System(String),
 }
 
 pub(crate) async fn get_session_list(
@@ -189,27 +196,47 @@ pub(crate) async fn get_session_detail(
     };
 
     let tool = ToolKind::from_id(tool);
-    if state
-        .tool_sessions
-        .find_session(&tool, &session_id)
-        .is_none()
-    {
-        return json_response(
-            200,
-            ApiResponse::fail(ApiErrorCode::BusinessValidation, "session_id 不存在"),
-        );
-    }
-
-    match state
-        .tool_sessions
-        .detail(&tool, &session_id, limit, query.cursor)
-    {
-        Ok(detail) => json_response(200, ApiResponse::ok(json!(detail))),
-        Err(error) => json_response(
+    match session_detail_with_pending_action(&state, &tool, &session_id, limit, query.cursor) {
+        Ok(detail) => match serde_json::to_value(detail) {
+            Ok(value) => json_response(200, ApiResponse::ok(value)),
+            Err(error) => json_response(
+                500,
+                ApiResponse::fail(
+                    ApiErrorCode::System,
+                    format!("session detail 序列化失败：{error}"),
+                ),
+            ),
+        },
+        Err(SessionDetailError::Business(error)) => json_response(
             200,
             ApiResponse::fail(ApiErrorCode::BusinessValidation, error),
         ),
+        Err(SessionDetailError::System(error)) => {
+            json_response(500, ApiResponse::fail(ApiErrorCode::System, error))
+        }
     }
+}
+
+pub(crate) fn session_detail_with_pending_action(
+    state: &AppState,
+    tool: &ToolKind,
+    session_id: &str,
+    limit: usize,
+    cursor: Option<String>,
+) -> Result<ToolSessionDetail, SessionDetailError> {
+    if state.tool_sessions.find_session(tool, session_id).is_none() {
+        return Err(SessionDetailError::Business(
+            "session_id 不存在".to_string(),
+        ));
+    }
+
+    let mut detail = state
+        .tool_sessions
+        .detail(tool, session_id, limit, cursor)
+        .map_err(SessionDetailError::Business)?;
+    detail.pending_action =
+        pending_action_for_session(state, &detail).map_err(SessionDetailError::System)?;
+    Ok(detail)
 }
 
 pub(crate) async fn post_session_send_instruction(body: Bytes) -> Response {
