@@ -235,6 +235,16 @@ pub(crate) fn session_detail_with_pending_action(
         .map_err(SessionDetailError::Business)?;
     // control 是宿主当前托管通道状态，使用最新 snapshot 覆盖 provider 详情里的旧值。
     detail.control = snapshot.control;
+    let runtime_states = state
+        .store
+        .runtime_state_list()
+        .map_err(SessionDetailError::System)?;
+    let runtime = state
+        .tool_sessions
+        .runtime_for_detail(tool, &detail, &runtime_states);
+    detail.runtime_status = runtime.as_ref().map(|item| item.status.clone());
+    detail.runtime_last_event_id = runtime.as_ref().and_then(|item| item.last_event_id.clone());
+    detail.runtime_last_activity_at = runtime.as_ref().map(|item| item.last_activity_at);
     detail.pending_action =
         pending_action_for_session(state, &detail).map_err(SessionDetailError::System)?;
     Ok(detail)

@@ -485,9 +485,14 @@ data: {"list":[],"page":1,"page_size":20,"total":0}
 | `messages` | 当前页消息，倒序返回，最新消息在前 |
 | `next_cursor` | 下一页 cursor；为空表示没有下一页 |
 | `control` | 可选会话控制能力 |
+| `runtime_status` | Niuma 当前运行态；无运行态记录时返回 `null` |
+| `runtime_last_event_id` | 触发当前运行态的最新事件 ID，可为空 |
+| `runtime_last_activity_at` | 当前运行态的最新活动时间，可为空 |
 | `pending_action` | 当前最高优先级待处理交互；无交互时固定返回 `null` |
 
 `control` 表示宿主当前掌握的最新控制通道状态。即使 provider detail 内部缓存较旧，Local API 也会用当前 session snapshot 的 `control` 覆盖详情返回值；托管 session 关闭后，`control.resumable` 应随 snapshot 刷新变为 `false`。
+
+`runtime_status` 与 `session_project_groups` 使用同一套状态来源和优先级，用于详情页展示“当前会话正在运行、等待授权、等待输入、已完成或错误”等状态。不要用 `pending_action = null` 反推 `running` 或 `completed`；`pending_action` 只表示当前是否有可展示的交互详情。
 
 `pending_action` 由宿主根据当前运行态和原始事件 `interaction` 计算，不要求 provider 在 `session_detail` RPC 中返回。优先级：
 
@@ -505,6 +510,9 @@ data: {"list":[],"page":1,"page_size":20,"total":0}
   "tool": "codex",
   "session_id": "session-1",
   "messages": [],
+  "runtime_status": null,
+  "runtime_last_event_id": null,
+  "runtime_last_activity_at": null,
   "pending_action": null
 }
 ```
@@ -646,6 +654,7 @@ data: {"tool":"codex","session_id":"session-1","messages":[]}
 - 不支持 `cursor`；历史分页继续使用 `GET /api/v1/session_detail`。
 - 建连后发送最新页完整快照。
 - 匹配 raw session 或 normalized session 的事件变化时重新计算。
+- `data` 中包含与 `session_detail` 相同的 `runtime_status` 字段，详情页应直接用它展示当前会话状态。
 - `data` 中包含与 `session_detail` 相同的 `pending_action` 字段。列表页面需要实时刷新弹框内容时，应在用户选中或展开某个 session 后订阅该 session 的详情流。
 - 建连后系统错误会以 `event: session_detail_error` 推送，业务失败仍在建连前以标准 envelope 返回。
 

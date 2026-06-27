@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::models::ToolKind;
+use crate::models::{RuntimeStateStatus, ToolKind};
 
 // 工具会话状态来自 provider snapshot，unknown 用于兼容无法判断活跃性的工具。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -214,6 +214,12 @@ pub struct ToolSessionDetail {
     pub normalization_status: Option<ToolSessionNormalizationStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<ToolSessionControl>,
+    #[serde(default)]
+    pub runtime_status: Option<RuntimeStateStatus>,
+    #[serde(default)]
+    pub runtime_last_event_id: Option<String>,
+    #[serde(default)]
+    pub runtime_last_activity_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub pending_action: Option<PendingAction>,
     pub messages: Vec<ToolSessionMessage>,
