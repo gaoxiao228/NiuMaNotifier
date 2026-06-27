@@ -395,7 +395,7 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 }
 ```
 
-`session_project_groups` 按项目路径聚合 provider snapshot，返回结构是项目 -> 归一会话 -> 可选 raw session 明细。归一会话会把 subagent 归到 `normalized_session_id` 下；默认不展开 raw subagent 明细，但仍会计算父会话更新时间。每个归一会话里的 `updated_at` 表示最近 raw session 更新时间；如果 provider 已知首条用户消息，还会返回 `first_user_message_preview` / `first_user_message_at`。项目组计数字段中，`normalized_session_count` 表示归一会话数量，`raw_session_count` 表示 raw session 文件数量，`subagent_count` 表示其中由 subagent 产生的 raw session 数量。常用查询参数：
+`session_project_groups` 按项目路径聚合 provider snapshot，返回结构是项目 -> 归一会话 -> 可选 raw session 明细。归一会话会把 subagent 归到 `normalized_session_id` 下；默认不展开 raw subagent 明细，但仍会计算父会话更新时间。每个归一会话里的 `updated_at` 表示最近 raw session 更新时间；如果 provider 已知首条用户消息，还会返回 `first_user_message_preview` / `first_user_message_at`。如果归一会话对应的主会话可被 Niuma 控制，还会返回 `control`，客户端可直接在项目列表判断是否支持续写、中断或回答等待输入。项目组计数字段中，`normalized_session_count` 表示归一会话数量，`raw_session_count` 表示 raw session 文件数量，`subagent_count` 表示其中由 subagent 产生的 raw session 数量。常用查询参数：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -430,7 +430,29 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
             "first_user_message_preview": "总结这个项目",
             "first_user_message_at": "2026-06-24T09:30:00Z",
             "latest_event_summary": null,
-            "subagent_count": 1
+            "subagent_count": 1,
+            "control": {
+              "resumable": true,
+              "preferred_channel_id": "niuma_codex_managed:niuma_codex_xxx",
+              "channels": [
+                {
+                  "id": "niuma_codex_managed:niuma_codex_xxx",
+                  "provider": "niuma_codex",
+                  "kind": "managed_relay",
+                  "available": true,
+                  "capabilities": ["send_instruction", "interrupt"],
+                  "actions": [
+                    {
+                      "type": "send_instruction",
+                      "transport": "local_api",
+                      "endpoint": "/api/v1/session-control/send-instruction",
+                      "debug_command": "niuma codex-send niuma_codex_xxx \"继续\""
+                    }
+                  ],
+                  "updated_at": "2026-06-24T09:31:00Z"
+                }
+              ]
+            }
           }
         ]
       }
@@ -448,9 +470,9 @@ GET /api/v1/session_detail?tool=codex&session_id=session-1&limit=100&cursor=curs
 GET /api/v1/session_project_groups/stream?tool=codex&project_path=/repo&include_subagents=true&page=1&page_size=20
 ```
 
-该流发送 `event: session_project_groups` 帧。`data` payload 使用与 `session_project_groups` 相同的分页结构，并在每个归一会话上追加来自 Niuma 运行态的 overlay 字段：`runtime_status`、`runtime_last_event_id`、`runtime_last_activity_at`。当 `include_subagents=true` 时，raw session 也会包含同样的运行态字段。`status` 仍保留 provider 含义（`active`、`inactive` 或 `unknown`）；判断 Niuma 运行态应使用 `runtime_status`，例如 `running`、`waiting_approval`、`waiting_input`、`completed`、`error`、`idle` 或 `stale`。
+该流发送 `event: session_project_groups` 帧。`data` payload 使用与 `session_project_groups` 相同的分页结构，包括归一会话上的 `control` 字段，并在每个归一会话上追加来自 Niuma 运行态的 overlay 字段：`runtime_status`、`runtime_last_event_id`、`runtime_last_activity_at`。当 `include_subagents=true` 时，raw session 也会包含同样的运行态字段。`status` 仍保留 provider 含义（`active`、`inactive` 或 `unknown`）；判断 Niuma 运行态应使用 `runtime_status`，例如 `running`、`waiting_approval`、`waiting_input`、`completed`、`error`、`idle` 或 `stale`。
 
-连接建立后，服务端会立即发送一帧完整快照。当 Niuma 运行态变化时，服务端会用同一组查询参数重新计算并在序列化内容发生变化时再次发送完整快照。该流是展示状态接口，消费者应按 `/api/v1/state/stream` 的方式处理：重连时重新打开流并接受首帧快照，不依赖 SSE id 做断点恢复。
+连接建立后，服务端会立即发送一帧完整快照。当 Niuma 运行态或 session 控制通道状态变化时，服务端会用同一组查询参数重新计算并在序列化内容发生变化时再次发送完整快照。该流是展示状态接口，消费者应按 `/api/v1/state/stream` 的方式处理：重连时重新打开流并接受首帧快照，不依赖 SSE id 做断点恢复。
 
 示例帧：
 
@@ -471,40 +493,43 @@ data: {"list":[{"tool":"codex","project_path":"/repo","project_name":"repo","nor
 
 `session_detail` 按 `tool + session_id` 读取归一化消息详情。`messages` 倒序返回，`messages[0]` 是本页最新消息；`next_cursor` 用于继续读取更旧消息。第一版支持的消息角色包括 `user`、`assistant`、`system`、`tool_call`、`tool_result`、`event` 和 `unknown`。内置 Codex provider 会过滤自动注入上下文，例如 `AGENTS.md` 指令和 environment context；这些内容也不会参与 `first_user_message_preview` 计算。
 
-如果某个 session 是通过 `niuma codex` 托管启动并已绑定到 Codex 原生 session，`session_detail` 会在 `data.control` 返回可控制能力。移动端、局域网辅助面板或外部控制台应优先读取这个字段判断是否支持续写或中断，不要根据工具名称硬编码能力。
+如果某个 session 是通过 `niuma codex` 托管启动并已绑定到 Codex 原生 session，`session_list`、`session_project_groups` 的归一会话摘要以及 `session_detail` 都会返回 `control`。移动端、局域网辅助面板或外部控制台应优先读取这个字段判断是否支持续写或中断，不要根据工具名称硬编码能力。
 
 `control` 字段示例：
 
 ```json
 {
-  "available": true,
-  "provider": "niuma_codex",
-  "wrapper_session_id": "niuma_codex_xxx",
-  "capabilities": [
-    "answer_input",
-    "approve",
-    "reject",
-    "send_instruction",
-    "interrupt"
-  ],
-  "actions": [
+  "resumable": true,
+  "preferred_channel_id": "niuma_codex_managed:niuma_codex_xxx",
+  "channels": [
     {
-      "type": "answer_input",
-      "transport": "local_api",
-      "endpoint": "/api/v1/session-control/answer-input",
-      "debug_command": null
-    },
-    {
-      "type": "send_instruction",
-      "transport": "local_api",
-      "endpoint": "/api/v1/session-control/send-instruction",
-      "debug_command": "niuma codex-send niuma_codex_xxx \"继续\""
-    },
-    {
-      "type": "interrupt",
-      "transport": "local_api",
-      "endpoint": "/api/v1/session-control/interrupt",
-      "debug_command": "niuma codex-interrupt niuma_codex_xxx"
+      "id": "niuma_codex_managed:niuma_codex_xxx",
+      "provider": "niuma_codex",
+      "kind": "managed_relay",
+      "available": true,
+      "capabilities": ["answer_input", "approve", "reject", "send_instruction", "interrupt"],
+      "actions": [
+        {
+          "type": "answer_input",
+          "transport": "local_api",
+          "endpoint": "/api/v1/session-control/answer-input",
+          "debug_command": null
+        },
+        {
+          "type": "send_instruction",
+          "transport": "local_api",
+          "endpoint": "/api/v1/session-control/send-instruction",
+          "debug_command": "niuma codex-send niuma_codex_xxx \"继续\""
+        },
+        {
+          "type": "interrupt",
+          "transport": "local_api",
+          "endpoint": "/api/v1/session-control/interrupt",
+          "debug_command": "niuma codex-interrupt niuma_codex_xxx"
+        }
+      ],
+      "unavailable_reason": null,
+      "updated_at": "2026-06-24T09:31:00Z"
     }
   ]
 }
@@ -514,11 +539,14 @@ data: {"list":[{"tool":"codex","project_path":"/repo","project_name":"repo","nor
 
 | 字段 | 说明 |
 | --- | --- |
-| `available` | 当前 session 是否可通过 Niuma 控制通道处理。 |
-| `provider` | 控制通道来源。当前 Codex 托管会话使用 `niuma_codex`。 |
-| `wrapper_session_id` | `niuma codex` 包装层会话 ID。调用控制接口时必须和 `session_id` 一起传入。 |
-| `capabilities` | 可处理能力。`answer_input`、`approve`、`reject` 表示该 session 支持通过 Niuma 处理等待输入和授权；`send_instruction`、`interrupt` 表示支持主动续写和中断。 |
-| `actions` | 推荐调用方式。移动端和外部面板应使用 `transport = local_api` 的 `endpoint`；`debug_command` 仅用于本机终端排查。 |
+| `resumable` | 是否至少存在一个可用且支持 `send_instruction` 的通道。 |
+| `preferred_channel_id` | 主动续写优先使用的通道 ID。存在时调用方应优先使用它。 |
+| `channels[].id` | 稳定控制通道 ID。托管 Codex 使用 `niuma_codex_managed:<wrapper_session_id>`。 |
+| `channels[].provider` | 控制通道来源。托管 Codex 会话使用 `niuma_codex`。 |
+| `channels[].kind` | provider 内部通道类型，例如 `managed_relay`。 |
+| `channels[].available` | 当前通道是否可用。为 false 时查看 `unavailable_reason`。 |
+| `channels[].capabilities` | 可处理能力。`answer_input`、`approve`、`reject` 表示支持通过 Niuma 处理等待输入和授权；`send_instruction`、`interrupt` 表示支持主动续写和中断。 |
+| `channels[].actions` | 推荐调用方式。移动端和外部面板应使用 `transport = local_api` 的 `endpoint`；`debug_command` 仅用于本机终端排查。 |
 
 主动续写接口：
 
@@ -533,7 +561,7 @@ Content-Type: application/json
 {
   "tool": "codex",
   "session_id": "codex-session-id",
-  "wrapper_session_id": "niuma_codex_xxx",
+  "channel_id": "niuma_codex_managed:niuma_codex_xxx",
   "content": "继续"
 }
 ```
@@ -546,7 +574,7 @@ Content-Type: application/json
   "message": "ok",
   "data": {
     "sent": true,
-    "wrapper_session_id": "niuma_codex_xxx",
+    "channel_id": "niuma_codex_managed:niuma_codex_xxx",
     "result": {}
   }
 }
@@ -565,7 +593,7 @@ Content-Type: application/json
 {
   "tool": "codex",
   "session_id": "codex-session-id",
-  "wrapper_session_id": "niuma_codex_xxx",
+  "channel_id": "niuma_codex_managed:niuma_codex_xxx",
   "request_id": "codex-input:niuma_codex_xxx:9",
   "answers": {
     "app_form": ["托盘常驻 (Recommended)"]
@@ -581,7 +609,7 @@ Content-Type: application/json
   "message": "ok",
   "data": {
     "answered": true,
-    "wrapper_session_id": "niuma_codex_xxx",
+    "channel_id": "niuma_codex_managed:niuma_codex_xxx",
     "request_id": "codex-input:niuma_codex_xxx:9",
     "state_cleared": true,
     "result": {}
@@ -604,7 +632,7 @@ Content-Type: application/json
 {
   "tool": "codex",
   "session_id": "codex-session-id",
-  "wrapper_session_id": "niuma_codex_xxx"
+  "channel_id": "niuma_codex_managed:niuma_codex_xxx"
 }
 ```
 
@@ -616,7 +644,7 @@ Content-Type: application/json
   "message": "ok",
   "data": {
     "interrupted": true,
-    "wrapper_session_id": "niuma_codex_xxx",
+    "channel_id": "niuma_codex_managed:niuma_codex_xxx",
     "result": {}
   }
 }
@@ -625,10 +653,10 @@ Content-Type: application/json
 控制接口规则：
 
 - 当前只支持 `tool = "codex"` 且 `provider = "niuma_codex"` 的托管会话。
-- `session_id` 必须和 `wrapper_session_id` 在托管会话 registry 中绑定到同一个会话；不匹配时返回业务失败。
+- `session_id` 必须和 `channel_id` 在托管会话 registry 中绑定到同一个会话；不匹配时返回业务失败。
 - 会话必须处于已绑定且进程仍存活状态；过期、退出或 control socket 不可用时返回业务失败。
 - 业务失败遵循统一 envelope，通常是 `HTTP 200` 加 `code = 100101`，调用方必须读取 `code` 和 `message`。
-- 等待输入事件可通过 `interaction.endpoint = "/api/v1/session-control/answer-input"` 提交结构化答案；授权仍复用现有 `/api/v1/approval-decisions` 流程；`send_instruction` 和 `interrupt` 只负责主动续写和中断。
+- 等待输入事件可通过 `interaction.endpoint = "/api/v1/session-control/answer-input"` 和 `interaction.control_ref.channel_id` 提交结构化答案；授权仍复用现有 `/api/v1/approval-decisions` 流程；`send_instruction` 和 `interrupt` 只负责主动续写和中断。
 
 `session_detail/stream` 为单个明确 session 提供 SSE 快照流：
 

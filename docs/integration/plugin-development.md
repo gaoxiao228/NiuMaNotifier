@@ -395,7 +395,7 @@ Successful `session_list` response:
 }
 ```
 
-`session_project_groups` groups the provider snapshot by project path and returns project -> normalized session -> optional raw session details. Normalized sessions collect subagents under `normalized_session_id`; raw subagent details are not expanded by default, but parent session `updated_at` still includes subagent activity. Each normalized session includes `updated_at` as the latest raw session update time, and may include `first_user_message_preview` / `first_user_message_at` for the earliest user message preview known to the provider. Project group counters use explicit names: `normalized_session_count` is the number of normalized sessions, `raw_session_count` is the number of raw session files, and `subagent_count` is the number of raw session files produced by subagents. Common query parameters:
+`session_project_groups` groups the provider snapshot by project path and returns project -> normalized session -> optional raw session details. Normalized sessions collect subagents under `normalized_session_id`; raw subagent details are not expanded by default, but parent session `updated_at` still includes subagent activity. Each normalized session includes `updated_at` as the latest raw session update time, and may include `first_user_message_preview` / `first_user_message_at` for the earliest user message preview known to the provider. If the normalized session's primary session is controllable through Niuma, it also includes `control`, so clients can decide from the project list whether resume, interrupt, or waiting-input answers are supported. Project group counters use explicit names: `normalized_session_count` is the number of normalized sessions, `raw_session_count` is the number of raw session files, and `subagent_count` is the number of raw session files produced by subagents. Common query parameters:
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -430,7 +430,29 @@ Successful `session_project_groups` response uses the standard pagination shape:
             "first_user_message_preview": "Summarize this project",
             "first_user_message_at": "2026-06-24T09:30:00Z",
             "latest_event_summary": null,
-            "subagent_count": 1
+            "subagent_count": 1,
+            "control": {
+              "resumable": true,
+              "preferred_channel_id": "niuma_codex_managed:niuma_codex_xxx",
+              "channels": [
+                {
+                  "id": "niuma_codex_managed:niuma_codex_xxx",
+                  "provider": "niuma_codex",
+                  "kind": "managed_relay",
+                  "available": true,
+                  "capabilities": ["send_instruction", "interrupt"],
+                  "actions": [
+                    {
+                      "type": "send_instruction",
+                      "transport": "local_api",
+                      "endpoint": "/api/v1/session-control/send-instruction",
+                      "debug_command": "niuma codex-send niuma_codex_xxx \"Continue\""
+                    }
+                  ],
+                  "updated_at": "2026-06-24T09:31:00Z"
+                }
+              ]
+            }
           }
         ]
       }
@@ -448,9 +470,9 @@ Successful `session_project_groups` response uses the standard pagination shape:
 GET /api/v1/session_project_groups/stream?tool=codex&project_path=/repo&include_subagents=true&page=1&page_size=20
 ```
 
-The stream sends `event: session_project_groups` frames. The `data` payload uses the same pagination shape as `session_project_groups`, and each normalized session adds runtime overlay fields from Niuma runtime state: `runtime_status`, `runtime_last_event_id`, and `runtime_last_activity_at`. Raw sessions include the same runtime fields when `include_subagents=true`. `status` keeps its provider meaning (`active`, `inactive`, or `unknown`); use `runtime_status` for Niuma states such as `running`, `waiting_approval`, `waiting_input`, `completed`, `error`, `idle`, or `stale`.
+The stream sends `event: session_project_groups` frames. The `data` payload uses the same pagination shape as `session_project_groups`, including `control` on normalized sessions, and each normalized session adds runtime overlay fields from Niuma runtime state: `runtime_status`, `runtime_last_event_id`, and `runtime_last_activity_at`. Raw sessions include the same runtime fields when `include_subagents=true`. `status` keeps its provider meaning (`active`, `inactive`, or `unknown`); use `runtime_status` for Niuma states such as `running`, `waiting_approval`, `waiting_input`, `completed`, `error`, `idle`, or `stale`.
 
-The stream sends a full snapshot immediately after the connection is opened. When Niuma runtime state changes, the server recomputes the same query and sends another full snapshot only if the serialized content changed. The stream is a display-state API, so consumers should treat it like `/api/v1/state/stream`: reconnect by opening the stream again and accepting the first snapshot, not by trying to resume from an SSE id.
+The stream sends a full snapshot immediately after the connection is opened. When Niuma runtime state or session control channel state changes, the server recomputes the same query and sends another full snapshot only if the serialized content changed. The stream is a display-state API, so consumers should treat it like `/api/v1/state/stream`: reconnect by opening the stream again and accepting the first snapshot, not by trying to resume from an SSE id.
 
 Example frame:
 
@@ -471,40 +493,43 @@ If query parameters have invalid types, the stream endpoint returns the standard
 
 `session_detail` reads normalized message details by `tool + session_id`. `messages` are returned newest-first, so `messages[0]` is the newest message in the current page. Use `next_cursor` to continue reading older messages. The first version supports these roles: `user`, `assistant`, `system`, `tool_call`, `tool_result`, `event`, and `unknown`. The built-in Codex provider filters automatically injected context such as `AGENTS.md` instructions and environment context from `messages`; these entries also do not count as `first_user_message_preview`.
 
-If a session was started through managed `niuma codex` and has been bound to the native Codex session, `session_detail` returns controllability in `data.control`. Mobile clients, trusted LAN helper panels, and external consoles should read this field to decide whether resume or interrupt is supported. Do not hard-code control support from the tool name alone.
+If a session was started through managed `niuma codex` and has been bound to the native Codex session, `session_list`, normalized sessions in `session_project_groups`, and `session_detail` return `control`. Mobile clients, trusted LAN helper panels, and external consoles should read this field to decide whether resume or interrupt is supported. Do not hard-code control support from the tool name alone.
 
 Example `control` field:
 
 ```json
 {
-  "available": true,
-  "provider": "niuma_codex",
-  "wrapper_session_id": "niuma_codex_xxx",
-  "capabilities": [
-    "answer_input",
-    "approve",
-    "reject",
-    "send_instruction",
-    "interrupt"
-  ],
-  "actions": [
+  "resumable": true,
+  "preferred_channel_id": "niuma_codex_managed:niuma_codex_xxx",
+  "channels": [
     {
-      "type": "answer_input",
-      "transport": "local_api",
-      "endpoint": "/api/v1/session-control/answer-input",
-      "debug_command": null
-    },
-    {
-      "type": "send_instruction",
-      "transport": "local_api",
-      "endpoint": "/api/v1/session-control/send-instruction",
-      "debug_command": "niuma codex-send niuma_codex_xxx \"Continue\""
-    },
-    {
-      "type": "interrupt",
-      "transport": "local_api",
-      "endpoint": "/api/v1/session-control/interrupt",
-      "debug_command": "niuma codex-interrupt niuma_codex_xxx"
+      "id": "niuma_codex_managed:niuma_codex_xxx",
+      "provider": "niuma_codex",
+      "kind": "managed_relay",
+      "available": true,
+      "capabilities": ["answer_input", "approve", "reject", "send_instruction", "interrupt"],
+      "actions": [
+        {
+          "type": "answer_input",
+          "transport": "local_api",
+          "endpoint": "/api/v1/session-control/answer-input",
+          "debug_command": null
+        },
+        {
+          "type": "send_instruction",
+          "transport": "local_api",
+          "endpoint": "/api/v1/session-control/send-instruction",
+          "debug_command": "niuma codex-send niuma_codex_xxx \"Continue\""
+        },
+        {
+          "type": "interrupt",
+          "transport": "local_api",
+          "endpoint": "/api/v1/session-control/interrupt",
+          "debug_command": "niuma codex-interrupt niuma_codex_xxx"
+        }
+      ],
+      "unavailable_reason": null,
+      "updated_at": "2026-06-24T09:31:00Z"
     }
   ]
 }
@@ -514,11 +539,14 @@ Field notes:
 
 | Field | Description |
 | --- | --- |
-| `available` | Whether this session is currently controllable through a Niuma control channel. |
-| `provider` | Control-channel provider. Managed Codex sessions use `niuma_codex`. |
-| `wrapper_session_id` | The `niuma codex` wrapper session ID. Control calls must pass it together with `session_id`. |
-| `capabilities` | Supported control capabilities. `answer_input`, `approve`, and `reject` mean Niuma can handle waiting input and approval for this session; `send_instruction` and `interrupt` mean the session supports active resume and interrupt. |
-| `actions` | Recommended invocation methods. Mobile clients and external panels should use the `endpoint` where `transport = local_api`; `debug_command` is for local terminal troubleshooting only. |
+| `resumable` | Whether at least one available channel can accept `send_instruction`. |
+| `preferred_channel_id` | Preferred channel for active resume. Use this channel first when present. |
+| `channels[].id` | Stable control channel id. Managed Codex uses `niuma_codex_managed:<wrapper_session_id>`. |
+| `channels[].provider` | Control-channel provider. Managed Codex sessions use `niuma_codex`. |
+| `channels[].kind` | Provider-specific channel kind, for example `managed_relay`. |
+| `channels[].available` | Whether this channel is currently usable. If false, inspect `unavailable_reason`. |
+| `channels[].capabilities` | Supported control capabilities. `answer_input`, `approve`, and `reject` mean Niuma can handle waiting input and approval; `send_instruction` and `interrupt` mean active resume and interruption are supported. |
+| `channels[].actions` | Recommended invocation methods. Mobile clients and external panels should use the `endpoint` where `transport = local_api`; `debug_command` is for local terminal troubleshooting only. |
 
 Send a new instruction:
 
@@ -533,7 +561,7 @@ Request body:
 {
   "tool": "codex",
   "session_id": "codex-session-id",
-  "wrapper_session_id": "niuma_codex_xxx",
+  "channel_id": "niuma_codex_managed:niuma_codex_xxx",
   "content": "Continue"
 }
 ```
@@ -546,7 +574,7 @@ Successful response:
   "message": "ok",
   "data": {
     "sent": true,
-    "wrapper_session_id": "niuma_codex_xxx",
+    "channel_id": "niuma_codex_managed:niuma_codex_xxx",
     "result": {}
   }
 }
@@ -565,7 +593,7 @@ Request body:
 {
   "tool": "codex",
   "session_id": "codex-session-id",
-  "wrapper_session_id": "niuma_codex_xxx",
+  "channel_id": "niuma_codex_managed:niuma_codex_xxx",
   "request_id": "codex-input:niuma_codex_xxx:9",
   "answers": {
     "app_form": ["Tray resident (Recommended)"]
@@ -581,7 +609,7 @@ Successful response:
   "message": "ok",
   "data": {
     "answered": true,
-    "wrapper_session_id": "niuma_codex_xxx",
+    "channel_id": "niuma_codex_managed:niuma_codex_xxx",
     "request_id": "codex-input:niuma_codex_xxx:9",
     "state_cleared": true,
     "result": {}
@@ -604,7 +632,7 @@ Request body:
 {
   "tool": "codex",
   "session_id": "codex-session-id",
-  "wrapper_session_id": "niuma_codex_xxx"
+  "channel_id": "niuma_codex_managed:niuma_codex_xxx"
 }
 ```
 
@@ -616,7 +644,7 @@ Successful response:
   "message": "ok",
   "data": {
     "interrupted": true,
-    "wrapper_session_id": "niuma_codex_xxx",
+    "channel_id": "niuma_codex_managed:niuma_codex_xxx",
     "result": {}
   }
 }
@@ -625,10 +653,10 @@ Successful response:
 Control endpoint rules:
 
 - The current implementation supports only `tool = "codex"` sessions controlled by `provider = "niuma_codex"`.
-- `session_id` and `wrapper_session_id` must point to the same bound managed session in the registry. Mismatches return a business failure.
+- `session_id` and `channel_id` must point to the same bound managed session in the registry. Mismatches return a business failure.
 - The managed session must be bound and its process must still be alive. Expired sessions, exited sessions, or unavailable control sockets return a business failure.
 - Business failures use the standard envelope, usually `HTTP 200` with `code = 100101`; callers must inspect `code` and `message`.
-- Waiting input events can submit structured answers through `interaction.endpoint = "/api/v1/session-control/answer-input"`. Approval still uses the existing `/api/v1/approval-decisions` flow. `send_instruction` and `interrupt` are only for active resume and interruption.
+- Waiting input events can submit structured answers through `interaction.endpoint = "/api/v1/session-control/answer-input"` and `interaction.control_ref.channel_id`. Approval still uses the existing `/api/v1/approval-decisions` flow. `send_instruction` and `interrupt` are only for active resume and interruption.
 
 `session_detail/stream` provides an SSE snapshot stream for one exact session:
 

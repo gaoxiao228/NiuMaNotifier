@@ -62,7 +62,7 @@ SSE 是流式协议例外，不使用统一 JSON envelope。普通 HTTP JSON 接
 | `900001` | 系统错误 | 读取或计算本机状态失败。 |
 | `900005` | 路由不存在 | 请求了未注册路径。 |
 
-`session_detail` 的 `data.control` 会暴露当前会话是否支持通过 `niuma_codex` 续写或中断。外部面板应先读取该字段，再调用对应的 `session-control` 接口；详细请求体和响应结构见 [插件开发说明](./plugin-development_zh.md#工具会话读取)。终端启动、会话排查和等待输入处理流程见 [niuma codex 托管会话](./niuma-codex-managed_zh.md)。
+`session_list`、`session_project_groups` 的归一会话摘要和 `session_detail` 都会通过 `control` 暴露当前会话是否支持通过 `niuma_codex` 续写或中断。外部面板应先读取该字段，再调用对应的 `session-control` 接口；详细请求体和响应结构见 [插件开发说明](./plugin-development_zh.md#工具会话读取)。终端启动、会话排查和等待输入处理流程见 [niuma codex 托管会话](./niuma-codex-managed_zh.md)。
 
 ## SSE 主状态流
 
@@ -120,9 +120,9 @@ data: {"id":"event-1","tool":"codex","session_id":"s1","project_path":"/repo","p
 
 Codex subagent 事件可能额外包含 `parent_session_id`。`session_id` 始终表示事件所属的真实会话；`parent_session_id` 仅表示父会话关系，消费者不应把它当作当前事件的会话 ID。
 
-等待授权或等待输入事件可能包含 `interaction` 字段。消费者必须使用 `interaction.actionable`、`interaction.handling`、`interaction.actions`、`interaction.endpoint` 和 `interaction.request_id` 判断是否可处理以及如何处理。
+等待授权或等待输入事件可能包含 `interaction` 字段。消费者必须使用 `interaction.actionable`、`interaction.handling`、`interaction.actions`、`interaction.endpoint`、`interaction.request_id`，以及存在时的 `interaction.control_ref.channel_id` 判断是否可处理以及如何处理。
 
-当 `input_requested` 事件满足 `interaction.kind = "input"`、`interaction.handling = "niuma"` 且 `interaction.actionable = true` 时，外部面板可以渲染 `interaction.schema.questions`，并把 `answers: Record<string, string[]>` 提交到 `interaction.endpoint`，当前为 `/api/v1/session-control/answer-input`。普通 JSON 响应仍使用统一 `{ "code": 0, "message": "ok", "data": {} }` envelope；业务失败通过非 0 `code` 表达。
+当 `input_requested` 事件满足 `interaction.kind = "input"`、`interaction.handling = "niuma"` 且 `interaction.actionable = true` 时，外部面板可以渲染 `interaction.schema.questions`，并把 `answers: Record<string, string[]>` 和 `channel_id = interaction.control_ref.channel_id` 提交到 `interaction.endpoint`，当前为 `/api/v1/session-control/answer-input`。普通 JSON 响应仍使用统一 `{ "code": 0, "message": "ok", "data": {} }` envelope；业务失败通过非 0 `code` 表达。
 
 可由 NiumaNotifier 处理的授权事件示例：
 
