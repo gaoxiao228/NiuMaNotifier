@@ -11,8 +11,8 @@ use niuma_core::codex_managed_session::{
 };
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{
-    ToolSessionControl, ToolSessionControlAction, ToolSessionDetail, ToolSessionListItem,
-    ToolSessionMessageRole, ToolSessionStatus,
+    ToolSessionControl, ToolSessionControlAction, ToolSessionControlChannel, ToolSessionDetail,
+    ToolSessionListItem, ToolSessionMessageRole, ToolSessionStatus,
 };
 use niuma_core::tool_session_rpc::SessionDetailParams;
 use serde::Deserialize;
@@ -792,36 +792,46 @@ fn control_for_session(
                 && session.state == ManagedCodexSessionState::Bound
         })
         .map(|session| ToolSessionControl {
-            available: true,
-            provider: Some("niuma_codex".to_string()),
-            wrapper_session_id: Some(session.wrapper_session_id.clone()),
-            capabilities: vec![
-                "answer_input".to_string(),
-                "approve".to_string(),
-                "reject".to_string(),
-                "send_instruction".to_string(),
-                "interrupt".to_string(),
-            ],
-            actions: vec![
-                ToolSessionControlAction {
-                    action_type: "send_instruction".to_string(),
-                    transport: "local_api".to_string(),
-                    endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
-                    debug_command: Some(format!(
-                        "niuma codex-send {} \"继续\"",
-                        session.wrapper_session_id
-                    )),
-                },
-                ToolSessionControlAction {
-                    action_type: "interrupt".to_string(),
-                    transport: "local_api".to_string(),
-                    endpoint: Some("/api/v1/session-control/interrupt".to_string()),
-                    debug_command: Some(format!(
-                        "niuma codex-interrupt {}",
-                        session.wrapper_session_id
-                    )),
-                },
-            ],
+            resumable: true,
+            preferred_channel_id: Some(format!(
+                "niuma_codex_managed:{}",
+                session.wrapper_session_id
+            )),
+            channels: vec![ToolSessionControlChannel {
+                id: format!("niuma_codex_managed:{}", session.wrapper_session_id),
+                provider: "niuma_codex".to_string(),
+                kind: "managed_relay".to_string(),
+                available: true,
+                capabilities: vec![
+                    "answer_input".to_string(),
+                    "approve".to_string(),
+                    "reject".to_string(),
+                    "send_instruction".to_string(),
+                    "interrupt".to_string(),
+                ],
+                actions: vec![
+                    ToolSessionControlAction {
+                        action_type: "send_instruction".to_string(),
+                        transport: "local_api".to_string(),
+                        endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
+                        debug_command: Some(format!(
+                            "niuma codex-send {} \"继续\"",
+                            session.wrapper_session_id
+                        )),
+                    },
+                    ToolSessionControlAction {
+                        action_type: "interrupt".to_string(),
+                        transport: "local_api".to_string(),
+                        endpoint: Some("/api/v1/session-control/interrupt".to_string()),
+                        debug_command: Some(format!(
+                            "niuma codex-interrupt {}",
+                            session.wrapper_session_id
+                        )),
+                    },
+                ],
+                unavailable_reason: None,
+                updated_at: session.bound_at.unwrap_or(session.started_at),
+            }],
         })
 }
 

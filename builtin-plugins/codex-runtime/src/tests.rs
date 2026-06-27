@@ -169,19 +169,25 @@ fn codex_session_snapshot_marks_bound_managed_session_control_available() {
         .expect("managed session should be discovered");
 
     let control = session.control.as_ref().expect("control should be present");
-    assert!(control.available);
-    assert_eq!(control.provider.as_deref(), Some("niuma_codex"));
-    assert_eq!(control.wrapper_session_id.as_deref(), Some("niuma_codex_1"));
-    assert!(control.capabilities.contains(&"answer_input".to_string()));
-    assert!(control
+    assert!(control.resumable);
+    assert_eq!(
+        control.preferred_channel_id.as_deref(),
+        Some("niuma_codex_managed:niuma_codex_1")
+    );
+    let channel = &control.channels[0];
+    assert!(channel.available);
+    assert_eq!(channel.provider, "niuma_codex");
+    assert_eq!(channel.id, "niuma_codex_managed:niuma_codex_1");
+    assert!(channel.capabilities.contains(&"answer_input".to_string()));
+    assert!(channel
         .capabilities
         .contains(&"send_instruction".to_string()));
-    assert!(control.capabilities.contains(&"interrupt".to_string()));
-    assert!(control.actions.iter().any(|action| {
+    assert!(channel.capabilities.contains(&"interrupt".to_string()));
+    assert!(channel.actions.iter().any(|action| {
         action.action_type == "send_instruction"
             && action.endpoint.as_deref() == Some("/api/v1/session-control/send-instruction")
     }));
-    assert!(control.actions.iter().any(|action| {
+    assert!(channel.actions.iter().any(|action| {
         action.action_type == "interrupt"
             && action.endpoint.as_deref() == Some("/api/v1/session-control/interrupt")
     }));
@@ -237,7 +243,8 @@ fn codex_session_snapshot_binds_pending_managed_session_by_first_message_and_tim
         session
             .control
             .as_ref()
-            .and_then(|control| control.provider.as_deref()),
+            .and_then(|control| control.channels.first())
+            .map(|channel| channel.provider.as_str()),
         Some("niuma_codex")
     );
     let registry = niuma_core::codex_managed_session::read_registry(&registry_path).unwrap();

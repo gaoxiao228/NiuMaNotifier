@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use niuma_core::models::{RuntimeStateItem, RuntimeStateStatus, ToolKind};
 use niuma_core::tool_session::{
-    ToolSessionDetail, ToolSessionListItem, ToolSessionNormalizationStatus, ToolSessionScope,
-    ToolSessionStatus,
+    ToolSessionControl, ToolSessionDetail, ToolSessionListItem, ToolSessionNormalizationStatus,
+    ToolSessionScope, ToolSessionStatus,
 };
 use serde::Serialize;
 
@@ -67,6 +67,8 @@ pub struct NormalizedSessionSummary {
     pub latest_event_summary: Option<String>,
     pub subagent_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<ToolSessionControl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_sessions: Option<Vec<RawSessionSummary>>,
 }
 
@@ -125,6 +127,8 @@ pub struct RuntimeNormalizedSessionSummary {
     pub first_user_message_at: Option<DateTime<Utc>>,
     pub latest_event_summary: Option<String>,
     pub subagent_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<ToolSessionControl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_sessions: Option<Vec<RuntimeRawSessionSummary>>,
 }
@@ -565,6 +569,7 @@ fn normalized_summary(
             .collect::<Vec<_>>()
     });
     let first_user_message = normalized_first_user_message(primary, &raw_sessions);
+    let control = normalized_control(primary, &raw_sessions);
 
     NormalizedSessionSummary {
         normalized_session_id: normalized_session_id.clone(),
@@ -578,6 +583,7 @@ fn normalized_summary(
         first_user_message_at: first_user_message.map(|message| message.created_at),
         latest_event_summary: None,
         subagent_count,
+        control,
         raw_sessions: raw_summaries,
     }
 }
@@ -642,6 +648,7 @@ fn runtime_normalized_summary(
             .collect::<Vec<_>>()
     });
     let first_user_message = normalized_first_user_message(primary, &raw_sessions);
+    let control = normalized_control(primary, &raw_sessions);
 
     RuntimeNormalizedSessionSummary {
         normalized_session_id: normalized_session_id.clone(),
@@ -658,6 +665,7 @@ fn runtime_normalized_summary(
         first_user_message_at: first_user_message.map(|message| message.created_at),
         latest_event_summary: None,
         subagent_count,
+        control,
         raw_sessions: raw_summaries,
     }
 }
@@ -764,6 +772,28 @@ fn normalized_first_user_message(
             .filter_map(message_summary_from_item)
             .min_by_key(|message| message.created_at)
     })
+}
+
+fn normalized_control(
+    primary: &ToolSessionListItem,
+    raw_sessions: &[ToolSessionListItem],
+) -> Option<ToolSessionControl> {
+    // 主会话的 control 最能代表归一化会话；主会话缺失时再回退到同组可用 control。
+    primary
+        .control
+        .clone()
+        .or_else(|| {
+            raw_sessions
+                .iter()
+                .filter_map(|item| item.control.as_ref())
+                .find(|control| control.resumable)
+                .cloned()
+        })
+        .or_else(|| {
+            raw_sessions
+                .iter()
+                .find_map(|item| item.control.as_ref().cloned())
+        })
 }
 
 fn message_summary_from_item(item: &ToolSessionListItem) -> Option<FirstUserMessageSummary> {

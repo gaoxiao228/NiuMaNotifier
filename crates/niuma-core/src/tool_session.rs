@@ -30,18 +30,29 @@ pub enum ToolSessionNormalizationStatus {
     ParentUnresolved,
 }
 
-// control 描述某个工具会话是否能被 Niuma 通过外部通道继续写入或控制。
+// control 描述某个工具会话是否能被 Niuma 通过一个或多个控制通道继续写入或控制。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolSessionControl {
+    pub resumable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ToolSessionControlChannel>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ToolSessionControlChannel {
+    pub id: String,
+    pub provider: String,
+    pub kind: String,
     pub available: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wrapper_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ToolSessionControlAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
