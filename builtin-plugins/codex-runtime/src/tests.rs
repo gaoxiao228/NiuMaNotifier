@@ -140,7 +140,7 @@ fn codex_session_snapshot_marks_bound_managed_session_control_available() {
                 "wrapper_session_id": "niuma_codex_1",
                 "state": "bound",
                 "cwd": "/tmp/managed-repo",
-                "pid": 42,
+                "pid": std::process::id(),
                 "real_socket": "/tmp/real.sock",
                 "relay_socket": "/tmp/relay.sock",
                 "control_socket": "/tmp/control.sock",
@@ -194,6 +194,69 @@ fn codex_session_snapshot_marks_bound_managed_session_control_available() {
 }
 
 #[test]
+fn codex_session_snapshot_marks_exited_managed_session_control_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let session_path = write_codex_session_file(
+        temp.path(),
+        "rollout-2026-06-22-55555555-5555-5555-5555-555555555555.jsonl",
+        "session-exited-managed",
+        "/tmp/managed-repo",
+        "请继续",
+        "好的",
+    );
+    let registry_path = temp.path().join("managed-sessions/codex.json");
+    std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &registry_path,
+        serde_json::json!({
+            "version": 1,
+            "sessions": [{
+                "wrapper_session_id": "niuma_codex_exited",
+                "state": "exited",
+                "state_changed_at": "2026-06-22T01:00:03Z",
+                "cwd": "/tmp/managed-repo",
+                "pid": std::process::id(),
+                "real_socket": "/tmp/real.sock",
+                "relay_socket": "/tmp/relay.sock",
+                "control_socket": "/tmp/control.sock",
+                "started_at": "2026-06-22T01:00:00Z",
+                "first_user_message_hash": niuma_core::codex_managed_session::first_user_message_hash("请继续"),
+                "first_user_message_preview": "请继续",
+                "first_user_message_submitted_at": "2026-06-22T01:00:01Z",
+                "codex_session_id": "session-exited-managed",
+                "codex_session_file_path": session_path.to_string_lossy(),
+                "bound_at": "2026-06-22T01:00:02Z",
+                "binding_failure_reason": "transport failed"
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut provider = session_provider::CodexSessionProvider::with_codex_home_and_registry_path(
+        temp.path().into(),
+        registry_path,
+    );
+
+    let snapshot = provider_snapshot(&mut provider);
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == "session-exited-managed")
+        .expect("managed session should be discovered");
+    let control = session.control.as_ref().expect("control should be present");
+
+    assert!(!control.resumable);
+    assert_eq!(control.preferred_channel_id, None);
+    let channel = &control.channels[0];
+    assert_eq!(channel.id, "niuma_codex_managed:niuma_codex_exited");
+    assert!(!channel.available);
+    assert_eq!(
+        channel.unavailable_reason.as_deref(),
+        Some("process_exited")
+    );
+}
+
+#[test]
 fn codex_session_snapshot_binds_pending_managed_session_by_first_message_and_time() {
     let temp = tempfile::tempdir().unwrap();
     let session_path = write_codex_session_file(
@@ -214,7 +277,7 @@ fn codex_session_snapshot_binds_pending_managed_session_by_first_message_and_tim
                 "wrapper_session_id": "niuma_codex_pending",
                 "state": "binding_pending",
                 "cwd": "/tmp/managed-repo",
-                "pid": 42,
+                "pid": std::process::id(),
                 "real_socket": "/tmp/real.sock",
                 "relay_socket": "/tmp/relay.sock",
                 "control_socket": "/tmp/control.sock",

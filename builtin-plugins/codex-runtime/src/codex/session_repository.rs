@@ -6,8 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use niuma_core::codex_managed_session::{
-    first_user_message_hash, match_managed_session, read_registry, update_registry, BindingMatch,
-    CodexSessionBindingCandidate, ManagedCodexRegistry, ManagedCodexSessionState,
+    first_user_message_hash, managed_codex_channel_id, match_managed_session, read_registry,
+    update_registry, BindingMatch, CodexSessionBindingCandidate, ManagedCodexRegistry,
+    ManagedCodexSession, ManagedCodexSessionState,
 };
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{
@@ -787,55 +788,115 @@ fn control_for_session(
     session_id: &str,
     registry: &ManagedCodexRegistry,
 ) -> Option<ToolSessionControl> {
-    registry
+    let mut channels = registry
         .sessions
         .iter()
-        .find(|session| {
-            session.codex_session_id.as_deref() == Some(session_id)
-                && session.state == ManagedCodexSessionState::Bound
+        .filter(|session| session.codex_session_id.as_deref() == Some(session_id))
+        .map(managed_session_control_channel)
+        .collect::<Vec<_>>();
+    if channels.is_empty() {
+        return None;
+    }
+    channels.sort_by(|left, right| {
+        right
+            .available
+            .cmp(&left.available)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let preferred_channel_id = channels
+        .iter()
+        .find(|channel| {
+            channel.available
+                && channel
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "send_instruction")
         })
-        .map(|session| ToolSessionControl {
-            resumable: true,
-            preferred_channel_id: Some(format!(
-                "niuma_codex_managed:{}",
-                session.wrapper_session_id
-            )),
-            channels: vec![ToolSessionControlChannel {
-                id: format!("niuma_codex_managed:{}", session.wrapper_session_id),
-                provider: "niuma_codex".to_string(),
-                kind: "managed_relay".to_string(),
-                available: true,
-                capabilities: vec![
-                    "answer_input".to_string(),
-                    "approve".to_string(),
-                    "reject".to_string(),
-                    "send_instruction".to_string(),
-                    "interrupt".to_string(),
-                ],
-                actions: vec![
-                    ToolSessionControlAction {
-                        action_type: "send_instruction".to_string(),
-                        transport: "local_api".to_string(),
-                        endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
-                        debug_command: Some(format!(
-                            "niuma codex-send {} \"继续\"",
-                            session.wrapper_session_id
-                        )),
-                    },
-                    ToolSessionControlAction {
-                        action_type: "interrupt".to_string(),
-                        transport: "local_api".to_string(),
-                        endpoint: Some("/api/v1/session-control/interrupt".to_string()),
-                        debug_command: Some(format!(
-                            "niuma codex-interrupt {}",
-                            session.wrapper_session_id
-                        )),
-                    },
-                ],
-                unavailable_reason: None,
-                updated_at: session.bound_at.unwrap_or(session.started_at),
-            }],
-        })
+        .map(|channel| channel.id.clone());
+    Some(ToolSessionControl {
+        resumable: preferred_channel_id.is_some(),
+        preferred_channel_id,
+        channels,
+    })
+}
+
+fn managed_session_control_channel(session: &ManagedCodexSession) -> ToolSessionControlChannel {
+    let available = session.state == ManagedCodexSessionState::Bound && process_exists(session.pid);
+    ToolSessionControlChannel {
+        id: managed_codex_channel_id(&session.wrapper_session_id),
+        provider: "niuma_codex".to_string(),
+        kind: "managed_relay".to_string(),
+        available,
+        capabilities: managed_channel_capabilities(),
+        actions: managed_channel_actions(&session.wrapper_session_id, available),
+        unavailable_reason: (!available).then(|| unavailable_reason_for_managed_session(session)),
+        updated_at: session.state_changed_at,
+    }
+}
+
+fn managed_channel_capabilities() -> Vec<String> {
+    vec![
+        "answer_input".to_string(),
+        "approve".to_string(),
+        "reject".to_string(),
+        "send_instruction".to_string(),
+        "interrupt".to_string(),
+    ]
+}
+
+fn managed_channel_actions(
+    wrapper_session_id: &str,
+    available: bool,
+) -> Vec<ToolSessionControlAction> {
+    if !available {
+        return Vec::new();
+    }
+    vec![
+        ToolSessionControlAction {
+            action_type: "send_instruction".to_string(),
+            transport: "local_api".to_string(),
+            endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
+            debug_command: Some(format!("niuma codex-send {wrapper_session_id} \"继续\"")),
+        },
+        ToolSessionControlAction {
+            action_type: "interrupt".to_string(),
+            transport: "local_api".to_string(),
+            endpoint: Some("/api/v1/session-control/interrupt".to_string()),
+            debug_command: Some(format!("niuma codex-interrupt {wrapper_session_id}")),
+        },
+    ]
+}
+
+fn unavailable_reason_for_managed_session(session: &ManagedCodexSession) -> String {
+    match session.state {
+        ManagedCodexSessionState::Created
+        | ManagedCodexSessionState::WaitingFirstUserMessage
+        | ManagedCodexSessionState::BindingPending => "binding_pending".to_string(),
+        ManagedCodexSessionState::Bound => "process_exited".to_string(),
+        ManagedCodexSessionState::Ambiguous => "binding_ambiguous".to_string(),
+        ManagedCodexSessionState::Exited => "process_exited".to_string(),
+    }
+}
+
+fn process_exists(pid: Option<u32>) -> bool {
+    pid.map(process_exists_by_pid).unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn process_exists_by_pid(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .is_some_and(|code| code != libc::ESRCH)
+}
+
+#[cfg(not(unix))]
+fn process_exists_by_pid(_pid: u32) -> bool {
+    true
 }
 
 fn message_preview(content: &str) -> String {
