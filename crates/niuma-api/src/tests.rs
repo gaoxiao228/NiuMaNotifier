@@ -8,8 +8,9 @@ use niuma_core::codex_managed_session::{
 };
 use niuma_core::listener_config::ListenerConfig;
 use niuma_core::models::{
-    ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, EventSessionScope, EventType, NiumaEvent,
-    ToolKind,
+    ApprovalControlRef, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus,
+    EventInteractionDetail, EventInteractionOption, EventInteractionQuestion,
+    EventInteractionSchema, EventSessionScope, EventType, NiumaEvent, ToolKind,
 };
 use niuma_core::notification_store::{
     NotificationNotifierType, NotificationRecord, NotificationRecordStatus,
@@ -3180,6 +3181,191 @@ async fn session_detail_existing_snapshot_with_fake_provider_returns_detail() {
 }
 
 #[tokio::test]
+async fn session_detail_returns_null_pending_action_without_attention() {
+    let router = session_detail_test_router(
+        "session_detail_null_pending_action",
+        sample_tool_session_detail("existing-session"),
+        Vec::new(),
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert!(value["data"]
+        .as_object()
+        .unwrap()
+        .contains_key("pending_action"));
+    assert!(value["data"]["pending_action"].is_null());
+}
+
+#[tokio::test]
+async fn session_detail_returns_approval_pending_action() {
+    let router = session_detail_test_router(
+        "session_detail_approval_pending_action",
+        sample_tool_session_detail("existing-session"),
+        vec![session_pending_approval_event(
+            "detail-approval",
+            "existing-session",
+            10,
+        )],
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+    let action = &value["data"]["pending_action"];
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(action["type"], "approval");
+    assert_eq!(action["title"], "需要授权");
+    assert_eq!(action["description"], "请批准 cargo test");
+    assert_eq!(action["actionable"], true);
+    assert_eq!(action["source_event_id"], "detail-approval");
+    assert_eq!(action["actions"][0]["id"], "allow");
+    assert_eq!(
+        action["actions"][0]["submit"]["url"],
+        "/api/v1/approval-decisions"
+    );
+    assert_eq!(
+        action["actions"][0]["submit"]["body"],
+        serde_json::json!({"request_id": "detail-approval-request", "decision": "allow"})
+    );
+}
+
+#[tokio::test]
+async fn session_detail_returns_input_pending_action() {
+    let router = session_detail_test_router(
+        "session_detail_input_pending_action",
+        sample_tool_session_detail("existing-session"),
+        vec![session_pending_input_event(
+            "detail-input",
+            "existing-session",
+            10,
+        )],
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+    let action = &value["data"]["pending_action"];
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(action["type"], "input");
+    assert_eq!(action["title"], "等待输入");
+    assert_eq!(action["description"], "请选择运行方式");
+    assert_eq!(action["actionable"], true);
+    assert_eq!(action["fields"][0]["id"], "mode");
+    assert_eq!(action["fields"][0]["type"], "single_select");
+    assert_eq!(action["fields"][0]["options"][0]["label"], "托盘常驻");
+    assert_eq!(
+        action["submit"]["url"],
+        "/api/v1/session-control/answer-input"
+    );
+    assert_eq!(
+        action["submit"]["body"],
+        serde_json::json!({
+            "tool": "codex",
+            "session_id": "existing-session",
+            "channel_id": "channel-detail-input",
+            "request_id": "detail-input-request"
+        })
+    );
+}
+
+#[tokio::test]
+async fn session_detail_prefers_approval_over_input() {
+    let router = session_detail_test_router(
+        "session_detail_prefers_approval",
+        sample_tool_session_detail("existing-session"),
+        vec![
+            session_pending_input_event("detail-input-later", "existing-session", 20),
+            session_pending_approval_event("detail-approval-earlier", "existing-session", 10),
+        ],
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["pending_action"]["type"], "approval");
+    assert_eq!(
+        value["data"]["pending_action"]["source_event_id"],
+        "detail-approval-earlier"
+    );
+}
+
+#[tokio::test]
+async fn session_detail_does_not_return_resolved_pending_action() {
+    let mut approval = session_pending_approval_event("detail-resolved", "existing-session", 10);
+    approval.attention_resolve_key = Some("approval:detail-resolved-request".to_string());
+    let mut resolved = sample_event_with_type(
+        "detail-resolved-done",
+        "detail-resolved-done",
+        EventType::SessionActivity,
+        20,
+    );
+    resolved.session_id = "existing-session".to_string();
+    // resolved 事件复用 resolve key，用于模拟工具侧已经恢复运行并清掉 attention item。
+    resolved.attention_resolve_key = Some("approval:detail-resolved-request".to_string());
+    let router = session_detail_test_router(
+        "session_detail_resolved_pending_action",
+        sample_tool_session_detail("existing-session"),
+        vec![approval, resolved],
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert!(value["data"]["pending_action"].is_null());
+}
+
+#[tokio::test]
+async fn session_detail_stream_includes_pending_action() {
+    let router = session_detail_test_router(
+        "session_detail_stream_pending_action",
+        sample_tool_session_detail("existing-session"),
+        vec![session_pending_approval_event(
+            "detail-stream-approval",
+            "existing-session",
+            10,
+        )],
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail/stream?tool=codex&session_id=existing-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let initial = next_sse_chunk(&mut body).await;
+    assert!(initial.contains("event: session_detail"));
+    assert!(initial.contains("\"pending_action\""));
+    assert!(initial.contains("\"type\":\"approval\""));
+    assert!(initial.contains("\"source_event_id\":\"detail-stream-approval\""));
+}
+
+#[tokio::test]
 async fn session_detail_returns_control_actions_for_mobile_resume() {
     let mut detail = sample_tool_session_detail("existing-session");
     detail.control = Some(sample_tool_session_control(
@@ -4272,6 +4458,62 @@ fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {
         ],
         next_cursor: Some("next-1".to_string()),
     }
+}
+
+fn session_detail_test_router(
+    name: &str,
+    detail: ToolSessionDetail,
+    events: Vec<NiumaEvent>,
+) -> axum::Router {
+    let store = NiumaStore::new(test_path(name));
+    for event in events {
+        store.append_event(event).unwrap();
+    }
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail,
+        calls: Arc::new(StdMutex::new(Vec::new())),
+    }));
+    app_with_tool_sessions(store, registry)
+}
+
+fn session_pending_approval_event(id: &str, session_id: &str, timestamp: i64) -> NiumaEvent {
+    let mut interaction = EventInteractionDetail::niuma_approval(format!("{id}-request"));
+    interaction.message = Some("请批准 cargo test".to_string());
+    let mut event = sample_event_with_type(id, id, EventType::ApprovalRequested, timestamp);
+    event.session_id = session_id.to_string();
+    event.normalized_session_id = Some(session_id.to_string());
+    event.summary = "Bash: cargo test".to_string();
+    event.interaction = Some(interaction);
+    event
+}
+
+fn session_pending_input_event(id: &str, session_id: &str, timestamp: i64) -> NiumaEvent {
+    let schema = EventInteractionSchema {
+        questions: vec![EventInteractionQuestion {
+            id: "mode".to_string(),
+            header: Some("运行形态".to_string()),
+            question: "你希望主要以什么形态运行？".to_string(),
+            options: vec![EventInteractionOption {
+                label: "托盘常驻".to_string(),
+                description: Some("适合长期后台监控".to_string()),
+            }],
+        }],
+    };
+    let mut interaction = EventInteractionDetail::niuma_input(format!("{id}-request"), schema);
+    interaction.message = Some("请选择运行方式".to_string());
+    interaction.control_ref = Some(ApprovalControlRef {
+        channel_id: format!("channel-{id}"),
+        codex_session_id: None,
+        relay_request_id: format!("relay-{id}"),
+        turn_id: Some("turn-1".to_string()),
+        item_id: None,
+    });
+    let mut event = sample_event_with_type(id, id, EventType::InputRequested, timestamp);
+    event.session_id = session_id.to_string();
+    event.normalized_session_id = Some(session_id.to_string());
+    event.summary = "等待输入".to_string();
+    event.interaction = Some(interaction);
+    event
 }
 
 fn test_path(name: &str) -> std::path::PathBuf {
