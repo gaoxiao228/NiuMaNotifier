@@ -2244,6 +2244,7 @@ mod tests {
                     niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
                 ),
                 control: None,
+                pending_action: None,
                 messages: Vec::new(),
                 next_cursor: None,
             })

@@ -670,6 +670,7 @@ fn detail_from_index(
         agent_role: index.list_item.agent_role.clone(),
         normalization_status: index.list_item.normalization_status.clone(),
         control: index.list_item.control.clone(),
+        pending_action: None,
         messages,
         next_cursor,
     })

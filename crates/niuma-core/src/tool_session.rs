@@ -126,6 +126,72 @@ pub struct ToolSessionMessage {
     pub metadata: Value,
 }
 
+// pending action 是详情 API 面向前端的交互提示模型，由 API 层按运行时状态计算填充。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingActionType {
+    Approval,
+    Input,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PendingAction {
+    #[serde(rename = "type")]
+    pub action_type: PendingActionType,
+    pub title: String,
+    pub description: String,
+    pub actionable: bool,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_event_id: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<PendingActionButton>,
+    #[serde(default)]
+    pub fields: Vec<PendingInputField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit: Option<SubmitSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PendingActionButton {
+    pub id: String,
+    pub label: String,
+    pub submit: SubmitSpec,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubmitSpec {
+    pub method: String,
+    pub url: String,
+    pub body: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingInputFieldType {
+    Text,
+    SingleSelect,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PendingInputField {
+    pub id: String,
+    pub label: String,
+    pub question: String,
+    #[serde(rename = "type")]
+    pub field_type: PendingInputFieldType,
+    pub required: bool,
+    #[serde(default)]
+    pub options: Vec<PendingInputOption>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PendingInputOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 // 会话详情模型由后续 provider RPC 填充；registry 当前只保存列表 snapshot。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolSessionDetail {
@@ -148,6 +214,8 @@ pub struct ToolSessionDetail {
     pub normalization_status: Option<ToolSessionNormalizationStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<ToolSessionControl>,
+    #[serde(default)]
+    pub pending_action: Option<PendingAction>,
     pub messages: Vec<ToolSessionMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,

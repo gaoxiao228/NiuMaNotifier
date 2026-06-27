@@ -4210,6 +4210,7 @@ fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {
             niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
         ),
         control: None,
+        pending_action: None,
         // provider 已经按倒序返回消息，API 不能再重排。
         messages: vec![
             ToolSessionMessage {
