@@ -3682,6 +3682,60 @@ async fn session_detail_prefers_approval_over_input() {
 }
 
 #[tokio::test]
+async fn session_detail_returns_runtime_status_from_current_state() {
+    let router = session_detail_test_router(
+        "session_detail_runtime_status",
+        sample_tool_session_detail("existing-session"),
+        vec![session_runtime_event(
+            "detail-running",
+            "existing-session",
+            EventType::SessionActivity,
+            10,
+        )],
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["runtime_status"], "running");
+    assert_eq!(value["data"]["runtime_last_event_id"], "detail-running");
+    assert_eq!(
+        value["data"]["runtime_last_activity_at"],
+        "1970-01-01T00:00:10Z"
+    );
+}
+
+#[tokio::test]
+async fn session_detail_runtime_status_prefers_waiting_approval_over_input() {
+    let router = session_detail_test_router(
+        "session_detail_runtime_status_prefers_approval",
+        sample_tool_session_detail("existing-session"),
+        vec![
+            session_pending_input_event("detail-runtime-input", "existing-session", 20),
+            session_pending_approval_event("detail-runtime-approval", "existing-session", 10),
+        ],
+    );
+
+    let value = get_json(
+        &router,
+        "/api/v1/session_detail?tool=codex&session_id=existing-session",
+    )
+    .await;
+
+    assert_eq!(value["code"], 0);
+    assert_eq!(value["data"]["runtime_status"], "waiting_approval");
+    assert_eq!(
+        value["data"]["runtime_last_event_id"],
+        "detail-runtime-approval"
+    );
+    assert_eq!(value["data"]["pending_action"]["type"], "approval");
+}
+
+#[tokio::test]
 async fn session_detail_does_not_return_resolved_pending_action() {
     let mut approval = session_pending_approval_event("detail-resolved", "existing-session", 10);
     approval.attention_resolve_key = Some("approval:detail-resolved-request".to_string());
@@ -3739,6 +3793,57 @@ async fn session_detail_stream_includes_pending_action() {
     assert!(initial.contains("\"pending_action\""));
     assert!(initial.contains("\"type\":\"approval\""));
     assert!(initial.contains("\"source_event_id\":\"detail-stream-approval\""));
+}
+
+#[tokio::test]
+async fn session_detail_stream_updates_runtime_status() {
+    let store = NiumaStore::new(test_path("session_detail_stream_runtime_status"));
+    let bus = RuntimeEventBus::new();
+    let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
+        detail: sample_tool_session_detail("existing-session"),
+        calls: Arc::new(StdMutex::new(Vec::new())),
+    }));
+    let router = app_with_bus_and_tool_sessions(store, bus, registry);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail/stream?tool=codex&session_id=existing-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let initial = next_sse_chunk(&mut body).await;
+    assert!(initial.contains("\"runtime_status\":null"));
+
+    let event = session_runtime_event(
+        "detail-stream-running",
+        "existing-session",
+        EventType::SessionActivity,
+        30,
+    );
+    let posted = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/events")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 200);
+
+    let updated = next_sse_chunk(&mut body).await;
+    assert!(updated.contains("event: session_detail"));
+    assert!(updated.contains("\"runtime_status\":\"running\""));
+    assert!(updated.contains("\"runtime_last_event_id\":\"detail-stream-running\""));
 }
 
 #[tokio::test]
@@ -4867,6 +4972,9 @@ fn sample_tool_session_detail(session_id: &str) -> ToolSessionDetail {
             niuma_core::tool_session::ToolSessionNormalizationStatus::Resolved,
         ),
         control: None,
+        runtime_status: None,
+        runtime_last_event_id: None,
+        runtime_last_activity_at: None,
         pending_action: None,
         // provider 已经按倒序返回消息，API 不能再重排。
         messages: vec![
@@ -4942,6 +5050,20 @@ fn session_pending_input_event(id: &str, session_id: &str, timestamp: i64) -> Ni
     event.normalized_session_id = Some(session_id.to_string());
     event.summary = "等待输入".to_string();
     event.interaction = Some(interaction);
+    event
+}
+
+fn session_runtime_event(
+    id: &str,
+    session_id: &str,
+    event_type: EventType,
+    timestamp: i64,
+) -> NiumaEvent {
+    let mut event = sample_event_with_type(id, id, event_type, timestamp);
+    event.session_id = session_id.to_string();
+    event.normalized_session_id = Some(session_id.to_string());
+    event.severity = "info".to_string();
+    event.summary = "session activity".to_string();
     event
 }
 

@@ -410,6 +410,19 @@ impl ToolSessionRegistry {
         }
         Ok(detail)
     }
+
+    pub(crate) fn runtime_for_detail(
+        &self,
+        tool: &ToolKind,
+        detail: &ToolSessionDetail,
+        runtime_states: &[RuntimeStateItem],
+    ) -> Option<RuntimeStateItem> {
+        runtime_states
+            .iter()
+            .filter(|item| &item.tool == tool && detail_matches_runtime_session(self, detail, item))
+            .max_by(|left, right| compare_runtime_priority(left, right))
+            .cloned()
+    }
 }
 
 struct ProjectAccumulator {
@@ -701,6 +714,32 @@ fn runtime_for_session<'a>(
     runtime_states
         .iter()
         .find(|item| &item.tool == tool && item.session_id == session_id)
+}
+
+fn detail_matches_runtime_session(
+    registry: &ToolSessionRegistry,
+    detail: &ToolSessionDetail,
+    runtime: &RuntimeStateItem,
+) -> bool {
+    if runtime.session_id == detail.session_id {
+        return true;
+    }
+
+    let Some(normalized_session_id) = detail.normalized_session_id.as_deref() else {
+        return false;
+    };
+    if detail.session_id != normalized_session_id
+        && detail.session_scope != Some(ToolSessionScope::Main)
+    {
+        return false;
+    }
+
+    registry
+        .find_session(&detail.tool, &runtime.session_id)
+        .is_some_and(|session| {
+            normalized_session_id_for(&session) == normalized_session_id
+                || session.parent_session_id.as_deref() == Some(detail.session_id.as_str())
+        })
 }
 
 fn compare_runtime_priority(
