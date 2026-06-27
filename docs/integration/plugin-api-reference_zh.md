@@ -487,6 +487,8 @@ data: {"list":[],"page":1,"page_size":20,"total":0}
 | `control` | 可选会话控制能力 |
 | `pending_action` | 当前最高优先级待处理交互；无交互时固定返回 `null` |
 
+`control` 表示宿主当前掌握的最新控制通道状态。即使 provider detail 内部缓存较旧，Local API 也会用当前 session snapshot 的 `control` 覆盖详情返回值；托管 session 关闭后，`control.resumable` 应随 snapshot 刷新变为 `false`。
+
 `pending_action` 由宿主根据当前运行态和原始事件 `interaction` 计算，不要求 provider 在 `session_detail` RPC 中返回。优先级：
 
 1. Niuma 可直接处理的授权 `approval`
