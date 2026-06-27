@@ -2269,6 +2269,55 @@ async fn session_project_groups_stream_overlays_runtime_status() {
 }
 
 #[tokio::test]
+async fn session_project_groups_stream_wakes_on_control_change() {
+    let store = NiumaStore::new(test_path("session_project_groups_stream_control_change"));
+    let bus = RuntimeEventBus::new();
+    let registry = ToolSessionRegistry::new();
+    let mut session = tool_session_item("s1", ToolKind::Codex, 30, 20, true, false);
+    session.control = Some(sample_tool_session_control_with_availability(
+        "niuma_codex_managed:niuma_codex_stream_1",
+        false,
+        Some("process_exited"),
+    ));
+    registry.replace_snapshot(ToolKind::Codex, vec![session]);
+    let router = app_with_bus_and_tool_sessions(store, bus.clone(), registry.clone());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_project_groups/stream?tool=codex&page=1&page_size=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let initial = next_sse_chunk(&mut body).await;
+    assert!(initial.contains("\"resumable\":false"));
+
+    let mut updated_session = tool_session_item("s1", ToolKind::Codex, 40, 40, true, false);
+    updated_session.control = Some(sample_tool_session_control(
+        "niuma_codex_managed:niuma_codex_stream_1",
+    ));
+    registry.replace_snapshot(ToolKind::Codex, vec![updated_session]);
+    bus.publish_tool_session_control_changed(
+        ToolKind::Codex,
+        Some("s1".to_string()),
+        Some("s1".to_string()),
+        Some("niuma_codex_managed:niuma_codex_stream_1".to_string()),
+        niuma_core::runtime_event::ToolSessionControlChangeReason::SnapshotRefreshed,
+    );
+
+    let updated = next_sse_chunk(&mut body).await;
+    assert!(updated.contains("\"resumable\":true"));
+    assert!(
+        updated.contains("\"preferred_channel_id\":\"niuma_codex_managed:niuma_codex_stream_1\"")
+    );
+}
+
+#[tokio::test]
 async fn session_detail_stream_emits_initial_and_updated_snapshot() {
     let store = NiumaStore::new(test_path("session_detail_stream"));
     enable_codex_listener(&store);
@@ -2772,14 +2821,19 @@ async fn session_project_groups_returns_project_normalized_sessions() {
     let mut main = tool_session_item("parent-session", ToolKind::Codex, 30, 20, false, false);
     main.first_user_message_preview = Some("主会话第一条用户消息".to_string());
     main.first_user_message_at = Some(Utc.timestamp_opt(10, 0).single().unwrap());
-    main.control = Some(sample_tool_session_control(
+    main.control = Some(sample_tool_session_control_with_availability(
         "niuma_codex_managed:niuma_codex_parent",
+        false,
+        Some("process_exited"),
     ));
     let mut subagent = tool_session_item("child-session", ToolKind::Codex, 50, 50, true, true);
     subagent.agent_nickname = Some("Jason".to_string());
     subagent.agent_role = Some("default".to_string());
     subagent.first_user_message_preview = Some("子代理第一条用户消息".to_string());
     subagent.first_user_message_at = Some(Utc.timestamp_opt(40, 0).single().unwrap());
+    subagent.control = Some(sample_tool_session_control(
+        "niuma_codex_managed:niuma_codex_child",
+    ));
     let other_project = tool_session_item_with_project(
         "other-session",
         ToolKind::Codex,
@@ -2837,7 +2891,18 @@ async fn session_project_groups_returns_project_normalized_sessions() {
     );
     assert_eq!(
         value["data"]["list"][0]["sessions"][0]["control"]["preferred_channel_id"],
-        "niuma_codex_managed:niuma_codex_parent"
+        "niuma_codex_managed:niuma_codex_child"
+    );
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["control"]["channels"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        value["data"]["list"][0]["sessions"][0]["control"]["channels"][0]["id"],
+        "niuma_codex_managed:niuma_codex_child"
     );
     assert_eq!(
         value["data"]["list"][0]["sessions"][0]["control"]["channels"][0]["capabilities"],
@@ -3986,14 +4051,22 @@ fn tool_session_item(
 }
 
 fn sample_tool_session_control(wrapper_session_id: &str) -> ToolSessionControl {
+    sample_tool_session_control_with_availability(wrapper_session_id, true, None)
+}
+
+fn sample_tool_session_control_with_availability(
+    wrapper_session_id: &str,
+    available: bool,
+    unavailable_reason: Option<&str>,
+) -> ToolSessionControl {
     ToolSessionControl {
-        resumable: true,
-        preferred_channel_id: Some(wrapper_session_id.to_string()),
+        resumable: available,
+        preferred_channel_id: available.then(|| wrapper_session_id.to_string()),
         channels: vec![ToolSessionControlChannel {
             id: wrapper_session_id.to_string(),
             provider: "niuma_codex".to_string(),
             kind: "managed_relay".to_string(),
-            available: true,
+            available,
             capabilities: vec!["send_instruction".to_string(), "interrupt".to_string()],
             actions: vec![ToolSessionControlAction {
                 action_type: "send_instruction".to_string(),
@@ -4001,7 +4074,7 @@ fn sample_tool_session_control(wrapper_session_id: &str) -> ToolSessionControl {
                 endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
                 debug_command: Some(format!("niuma codex-send {wrapper_session_id} \"继续\"")),
             }],
-            unavailable_reason: None,
+            unavailable_reason: unavailable_reason.map(ToString::to_string),
             updated_at: Utc::now(),
         }],
     }

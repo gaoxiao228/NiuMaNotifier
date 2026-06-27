@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use niuma_core::models::{RuntimeStateItem, RuntimeStateStatus, ToolKind};
 use niuma_core::tool_session::{
-    ToolSessionControl, ToolSessionDetail, ToolSessionListItem, ToolSessionNormalizationStatus,
-    ToolSessionScope, ToolSessionStatus,
+    ToolSessionControl, ToolSessionControlChannel, ToolSessionDetail, ToolSessionListItem,
+    ToolSessionNormalizationStatus, ToolSessionScope, ToolSessionStatus,
 };
 use serde::Serialize;
 
@@ -778,22 +778,81 @@ fn normalized_control(
     primary: &ToolSessionListItem,
     raw_sessions: &[ToolSessionListItem],
 ) -> Option<ToolSessionControl> {
-    // 主会话的 control 最能代表归一化会话；主会话缺失时再回退到同组可用 control。
-    primary
-        .control
-        .clone()
-        .or_else(|| {
-            raw_sessions
+    let mut channels_by_id = HashMap::<String, ToolSessionControlChannel>::new();
+    for control in std::iter::once(primary)
+        .chain(raw_sessions.iter())
+        .filter_map(|item| item.control.as_ref())
+    {
+        for channel in &control.channels {
+            channels_by_id
+                .entry(channel.id.clone())
+                .and_modify(|existing| {
+                    if control_channel_should_replace(existing, channel) {
+                        *existing = channel.clone();
+                    }
+                })
+                .or_insert_with(|| channel.clone());
+        }
+    }
+
+    if channels_by_id.is_empty() {
+        return None;
+    }
+
+    let mut channels = channels_by_id.into_values().collect::<Vec<_>>();
+    channels.sort_by(control_channel_sort);
+    let preferred_channel_id = channels
+        .iter()
+        .find(|channel| control_channel_can_resume(channel))
+        .or_else(|| channels.iter().find(|channel| channel.available))
+        .map(|channel| channel.id.clone());
+    let resumable = channels.iter().any(control_channel_can_resume);
+
+    Some(ToolSessionControl {
+        resumable,
+        preferred_channel_id,
+        channels,
+    })
+}
+
+fn control_channel_should_replace(
+    existing: &ToolSessionControlChannel,
+    incoming: &ToolSessionControlChannel,
+) -> bool {
+    incoming.updated_at > existing.updated_at
+        || (incoming.updated_at == existing.updated_at && incoming.available && !existing.available)
+}
+
+fn control_channel_sort(
+    left: &ToolSessionControlChannel,
+    right: &ToolSessionControlChannel,
+) -> std::cmp::Ordering {
+    control_channel_rank(right)
+        .cmp(&control_channel_rank(left))
+        .then_with(|| right.updated_at.cmp(&left.updated_at))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn control_channel_rank(channel: &ToolSessionControlChannel) -> usize {
+    if control_channel_can_resume(channel) {
+        2
+    } else if channel.available {
+        1
+    } else {
+        0
+    }
+}
+
+fn control_channel_can_resume(channel: &ToolSessionControlChannel) -> bool {
+    channel.available
+        && (channel
+            .capabilities
+            .iter()
+            .any(|capability| capability == "send_instruction")
+            || channel
+                .actions
                 .iter()
-                .filter_map(|item| item.control.as_ref())
-                .find(|control| control.resumable)
-                .cloned()
-        })
-        .or_else(|| {
-            raw_sessions
-                .iter()
-                .find_map(|item| item.control.as_ref().cloned())
-        })
+                .any(|action| action.action_type == "send_instruction"))
 }
 
 fn message_summary_from_item(item: &ToolSessionListItem) -> Option<FirstUserMessageSummary> {
