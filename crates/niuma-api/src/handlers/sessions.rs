@@ -224,16 +224,17 @@ pub(crate) fn session_detail_with_pending_action(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<ToolSessionDetail, SessionDetailError> {
-    if state.tool_sessions.find_session(tool, session_id).is_none() {
-        return Err(SessionDetailError::Business(
-            "session_id 不存在".to_string(),
-        ));
-    }
+    let snapshot = state
+        .tool_sessions
+        .find_session(tool, session_id)
+        .ok_or_else(|| SessionDetailError::Business("session_id 不存在".to_string()))?;
 
     let mut detail = state
         .tool_sessions
         .detail(tool, session_id, limit, cursor)
         .map_err(SessionDetailError::Business)?;
+    // control 是宿主当前托管通道状态，使用最新 snapshot 覆盖 provider 详情里的旧值。
+    detail.control = snapshot.control;
     detail.pending_action =
         pending_action_for_session(state, &detail).map_err(SessionDetailError::System)?;
     Ok(detail)

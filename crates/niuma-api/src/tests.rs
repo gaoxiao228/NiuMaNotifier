@@ -2384,6 +2384,61 @@ async fn session_detail_stream_emits_initial_and_updated_snapshot() {
 }
 
 #[tokio::test]
+async fn session_detail_stream_overlays_latest_control_from_snapshot() {
+    let store = NiumaStore::new(test_path("session_detail_stream_control_overlay"));
+    let bus = RuntimeEventBus::new();
+    let mut stale_detail = sample_tool_session_detail("existing-session");
+    stale_detail.control = Some(sample_tool_session_control(
+        "niuma_codex_managed:niuma_codex_stream_1",
+    ));
+    let detail_provider = Arc::new(MutableDetailProvider::new(stale_detail));
+    let registry = session_detail_registry_with_provider(detail_provider);
+    let mut initial_session =
+        tool_session_item("existing-session", ToolKind::Codex, 30, 20, true, false);
+    initial_session.control = Some(sample_tool_session_control(
+        "niuma_codex_managed:niuma_codex_stream_1",
+    ));
+    registry.replace_snapshot(ToolKind::Codex, vec![initial_session]);
+    let router = app_with_bus_and_tool_sessions(store, bus.clone(), registry.clone());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session_detail/stream?tool=codex&session_id=existing-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+
+    let initial = next_sse_chunk(&mut body).await;
+    assert!(initial.contains("\"resumable\":true"));
+
+    let mut closed_session =
+        tool_session_item("existing-session", ToolKind::Codex, 40, 40, false, false);
+    closed_session.control = Some(sample_tool_session_control_with_availability(
+        "niuma_codex_managed:niuma_codex_stream_1",
+        false,
+        Some("process_exited"),
+    ));
+    registry.replace_snapshot(ToolKind::Codex, vec![closed_session]);
+    bus.publish_tool_session_control_changed(
+        ToolKind::Codex,
+        Some("existing-session".to_string()),
+        Some("existing-session".to_string()),
+        Some("niuma_codex_managed:niuma_codex_stream_1".to_string()),
+        niuma_core::runtime_event::ToolSessionControlChangeReason::SnapshotRefreshed,
+    );
+
+    let updated = next_sse_chunk(&mut body).await;
+    assert!(updated.contains("event: session_detail"));
+    assert!(updated.contains("\"resumable\":false"));
+    assert!(updated.contains("\"unavailable_reason\":\"process_exited\""));
+}
+
+#[tokio::test]
 async fn session_detail_stream_requires_tool_and_session_id() {
     let registry = session_detail_registry_with_provider(Arc::new(FakeDetailProvider {
         detail: sample_tool_session_detail("existing-session"),
@@ -3372,17 +3427,11 @@ async fn session_detail_returns_control_actions_for_mobile_resume() {
         "niuma_codex_managed:niuma_codex_1",
     ));
     let registry = ToolSessionRegistry::new();
-    registry.replace_snapshot(
-        ToolKind::Codex,
-        vec![tool_session_item(
-            "existing-session",
-            ToolKind::Codex,
-            30,
-            20,
-            true,
-            false,
-        )],
-    );
+    let mut session = tool_session_item("existing-session", ToolKind::Codex, 30, 20, true, false);
+    session.control = Some(sample_tool_session_control(
+        "niuma_codex_managed:niuma_codex_1",
+    ));
+    registry.replace_snapshot(ToolKind::Codex, vec![session]);
     registry.register_detail_provider(
         ToolKind::Codex,
         Arc::new(FakeDetailProvider {
