@@ -591,13 +591,14 @@ fn run_app_control_inner(real_codex: PathBuf, args: Vec<String>) -> Result<i32, 
         .to_string_lossy()
         .to_string();
     let base_dir = managed_socket_base_dir(&wrapper_session_id);
+    let (initial_state, initial_codex_session_id) = managed_session_initial_binding(&args);
 
     std::fs::create_dir_all(&base_dir)
         .map_err(|error| format!("创建 niuma-codex socket 目录失败：{error}"))?;
 
     let session = ManagedCodexSession {
         wrapper_session_id: wrapper_session_id.clone(),
-        state: ManagedCodexSessionState::WaitingFirstUserMessage,
+        state: initial_state,
         state_changed_at: now,
         cwd,
         pid: Some(std::process::id()),
@@ -608,7 +609,7 @@ fn run_app_control_inner(real_codex: PathBuf, args: Vec<String>) -> Result<i32, 
         first_user_message_hash: None,
         first_user_message_preview: None,
         first_user_message_submitted_at: None,
-        codex_session_id: None,
+        codex_session_id: initial_codex_session_id,
         codex_session_file_path: None,
         bound_at: None,
         binding_failure_reason: None,
@@ -671,6 +672,49 @@ fn mark_session_exited_after_failure(
             session.state = ManagedCodexSessionState::Exited;
             session.state_changed_at = changed_at;
             session.binding_failure_reason = Some(reason.to_string());
+        }
+    })
+    .map(|_| ())
+}
+
+fn resume_target_session_id(args: &[String]) -> Option<String> {
+    if args.first().map(String::as_str) != Some("resume") {
+        return None;
+    }
+    args.get(1)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .filter(|value| !value.starts_with('-'))
+        .map(ToString::to_string)
+}
+
+fn managed_session_initial_binding(args: &[String]) -> (ManagedCodexSessionState, Option<String>) {
+    let codex_session_id = resume_target_session_id(args);
+    let state = if codex_session_id.is_some() {
+        ManagedCodexSessionState::BindingPending
+    } else {
+        ManagedCodexSessionState::WaitingFirstUserMessage
+    };
+    (state, codex_session_id)
+}
+
+fn mark_resume_session_bound(registry_path: &Path, wrapper_session_id: &str) -> Result<(), String> {
+    let changed_at = chrono::Utc::now();
+    update_registry(registry_path, |registry| {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.wrapper_session_id == wrapper_session_id)
+        {
+            // resume 已经携带 raw Codex session id；control 通道就绪后可直接标记为可控。
+            if session.codex_session_id.is_some()
+                && session.state != ManagedCodexSessionState::Exited
+            {
+                session.state = ManagedCodexSessionState::Bound;
+                session.state_changed_at = changed_at;
+                session.bound_at = Some(changed_at);
+                session.binding_failure_reason = None;
+            }
         }
     })
     .map(|_| ())
@@ -1036,8 +1080,8 @@ fn run_app_server_remote_processes_impl(
     }
 
     let shared = Arc::new(RelaySharedState::new(
-        wrapper_session_id,
-        registry_path,
+        wrapper_session_id.clone(),
+        registry_path.clone(),
         real_socket.clone(),
     ));
     let relay_handle = match start_relay_thread(
@@ -1081,6 +1125,7 @@ fn run_app_server_remote_processes_impl(
         control_handle.join();
         return Err(error);
     }
+    mark_resume_session_bound(&registry_path, &wrapper_session_id)?;
 
     let mut remote_args = vec![
         "--remote".to_string(),
@@ -2079,6 +2124,111 @@ mod tests {
             session.binding_failure_reason.as_deref(),
             Some("transport failed")
         );
+    }
+
+    #[test]
+    fn resume_target_session_id_reads_resume_argument() {
+        assert_eq!(
+            resume_target_session_id(&["resume".to_string(), "019f-session".to_string()])
+                .as_deref(),
+            Some("019f-session")
+        );
+        assert_eq!(
+            resume_target_session_id(&["resume".to_string(), "--help".to_string()]),
+            None
+        );
+        assert_eq!(
+            resume_target_session_id(&["resume".to_string(), "-h".to_string()]),
+            None
+        );
+        assert_eq!(
+            resume_target_session_id(&["--model".to_string(), "gpt-5".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn managed_session_initial_binding_uses_resume_target() {
+        let (state, codex_session_id) =
+            managed_session_initial_binding(&["resume".to_string(), "session-1".to_string()]);
+
+        assert_eq!(state, ManagedCodexSessionState::BindingPending);
+        assert_eq!(codex_session_id.as_deref(), Some("session-1"));
+
+        let (state, codex_session_id) =
+            managed_session_initial_binding(&["--model".to_string(), "gpt-5".to_string()]);
+        assert_eq!(state, ManagedCodexSessionState::WaitingFirstUserMessage);
+        assert_eq!(codex_session_id, None);
+    }
+
+    #[test]
+    fn mark_resume_session_bound_updates_only_resume_bound_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("codex.json");
+        update_registry(&registry_path, |registry| {
+            registry.upsert(ManagedCodexSession {
+                wrapper_session_id: "resume-wrapper".to_string(),
+                state: ManagedCodexSessionState::BindingPending,
+                state_changed_at: chrono::Utc::now(),
+                cwd: "/tmp/repo".to_string(),
+                pid: Some(42),
+                real_socket: "/tmp/real.sock".to_string(),
+                relay_socket: "/tmp/relay.sock".to_string(),
+                control_socket: "/tmp/control.sock".to_string(),
+                started_at: chrono::Utc::now(),
+                first_user_message_hash: None,
+                first_user_message_preview: None,
+                first_user_message_submitted_at: None,
+                codex_session_id: Some("codex-session-1".to_string()),
+                codex_session_file_path: None,
+                bound_at: None,
+                binding_failure_reason: Some("waiting".to_string()),
+            });
+            registry.upsert(ManagedCodexSession {
+                wrapper_session_id: "fresh-wrapper".to_string(),
+                state: ManagedCodexSessionState::WaitingFirstUserMessage,
+                state_changed_at: chrono::Utc::now(),
+                cwd: "/tmp/repo".to_string(),
+                pid: Some(42),
+                real_socket: "/tmp/real2.sock".to_string(),
+                relay_socket: "/tmp/relay2.sock".to_string(),
+                control_socket: "/tmp/control2.sock".to_string(),
+                started_at: chrono::Utc::now(),
+                first_user_message_hash: None,
+                first_user_message_preview: None,
+                first_user_message_submitted_at: None,
+                codex_session_id: None,
+                codex_session_file_path: None,
+                bound_at: None,
+                binding_failure_reason: None,
+            });
+        })
+        .unwrap();
+
+        mark_resume_session_bound(&registry_path, "resume-wrapper").unwrap();
+        mark_resume_session_bound(&registry_path, "fresh-wrapper").unwrap();
+
+        let registry = niuma_core::codex_managed_session::read_registry(&registry_path).unwrap();
+        let resume = registry
+            .sessions
+            .iter()
+            .find(|session| session.wrapper_session_id == "resume-wrapper")
+            .unwrap();
+        assert_eq!(resume.state, ManagedCodexSessionState::Bound);
+        assert_eq!(resume.codex_session_id.as_deref(), Some("codex-session-1"));
+        assert!(resume.bound_at.is_some());
+        assert_eq!(resume.binding_failure_reason, None);
+
+        let fresh = registry
+            .sessions
+            .iter()
+            .find(|session| session.wrapper_session_id == "fresh-wrapper")
+            .unwrap();
+        assert_eq!(
+            fresh.state,
+            ManagedCodexSessionState::WaitingFirstUserMessage
+        );
+        assert!(fresh.bound_at.is_none());
     }
 
     #[test]
