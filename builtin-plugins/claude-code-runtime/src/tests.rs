@@ -260,13 +260,13 @@ fn repository_attaches_control_channel_for_managed_claude_session() {
 
     let control = sessions[0].control.as_ref().unwrap();
     assert_eq!(
-        control.preferred_channel_id.as_deref(),
-        Some("niuma_claude_managed:niuma_claude_1")
+        control.channels[0].id,
+        "niuma_claude_managed:niuma_claude_1"
     );
-    assert!(control.resumable);
+    assert!(!control.resumable);
+    assert!(control.preferred_channel_id.is_none());
     assert_eq!(control.channels[0].provider, "niuma_claude");
-    assert!(control.channels[0]
-        .actions
-        .iter()
-        .any(|action| action.action_type == "send_instruction"));
+    assert!(!control.channels[0].available);
+    assert!(control.channels[0].actions.is_empty());
+    assert!(control.channels[0].capabilities.is_empty());
 }

@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Utc};
 use niuma_core::claude_code_managed_session::{
     managed_claude_code_channel_id, read_registry, ManagedClaudeCodeRegistry,
-    ManagedClaudeCodeSession, ManagedClaudeCodeSessionState,
+    ManagedClaudeCodeSession,
 };
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{
@@ -294,10 +294,8 @@ fn control_for_session(
 fn managed_session_control_channel(
     session: &ManagedClaudeCodeSession,
 ) -> ToolSessionControlChannel {
-    let available = matches!(
-        session.state,
-        ManagedClaudeCodeSessionState::Started | ManagedClaudeCodeSessionState::Bound
-    );
+    // Claude Code 当前没有 Codex 等价的 live control channel，不能把 resume 伪装成实时控制。
+    let available = false;
     ToolSessionControlChannel {
         id: managed_claude_code_channel_id(&session.wrapper_session_id),
         provider: "niuma_claude".to_string(),
@@ -339,7 +337,7 @@ fn unavailable_reason_for_managed_session(session: &ManagedClaudeCodeSession) ->
     session
         .binding_failure_reason
         .clone()
-        .unwrap_or_else(|| format!("Claude Code managed session state: {:?}", session.state))
+        .unwrap_or_else(|| "Claude Code 实时控制尚未实现".to_string())
 }
 
 fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {
