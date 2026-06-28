@@ -77,6 +77,15 @@ describe('client signaling prerequisites', () => {
       data: {}
     })).toThrow()
   })
+
+  it('rejects answer messages from web client role', () => {
+    expect(() => clientSignalMessageSchema.parse({
+      version: 1,
+      id: 'msg_3',
+      type: 'signal.answer',
+      data: { sdp: 'answer-sdp' }
+    })).toThrow()
+  })
 })
 
 describe('/ws/client signaling', () => {

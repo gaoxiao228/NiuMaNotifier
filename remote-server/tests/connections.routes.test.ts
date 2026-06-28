@@ -68,7 +68,7 @@ describe('connection create device notification', () => {
     expect(message).not.toHaveProperty('connection_id')
   })
 
-  it('maps server transport preference to RemoteAgent protocol values', () => {
+  it('maps all server transport preferences to current RemoteAgent compatible auto transport', () => {
     expect(createConnectionInviteMessage({
       connectionId: 'conn_1',
       clientId: 'web_1',
@@ -80,12 +80,12 @@ describe('connection create device notification', () => {
       clientId: 'web_1',
       transportPreference: 'relay_first',
       expiresAt: '2026-06-28T00:02:00.000Z'
-    }).data.transport_preference).toBe('relay')
+    }).data.transport_preference).toBe('auto')
     expect(createConnectionInviteMessage({
       connectionId: 'conn_3',
       clientId: 'web_1',
       transportPreference: 'relay_only',
       expiresAt: '2026-06-28T00:02:00.000Z'
-    }).data.transport_preference).toBe('relay')
+    }).data.transport_preference).toBe('auto')
   })
 })

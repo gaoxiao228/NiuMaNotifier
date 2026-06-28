@@ -18,10 +18,6 @@ export const signalOfferPayloadSchema = z.object({
   sdp: sdpSchema
 })
 
-export const signalAnswerPayloadSchema = z.object({
-  sdp: sdpSchema
-})
-
 export const signalIceCandidatePayloadSchema = z.object({
   candidate: candidateSchema,
   sdp_mid: z.string().min(1).max(160).nullable().optional(),
@@ -34,12 +30,6 @@ export const clientSignalMessageSchema = z.discriminatedUnion('type', [
     id: z.string().min(1),
     type: z.literal('signal.offer'),
     data: signalOfferPayloadSchema
-  }),
-  z.object({
-    version: z.literal(1),
-    id: z.string().min(1),
-    type: z.literal('signal.answer'),
-    data: signalAnswerPayloadSchema
   }),
   z.object({
     version: z.literal(1),
