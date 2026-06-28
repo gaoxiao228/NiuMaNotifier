@@ -97,6 +97,12 @@ pub struct DesktopLoginStartResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopLoginEncryptedResult {
+    pub alg: String,
+    pub jwe: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesktopLoginBindingResult {
     pub user_id: String,
     pub user_email: String,
