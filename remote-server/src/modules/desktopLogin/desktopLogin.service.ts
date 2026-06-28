@@ -13,6 +13,7 @@ export type DesktopLoginSession = {
   requestId: string
   pollTokenHash: string
   desktopPublicKey: string
+  deviceIdentityPublicKey: string
   deviceName: string
   fingerprintHash: string
   capabilityJson: unknown
@@ -40,6 +41,7 @@ export type DesktopLoginRepository = {
     name: string
     fingerprintHash: string
     tokenHash: string
+    identityPublicKeyJson: unknown
     status: 'active'
     capabilityJson: unknown
     createdAt: Date
@@ -89,6 +91,7 @@ export function createDesktopLoginService(options: {
         requestId,
         pollTokenHash: createHash(pollToken, options.config.tokenPepper),
         desktopPublicKey: input.desktop_public_key,
+        deviceIdentityPublicKey: input.device_identity_public_key,
         deviceName: input.device_name,
         fingerprintHash,
         capabilityJson: input.capabilities,
@@ -131,6 +134,7 @@ export function createDesktopLoginService(options: {
         name: session.deviceName,
         fingerprintHash: session.fingerprintHash,
         tokenHash: createHash(deviceToken, options.config.tokenPepper),
+        identityPublicKeyJson: JSON.parse(session.deviceIdentityPublicKey),
         status: 'active',
         capabilityJson: session.capabilityJson,
         createdAt: now,

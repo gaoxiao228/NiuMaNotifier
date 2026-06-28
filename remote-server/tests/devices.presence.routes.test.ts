@@ -12,7 +12,8 @@ describe('device list presence merge and revoke token', () => {
               id: 'dev_1',
               name: 'NiuMa MacBook',
               lastSeenAt: new Date('2026-06-28T00:00:00.000Z'),
-              capabilityJson: { supports_webrtc: true }
+              capabilityJson: { supports_webrtc: true },
+              identityPublicKeyJson: { crv: 'P-256' }
             }
           ]
         }
@@ -40,7 +41,8 @@ describe('device list presence merge and revoke token', () => {
           name: 'NiuMa MacBook',
           online: true,
           last_seen_at: '2026-06-28T00:01:00.000Z',
-          capabilities: { supports_webrtc: true }
+          capabilities: { supports_webrtc: true },
+          identity_public_key: { crv: 'P-256' }
         }
       ]
     })

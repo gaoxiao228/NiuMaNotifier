@@ -52,12 +52,20 @@ function createRepo(): DesktopLoginRepository {
 
 const validStartInput = async () => {
   const { publicKey, privateKey } = await generateKeyPair('ECDH-ES')
+  const identity = {
+    kty: 'EC',
+    crv: 'P-256',
+    x: 'x-coordinate',
+    y: 'y-coordinate'
+  }
+
   return {
     privateKey,
     input: {
       device_name: 'NiuMa MacBook',
       device_fingerprint: 'fingerprint-1234567890-abcdef',
       desktop_public_key: JSON.stringify(await exportJWK(publicKey)),
+      device_identity_public_key: JSON.stringify(identity),
       capabilities: {
         agent_protocol_version: 1,
         rpc_protocol_version: 1,

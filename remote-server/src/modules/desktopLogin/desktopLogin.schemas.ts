@@ -12,6 +12,7 @@ export const desktopLoginStartSchema = z.object({
   device_name: z.string().min(1).max(120),
   device_fingerprint: z.string().min(32).max(128),
   desktop_public_key: z.string().min(16),
+  device_identity_public_key: z.string().min(16),
   capabilities: deviceCapabilitiesSchema
 })
 

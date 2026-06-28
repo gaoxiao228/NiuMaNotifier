@@ -6,6 +6,7 @@ export type DeviceListItem = {
   online: boolean
   last_seen_at: string | null
   capabilities: unknown
+  identity_public_key: unknown
 }
 
 export type DevicesRepository = {
@@ -15,6 +16,7 @@ export type DevicesRepository = {
       name: string
       lastSeenAt: Date | null
       capabilityJson: unknown
+      identityPublicKeyJson: unknown
     }>
   >
   revokeDeviceToken?(userId: string, deviceId: string, revokedAt: Date): Promise<void>
@@ -38,7 +40,8 @@ export function createDevicesService(options: { repo: DevicesRepository; presenc
             name: device.name,
             online: Boolean(presence),
             last_seen_at: presence?.last_seen_at ?? device.lastSeenAt?.toISOString() ?? null,
-            capabilities: presence?.capabilities ?? device.capabilityJson
+            capabilities: presence?.capabilities ?? device.capabilityJson,
+            identity_public_key: device.identityPublicKeyJson
           }
         })
       )
