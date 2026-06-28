@@ -65,10 +65,13 @@ function signalType(value: unknown): string | null {
 export function createConnectionClient(options: ConnectionClientOptions): ConnectionClient {
   const WebSocketCtor = options.WebSocketImpl ?? WebSocket
   const socket = new WebSocketCtor(options.url)
+  let active = true
+  let closedByClient = false
 
   options.onStatus('connecting')
 
   socket.onmessage = (event) => {
+    if (!active) return
     const value = parseSignalMessage(event.data)
     options.onMessage(value)
 
@@ -76,12 +79,22 @@ export function createConnectionClient(options: ConnectionClientOptions): Connec
     if (type === 'connection.accept') options.onStatus('accepted')
     if (type === 'connection.reject') options.onStatus('rejected')
   }
-  socket.onerror = () => options.onStatus('error')
-  socket.onclose = () => options.onStatus('closed')
+  socket.onerror = () => {
+    if (!active) return
+    options.onStatus('error')
+  }
+  socket.onclose = () => {
+    if (!active) return
+    active = false
+    if (!closedByClient) options.onStatus('closed')
+  }
 
   return {
     socket,
     close() {
+      if (!active && closedByClient) return
+      closedByClient = true
+      active = false
       socket.close()
     }
   }

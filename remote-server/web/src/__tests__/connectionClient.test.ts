@@ -26,6 +26,18 @@ describe('buildClientSocketUrl', () => {
     )
   })
 
+  it('clears existing websocket query and hash before adding binding query', () => {
+    expect(buildClientSocketUrl('wss://example.com/ws/client?old=1#hash', bind)).toBe(
+      'wss://example.com/ws/client?connection_id=conn_123&connection_token=short_token'
+    )
+  })
+
+  it('supports a relative signaling path from the current origin', () => {
+    expect(buildClientSocketUrl('/ws/client?old=1#hash', bind)).toBe(
+      'ws://localhost:3000/ws/client?connection_id=conn_123&connection_token=short_token'
+    )
+  })
+
   it('never includes an account access token in the websocket URL', () => {
     const url = buildClientSocketUrl('https://example.com?access_token=account-token', bind)
 
@@ -62,10 +74,43 @@ describe('createConnectionClient', () => {
     socket.onmessage?.({ data: JSON.stringify({ type: 'connection.accept' }) } as MessageEvent<string>)
     socket.onmessage?.({ data: JSON.stringify({ type: 'connection.reject' }) } as MessageEvent<string>)
     expect(() => socket.onmessage?.({ data: '{bad-json' } as MessageEvent<string>)).not.toThrow()
-    client.close()
+    socket.onclose?.()
 
     expect(socket.url).toBe('ws://127.0.0.1/ws/client')
     expect(statuses).toEqual(['connecting', 'accepted', 'rejected', 'closed'])
     expect(messages).toEqual([{ type: 'connection.accept' }, { type: 'connection.reject' }, '{bad-json'])
+  })
+
+  it('makes manual close idempotent and suppresses later socket callbacks', () => {
+    const statuses: string[] = []
+    const messages: unknown[] = []
+
+    class FakeWebSocket {
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      onclose: (() => void) | null = null
+      onerror: (() => void) | null = null
+
+      constructor(public url: string) {}
+
+      close = vi.fn()
+    }
+
+    const client = createConnectionClient({
+      url: 'ws://127.0.0.1/ws/client',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      onStatus: (status) => statuses.push(status),
+      onMessage: (value) => messages.push(value)
+    })
+    const socket = client.socket as unknown as FakeWebSocket
+
+    client.close()
+    client.close()
+    socket.onclose?.()
+    socket.onerror?.()
+    socket.onmessage?.({ data: JSON.stringify({ type: 'connection.accept' }) } as MessageEvent<string>)
+
+    expect(socket.close).toHaveBeenCalledTimes(1)
+    expect(statuses).toEqual(['connecting'])
+    expect(messages).toEqual([])
   })
 })

@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RemoteDevice } from '../api/devicesApi.js'
 import type { ConnectionCreateResult } from '../api/connectionsApi.js'
 import { DeviceConsolePage } from '../remote/deviceConsolePage.js'
+import type { ConnectionClientOptions, ConnectionStatus } from '../remote/connectionClient.js'
 import { createTranslator } from '../i18n/index.js'
 
 const t = createTranslator('en')
@@ -20,8 +21,12 @@ function createDevice(online: boolean): RemoteDevice {
 }
 
 function createConnectionResult(): ConnectionCreateResult {
+  return createConnectionResultWithId('conn_123')
+}
+
+function createConnectionResultWithId(connectionId: string): ConnectionCreateResult {
   return {
-    connection_id: 'conn_123',
+    connection_id: connectionId,
     connection_token: 'short_token',
     expires_at: '2026-06-29T00:00:00Z',
     expires_in: 60,
@@ -110,5 +115,92 @@ describe('DeviceConsolePage', () => {
     } finally {
       if (descriptor) Object.defineProperty(window, 'localStorage', descriptor)
     }
+  })
+
+  it('ignores stale socket close, error, and messages after reconnecting', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(createConnectionResultWithId('conn_old'))
+      .mockResolvedValueOnce(createConnectionResultWithId('conn_new'))
+    const clients: Array<{
+      socket: WebSocket
+      close: ReturnType<typeof vi.fn>
+      onStatus: (status: ConnectionStatus) => void
+      onMessage: (value: unknown) => void
+    }> = []
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      const client = {
+        socket: {} as WebSocket,
+        close: vi.fn(),
+        onStatus: options.onStatus,
+        onMessage: options.onMessage
+      }
+      clients.push(client)
+      return client
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+    act(() => clients[0]?.onStatus('accepted'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(2))
+    act(() => clients[1]?.onStatus('accepted'))
+    act(() => {
+      clients[0]?.onStatus('closed')
+      clients[0]?.onStatus('error')
+      clients[0]?.onMessage({ type: 'connection.reject', stale: true })
+    })
+
+    expect(clients[0]?.close).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Accepted')).not.toBeNull()
+    expect(screen.queryByText(/stale/)).toBeNull()
+  })
+
+  it('closes the current socket on unmount and ignores later callbacks', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const client = {
+      socket: {} as WebSocket,
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      client.onStatus = options.onStatus
+      client.onMessage = options.onMessage
+      return client
+    })
+
+    const { unmount } = render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    unmount()
+
+    expect(client.close).toHaveBeenCalledTimes(1)
+    expect(() => {
+      client.onStatus('closed')
+      client.onStatus('error')
+      client.onMessage({ type: 'connection.accept' })
+    }).not.toThrow()
   })
 })

@@ -87,24 +87,37 @@ export function DeviceConsolePage({
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<unknown[]>([])
   const socketRef = useRef<ConnectionClient | null>(null)
+  const activeConnectionRef = useRef(0)
+  const mountedRef = useRef(false)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
+      activeConnectionRef.current += 1
       socketRef.current?.close()
       socketRef.current = null
     }
   }, [])
 
+  function isActiveConnection(connectionId: number): boolean {
+    return mountedRef.current && activeConnectionRef.current === connectionId
+  }
+
   async function handleConnect() {
     if (!device.online || status === 'connecting') return
-    setStatus('connecting')
-    setError(null)
-    setMessages([])
+    const activeConnectionId = activeConnectionRef.current + 1
+    activeConnectionRef.current = activeConnectionId
     socketRef.current?.close()
     socketRef.current = null
 
+    setStatus('connecting')
+    setError(null)
+    setMessages([])
+
     try {
       const result = await connectionsApi.create(device.id, clientId)
+      if (!isActiveConnection(activeConnectionId)) return
       setConnectionId(result.connection_id)
       const socketUrl = buildClientSocketUrl(result.signaling_url || window.location.origin, {
         connection_id: result.connection_id,
@@ -112,10 +125,17 @@ export function DeviceConsolePage({
       })
       socketRef.current = createConnection({
         url: socketUrl,
-        onStatus: setStatus,
-        onMessage: (value) => setMessages((current) => [value, ...current].slice(0, 20))
+        onStatus: (nextStatus) => {
+          if (isActiveConnection(activeConnectionId)) setStatus(nextStatus)
+        },
+        onMessage: (value) => {
+          if (isActiveConnection(activeConnectionId)) {
+            setMessages((current) => [value, ...current].slice(0, 20))
+          }
+        }
       })
     } catch (err) {
+      if (!isActiveConnection(activeConnectionId)) return
       setStatus('error')
       setError(toDisplayErrorMessage(t, err, 'connection_failed'))
     }
