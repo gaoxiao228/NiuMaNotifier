@@ -92,7 +92,7 @@ function deviceHelloSigningPayload(input: {
 }
 
 export async function signDeviceHelloForTest(input: {
-  identityPrivateKey: CryptoKey
+  identitySigningKeyForTest: CryptoKey
   connectionId: string
   deviceId: string
   clientId: string
@@ -107,7 +107,7 @@ export async function signDeviceHelloForTest(input: {
   }
   const signature = await crypto.subtle.sign(
     { name: 'ECDSA', hash: 'SHA-256' },
-    input.identityPrivateKey,
+    input.identitySigningKeyForTest,
     toBufferSource(deviceHelloSigningPayload(payload))
   )
   return {

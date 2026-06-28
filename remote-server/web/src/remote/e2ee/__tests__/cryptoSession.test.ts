@@ -27,7 +27,7 @@ describe('browser E2EE crypto session', () => {
       ['sign', 'verify']
     )
     const deviceHello = await signDeviceHelloForTest({
-      identityPrivateKey: identity.privateKey,
+      identitySigningKeyForTest: identity.privateKey,
       connectionId: 'conn_1',
       deviceId: 'dev_1',
       clientId: 'web_1'
