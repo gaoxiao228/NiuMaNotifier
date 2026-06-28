@@ -1,8 +1,10 @@
 use futures_util::{SinkExt, StreamExt};
 use http::Request;
+use niuma_core::remote::config::RemoteConfig;
 use niuma_core::remote::connection_policy::{
     classify_device_socket_close, device_socket_url, DeviceSocketCloseReason,
 };
+use niuma_core::remote::signaling::{parse_device_signal_message, DeviceSignalMessage};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time;
@@ -16,6 +18,7 @@ pub struct DeviceSocketConnectRequest {
     pub device_id: String,
     pub device_token: String,
     pub heartbeat_interval_seconds: u64,
+    pub remote_config: RemoteConfig,
 }
 
 impl DeviceSocketConnectRequest {
@@ -34,7 +37,10 @@ pub fn device_authorization_header(device_token: &str) -> String {
     format!("Device {device_token}")
 }
 
-pub async fn run_device_socket_once(request: DeviceSocketConnectRequest) -> DeviceSocketRunResult {
+pub async fn run_device_socket_once(
+    request: DeviceSocketConnectRequest,
+    signaling_manager: crate::remote::signaling::RemoteSignalingManager,
+) -> DeviceSocketRunResult {
     let socket_url = match request.socket_url() {
         Ok(value) => value,
         Err(error) => return DeviceSocketRunResult::Failed(error),
@@ -89,12 +95,47 @@ pub async fn run_device_socket_once(request: DeviceSocketConnectRequest) -> Devi
                             return DeviceSocketRunResult::Failed(format!("回复远程 ping 失败：{error}"));
                         }
                     }
+                    Some(Ok(Message::Text(text))) => {
+                        let outbound = match dispatch_device_text_message(
+                            &request.remote_config,
+                            text,
+                            |config, message| signaling_manager.handle_message(config, message),
+                        ) {
+                            Ok(messages) => messages,
+                            Err(error) => return DeviceSocketRunResult::Failed(error),
+                        };
+                        for message in outbound {
+                            if let Err(error) = writer.send(Message::Text(message.to_string())).await {
+                                return DeviceSocketRunResult::Failed(format!("发送远程信令响应失败：{error}"));
+                            }
+                        }
+                    }
                     Some(Ok(_message)) => {}
                     Some(Err(error)) => {
                         return DeviceSocketRunResult::Failed(format!("读取远程设备连接失败：{error}"));
                     }
                     None => return DeviceSocketRunResult::Closed(DeviceSocketCloseReason::NetworkError),
                 }
+            }
+        }
+    }
+}
+
+pub fn dispatch_device_text_message(
+    config: &RemoteConfig,
+    text: String,
+    mut handler: impl FnMut(&RemoteConfig, DeviceSignalMessage) -> Vec<Value>,
+) -> Result<Vec<Value>, String> {
+    let value: Value =
+        serde_json::from_str(&text).map_err(|error| format!("远程设备消息 JSON 解析失败：{error}"))?;
+    match parse_device_signal_message(value) {
+        Ok(message) => Ok(handler(config, message)),
+        Err(error) => {
+            // 非信令文本消息留给后续协议扩展；当前连接循环只消费已知信令。
+            if error.starts_with("未知远程信令消息类型") {
+                Ok(vec![])
+            } else {
+                Err(error)
             }
         }
     }
@@ -165,6 +206,9 @@ mod connection_tests {
             device_id: "dev_1".to_string(),
             device_token: "dvt_secret".to_string(),
             heartbeat_interval_seconds: 20,
+            remote_config: niuma_core::remote::config::RemoteConfig::default_for_server(
+                "https://remote.example.com",
+            ),
         };
 
         assert_eq!(
@@ -172,5 +216,44 @@ mod connection_tests {
             "wss://remote.example.com/ws/device"
         );
         assert!(!request.socket_url().unwrap().contains("dvt_secret"));
+    }
+}
+
+#[cfg(test)]
+mod signaling_dispatch_tests {
+    use super::*;
+    use niuma_core::remote::config::RemoteConfig;
+    use serde_json::json;
+
+    #[test]
+    fn dispatches_connection_invite_to_handler() {
+        let config = RemoteConfig::default_for_server("https://remote.example.com");
+        let outbound = dispatch_device_text_message(
+            &config,
+            json!({
+                "version": 1,
+                "type": "connection.invite",
+                "id": "msg_1",
+                "data": {
+                    "connection_id": "conn_1",
+                    "client_id": "web_1",
+                    "client_label": "Chrome",
+                    "transport_preference": "webrtc",
+                    "expires_at": "2026-06-28T00:02:00.000Z"
+                }
+            })
+            .to_string(),
+            |_, message| {
+                assert_eq!(message.connection_id(), "conn_1");
+                vec![serde_json::json!({
+                    "version": 1,
+                    "type": "connection.accept",
+                    "id": "msg_2",
+                    "data": { "connection_id": "conn_1", "transport": "webrtc" }
+                })]
+            },
+        );
+
+        assert_eq!(outbound.unwrap()[0]["type"], "connection.accept");
     }
 }

@@ -38,6 +38,7 @@ pub fn build_connect_request(
         device_id: device.id.clone(),
         device_token: credential.device_token.clone(),
         heartbeat_interval_seconds: DEVICE_HEARTBEAT_INTERVAL_SECONDS,
+        remote_config: config.clone(),
     })
 }
 
@@ -61,6 +62,7 @@ pub async fn run_agent_loop(
     status: RemoteAgentStatusHandle,
 ) {
     let backoff = ReconnectBackoff::default();
+    let signaling_manager = crate::remote::signaling::RemoteSignalingManager::default();
     let mut attempt = 0u32;
     loop {
         let config = match load_config() {
@@ -96,7 +98,8 @@ pub async fn run_agent_loop(
         };
 
         status.set_state(RemoteAgentState::Connecting, None);
-        let result_state = state_after_socket_result(run_device_socket_once(request).await);
+        let result_state =
+            state_after_socket_result(run_device_socket_once(request, signaling_manager.clone()).await);
         status.set_state(result_state, None);
         match result_state {
             RemoteAgentState::TokenRevoked => {
