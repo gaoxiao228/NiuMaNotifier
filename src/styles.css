@@ -1146,6 +1146,46 @@ select {
   overflow-wrap: anywhere;
 }
 
+.remote-settings-panel {
+  min-width: 0;
+  overflow: auto;
+}
+
+.remote-settings-form {
+  display: grid;
+  gap: 14px;
+  max-width: 560px;
+}
+
+.remote-toggle {
+  justify-content: space-between;
+  max-width: 560px;
+}
+
+.remote-binding-summary {
+  display: grid;
+  gap: 10px 16px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 22px 0 0;
+  max-width: 560px;
+}
+
+.remote-binding-summary dt {
+  color: #53627a;
+}
+
+.remote-binding-summary dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.remote-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .plugin-meta {
   background: #f8fafc;
   border: 1px solid #d6e0ec;

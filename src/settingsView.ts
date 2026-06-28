@@ -137,10 +137,12 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
       <dt>${escapeHtml(t.remoteBindingStatus)}</dt>
       <dd>${escapeHtml(bound ? t.remoteBound : t.remoteUnbound)}</dd>
     </dl>
-    <button id="remote-clear-binding" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(
-      logoutBusy ? t.remoteLogoutClearing : t.remoteLogout
-    )}</button>
-    ${options.resultText ? `<p class="settings-result">${escapeHtml(options.resultText)}</p>` : ''}
+    <div class="remote-actions">
+      <button id="remote-logout" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(
+        logoutBusy ? t.remoteLoggingOut : t.remoteLogout
+      )}</button>
+    </div>
+    ${options.resultText ? `<p id="remote-settings-result" class="settings-result">${escapeHtml(options.resultText)}</p>` : ''}
   `
 }
 

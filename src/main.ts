@@ -1,17 +1,22 @@
 import {
+  clearRemoteBinding,
   dismissActiveBlocker,
   getListenerConfig,
   getNotificationRecords,
   getPluginConfig,
   getPlugins,
   getLocalApiUrl,
+  getRemoteSettings,
+  pollRemoteLogin,
   refreshMainState,
   removePlugin,
   runPluginAction,
   setPluginEnabled,
   savePluginConfig,
   saveListenerConfig,
+  saveRemoteSettings,
   selectAndImportPluginDir,
+  startRemoteLogin,
   submitInputAnswer,
   sendTestNotification,
   submitApprovalDecision,
@@ -19,7 +24,8 @@ import {
   type ListenerToolConfig,
   type MainStatePayload,
   type NotificationRecord,
-  type PluginManagementItem
+  type PluginManagementItem,
+  type RemoteSettingsPayload
 } from './api'
 import {
   detectInitialLanguage,
@@ -43,6 +49,7 @@ import {
 import {
   renderPluginImportResult,
   renderPluginManagement,
+  renderRemoteSettingsPanel,
   renderSettingsShell,
   type SettingsPanel
 } from './settingsView'
@@ -106,6 +113,10 @@ let activeView: ActiveView = 'dashboard'
 let activeSettingsPanel: SettingsPanel = 'plugins'
 let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
+let remoteSettings: RemoteSettingsPayload | null = null
+let remoteSettingsBusyAction: 'save' | 'login' | 'logout' | null = null
+let remoteSettingsResultText = ''
+let remoteLoginPollTimer: number | null = null
 let localApiUrlText = ''
 let localSseConnected = false
 let approvingApprovalRequestId: string | null = null
@@ -292,6 +303,9 @@ function showSettingsView() {
   if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
     void refreshNotificationRecords()
   }
+  if (activeSettingsPanel === 'remote-access' && !remoteSettings) {
+    void loadRemoteSettings()
+  }
 }
 
 function renderToolListeners() {
@@ -314,6 +328,31 @@ function renderSettings() {
   })
   renderPluginSettings()
   renderSettingsNotificationHistory()
+  renderRemoteSettings()
+}
+
+function renderRemoteSettings() {
+  const element = document.querySelector<HTMLElement>('#remote-settings-panel')
+  if (!element) {
+    return
+  }
+  element.innerHTML = renderRemoteSettingsPanel({
+    language: currentLanguage,
+    settings: remoteSettings,
+    busyAction: remoteSettingsBusyAction,
+    resultText: remoteSettingsResultText
+  })
+}
+
+async function loadRemoteSettings() {
+  try {
+    remoteSettings = await getRemoteSettings()
+    remoteSettingsResultText = ''
+  } catch (error) {
+    remoteSettingsResultText =
+      error instanceof Error ? error.message : translations[currentLanguage].error
+  }
+  renderRemoteSettings()
 }
 
 function renderPluginSettings() {
@@ -574,7 +613,11 @@ settingsViewEl?.addEventListener('click', async (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null
   const t = translations[currentLanguage]
   const settingsPanel = target?.dataset.settingsPanel
-  if (settingsPanel === 'plugins' || settingsPanel === 'notification-history') {
+  if (
+    settingsPanel === 'plugins' ||
+    settingsPanel === 'notification-history' ||
+    settingsPanel === 'remote-access'
+  ) {
     if (settingsPanel === activeSettingsPanel) {
       return
     }
@@ -582,6 +625,41 @@ settingsViewEl?.addEventListener('click', async (event) => {
     renderSettings()
     if (activeSettingsPanel === 'notification-history' && !notificationRecordsLoaded) {
       await refreshNotificationRecords()
+    }
+    if (activeSettingsPanel === 'remote-access' && !remoteSettings) {
+      await loadRemoteSettings()
+    }
+    return
+  }
+  if (target?.id === 'remote-login') {
+    remoteSettingsBusyAction = 'login'
+    remoteSettingsResultText = translations[currentLanguage].remoteLoginOpening
+    renderRemoteSettings()
+    try {
+      const result = await startRemoteLogin()
+      remoteSettingsResultText = translations[currentLanguage].remoteLoginWaiting
+      startRemoteLoginPolling(result.request_id, result.poll_token)
+    } catch (error) {
+      remoteSettingsResultText =
+        error instanceof Error ? error.message : translations[currentLanguage].error
+    } finally {
+      remoteSettingsBusyAction = null
+      renderRemoteSettings()
+    }
+    return
+  }
+  if (target?.id === 'remote-logout') {
+    remoteSettingsBusyAction = 'logout'
+    renderRemoteSettings()
+    try {
+      remoteSettings = await clearRemoteBinding()
+      remoteSettingsResultText = translations[currentLanguage].remoteLogoutSuccess
+    } catch (error) {
+      remoteSettingsResultText =
+        error instanceof Error ? error.message : translations[currentLanguage].error
+    } finally {
+      remoteSettingsBusyAction = null
+      renderRemoteSettings()
     }
     return
   }
@@ -780,6 +858,31 @@ settingsViewEl?.addEventListener('change', async (event) => {
 })
 
 settingsViewEl?.addEventListener('submit', (event) => {
+  if ((event.target as HTMLElement | null)?.id === 'remote-settings-form') {
+    event.preventDefault()
+    const form = event.target as HTMLFormElement
+    const formData = new FormData(form)
+    remoteSettingsBusyAction = 'save'
+    renderRemoteSettings()
+    saveRemoteSettings({
+      server_url: String(formData.get('server_url') ?? ''),
+      remote_access_enabled: formData.get('remote_access_enabled') === 'on',
+      remote_control_enabled: formData.get('remote_control_enabled') === 'on'
+    })
+      .then((settings) => {
+        remoteSettings = settings
+        remoteSettingsResultText = translations[currentLanguage].saved
+      })
+      .catch((error) => {
+        remoteSettingsResultText =
+          error instanceof Error ? error.message : translations[currentLanguage].error
+      })
+      .finally(() => {
+        remoteSettingsBusyAction = null
+        renderRemoteSettings()
+      })
+    return
+  }
   if (
     event.target instanceof HTMLFormElement &&
     event.target.classList.contains('plugin-config-form')
@@ -787,6 +890,36 @@ settingsViewEl?.addEventListener('submit', (event) => {
     event.preventDefault()
   }
 })
+
+function startRemoteLoginPolling(requestId: string, pollToken: string) {
+  if (remoteLoginPollTimer !== null) {
+    window.clearInterval(remoteLoginPollTimer)
+  }
+  remoteLoginPollTimer = window.setInterval(() => {
+    pollRemoteLogin(requestId, pollToken)
+      .then((result) => {
+        if (!result.completed) {
+          return
+        }
+        if (remoteLoginPollTimer !== null) {
+          window.clearInterval(remoteLoginPollTimer)
+          remoteLoginPollTimer = null
+        }
+        remoteSettings = result.settings
+        remoteSettingsResultText = translations[currentLanguage].remoteLoginSuccess
+        renderRemoteSettings()
+      })
+      .catch((error) => {
+        if (remoteLoginPollTimer !== null) {
+          window.clearInterval(remoteLoginPollTimer)
+          remoteLoginPollTimer = null
+        }
+        remoteSettingsResultText =
+          error instanceof Error ? error.message : translations[currentLanguage].error
+        renderRemoteSettings()
+      })
+  }, 1500)
+}
 
 async function waitForPluginTargetState(pluginId: string, desiredEnabled: boolean) {
   for (let attempt = 0; attempt < pluginTransitionPollMaxAttempts; attempt += 1) {
