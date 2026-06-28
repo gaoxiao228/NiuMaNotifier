@@ -9,14 +9,19 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
 chrono.workspace = true
 dirs = "6"
 fs2 = "0.4"
+hkdf = "0.12"
 libc = "0.2"
+rand_core = "0.6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
+thiserror = "1"
 tokio = { version = "1", features = ["sync", "time"] }
 
 [dev-dependencies]
