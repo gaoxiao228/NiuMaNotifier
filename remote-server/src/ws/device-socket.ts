@@ -36,7 +36,11 @@ export type DeviceMessageDeps = {
   }
 }
 
-export async function handleDeviceMessage(deps: DeviceMessageDeps) {
+export type DeviceMessageResult =
+  | void
+  | { kind: 'forward_to_client'; connectionId: string; message: object }
+
+export async function handleDeviceMessage(deps: DeviceMessageDeps): Promise<DeviceMessageResult> {
   const message = deviceSocketMessageSchema.parse(JSON.parse(deps.raw))
   const now = new Date()
 
@@ -57,15 +61,24 @@ export async function handleDeviceMessage(deps: DeviceMessageDeps) {
     return
   }
 
+  // 响应类消息也刷新 presence，避免活跃信令过程被误判为离线。
   await deps.presence.markOnline({
     userId: deps.authenticatedDevice.userId,
     deviceId: deps.authenticatedDevice.id,
     socketId: deps.socketId,
     serverInstanceId: deps.serverInstanceId,
     lastSeenAt: now.toISOString(),
-      capabilities: {}
-    })
+    capabilities: {}
+  })
   await deps.devices.updateLastSeen(deps.authenticatedDevice.id, now, {})
+
+  if (message.type !== 'device.heartbeat') {
+    return {
+      kind: 'forward_to_client',
+      connectionId: message.data.connection_id,
+      message
+    }
+  }
 }
 
 export async function registerDeviceSocket(
@@ -100,7 +113,7 @@ export async function registerDeviceSocket(
 
     socket.on('message', async (raw: { toString(): string }) => {
       try {
-        await handleDeviceMessage({
+        const result = await handleDeviceMessage({
           raw: raw.toString(),
           authenticatedDevice: auth.device,
           socketId,
@@ -108,6 +121,9 @@ export async function registerDeviceSocket(
           presence,
           devices: devicesRepo
         })
+        if (result?.kind === 'forward_to_client') {
+          registry.sendToClient(result.connectionId, result.message)
+        }
       } catch {
         socket.close(4002, 'invalid_device_message')
       }

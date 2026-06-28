@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createConnectionTokenService } from '../src/modules/connections/connection-token.service.js'
 import { clientSignalMessageSchema } from '../src/modules/connections/connections.schemas.js'
 import { createDeviceSocketRegistry } from '../src/modules/devices/device-socket-registry.js'
 import { bindClientConnection, forwardClientSignal } from '../src/ws/client-socket.js'
@@ -11,6 +12,16 @@ describe('client signaling prerequisites', () => {
 
     expect(registry.sendToDevice('dev_1', { type: 'signal.offer' })).toBe(true)
     expect(send).toHaveBeenCalledWith(JSON.stringify({ type: 'signal.offer' }))
+  })
+
+  it('binds client sockets and sends messages to bound client socket', () => {
+    const registry = createDeviceSocketRegistry()
+    const send = vi.fn()
+
+    registry.bindClient('conn_1', { close: vi.fn(), send })
+
+    expect(registry.sendToClient('conn_1', { type: 'connection.accept' })).toBe(true)
+    expect(send).toHaveBeenCalledWith(JSON.stringify({ type: 'connection.accept' }))
   })
 
   it('validates signaling messages', () => {
@@ -26,10 +37,12 @@ describe('client signaling prerequisites', () => {
 })
 
 describe('/ws/client signaling', () => {
-  it('binds only when bearer user and connection token match Redis state', async () => {
+  it('binds with connection token and Redis state without bearer auth', async () => {
+    const tokenService = createConnectionTokenService({ tokenPepper: 'pepper' })
+    const issued = tokenService.issue()
+
     const result = await bindClientConnection({
-      auth: { userId: 'usr_1', sessionId: 'rft_1', role: 'user' },
-      query: { connection_id: 'conn_1', connection_token: 'cnt_token' },
+      query: { connection_id: 'conn_1', connection_token: issued.token },
       tokenPepper: 'pepper',
       state: {
         async get() {
@@ -38,7 +51,7 @@ describe('/ws/client signaling', () => {
             user_id: 'usr_1',
             device_id: 'dev_1',
             client_id: 'web_1',
-            token_hash: 'bad_hash',
+            token_hash: issued.tokenHash,
             status: 'signaling',
             created_at: '2026-06-28T00:00:00.000Z',
             expires_at: '2099-01-01T00:00:00.000Z'
@@ -47,7 +60,54 @@ describe('/ws/client signaling', () => {
       }
     })
 
-    expect(result.ok).toBe(false)
+    expect(result).toEqual({
+      ok: true,
+      connection: {
+        connectionId: 'conn_1',
+        userId: 'usr_1',
+        deviceId: 'dev_1',
+        clientId: 'web_1'
+      }
+    })
+  })
+
+  it('rejects missing, expired, and mismatched connection tokens', async () => {
+    const tokenService = createConnectionTokenService({ tokenPepper: 'pepper' })
+    const issued = tokenService.issue()
+    const baseState = {
+      connection_id: 'conn_1',
+      user_id: 'usr_1',
+      device_id: 'dev_1',
+      client_id: 'web_1',
+      token_hash: issued.tokenHash,
+      status: 'signaling' as const,
+      created_at: '2026-06-28T00:00:00.000Z',
+      expires_at: '2099-01-01T00:00:00.000Z'
+    }
+
+    const missing = await bindClientConnection({
+      query: { connection_id: 'missing', connection_token: issued.token },
+      tokenPepper: 'pepper',
+      state: { async get() { return null } }
+    })
+    const expired = await bindClientConnection({
+      query: { connection_id: 'conn_1', connection_token: issued.token },
+      tokenPepper: 'pepper',
+      state: {
+        async get() {
+          return { ...baseState, expires_at: '2000-01-01T00:00:00.000Z' }
+        }
+      }
+    })
+    const mismatched = await bindClientConnection({
+      query: { connection_id: 'conn_1', connection_token: `${issued.token}_wrong` },
+      tokenPepper: 'pepper',
+      state: { async get() { return baseState } }
+    })
+
+    expect(missing).toMatchObject({ ok: false, code: 220401 })
+    expect(expired).toMatchObject({ ok: false, code: 220402 })
+    expect(mismatched).toMatchObject({ ok: false, code: 220403 })
   })
 
   it('forwards valid signal messages to device socket', async () => {

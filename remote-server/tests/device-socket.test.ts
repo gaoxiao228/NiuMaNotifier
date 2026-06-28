@@ -29,6 +29,26 @@ describe('device websocket schema and registry', () => {
     ).toBe('device.heartbeat')
   })
 
+  it('accepts device connection and signal response messages', () => {
+    expect(
+      deviceSocketMessageSchema.parse({
+        version: 1,
+        type: 'connection.accept',
+        id: 'msg_3',
+        data: { connection_id: 'conn_1' }
+      }).type
+    ).toBe('connection.accept')
+
+    expect(
+      deviceSocketMessageSchema.parse({
+        version: 1,
+        type: 'signal.answer',
+        id: 'msg_4',
+        data: { connection_id: 'conn_1', sdp: 'answer-sdp' }
+      }).type
+    ).toBe('signal.answer')
+  })
+
   it('closes a registered socket when device is revoked', () => {
     const registry = createDeviceSocketRegistry()
     const close = vi.fn()
@@ -92,5 +112,57 @@ describe('device websocket lifecycle', () => {
 
     expect(calls).toContain('dev_1:sock_1')
     expect(calls).toContain('last_seen')
+  })
+
+  it('returns forward_to_client for device connection and signal responses', async () => {
+    const deps = {
+      authenticatedDevice: { id: 'dev_1', userId: 'usr_1' },
+      socketId: 'sock_1',
+      serverInstanceId: 'srv_1',
+      presence: {
+        async markOnline() {}
+      },
+      devices: {
+        async updateLastSeen() {}
+      }
+    }
+
+    const accepted = await handleDeviceMessage({
+      ...deps,
+      raw: JSON.stringify({
+        version: 1,
+        type: 'connection.accept',
+        id: 'msg_3',
+        data: { connection_id: 'conn_1' }
+      })
+    })
+    const answered = await handleDeviceMessage({
+      ...deps,
+      raw: JSON.stringify({
+        version: 1,
+        type: 'signal.answer',
+        id: 'msg_4',
+        data: { connection_id: 'conn_1', sdp: 'answer-sdp' }
+      })
+    })
+
+    expect(accepted).toEqual({
+      kind: 'forward_to_client',
+      connectionId: 'conn_1',
+      message: {
+        version: 1,
+        type: 'connection.accept',
+        id: 'msg_3',
+        data: { connection_id: 'conn_1' }
+      }
+    })
+    expect(answered).toMatchObject({
+      kind: 'forward_to_client',
+      connectionId: 'conn_1',
+      message: {
+        type: 'signal.answer',
+        data: { connection_id: 'conn_1', sdp: 'answer-sdp' }
+      }
+    })
   })
 })

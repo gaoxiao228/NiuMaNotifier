@@ -20,9 +20,37 @@ export const deviceHeartbeatMessageSchema = baseMessageSchema.extend({
   data: z.object({}).default({})
 })
 
+const deviceConnectionResponseDataSchema = z.object({
+  connection_id: z.string().min(1).max(160)
+}).passthrough()
+
+export const deviceResponseMessageSchema = z.discriminatedUnion('type', [
+  baseMessageSchema.extend({
+    type: z.literal('connection.accept'),
+    data: deviceConnectionResponseDataSchema
+  }),
+  baseMessageSchema.extend({
+    type: z.literal('connection.reject'),
+    data: deviceConnectionResponseDataSchema
+  }),
+  baseMessageSchema.extend({
+    type: z.literal('signal.answer'),
+    data: deviceConnectionResponseDataSchema
+  }),
+  baseMessageSchema.extend({
+    type: z.literal('signal.ice_candidate'),
+    data: deviceConnectionResponseDataSchema
+  }),
+  baseMessageSchema.extend({
+    type: z.literal('signal.cancel'),
+    data: deviceConnectionResponseDataSchema
+  })
+])
+
 export const deviceSocketMessageSchema = z.discriminatedUnion('type', [
   deviceHelloMessageSchema,
-  deviceHeartbeatMessageSchema
+  deviceHeartbeatMessageSchema,
+  ...deviceResponseMessageSchema.options
 ])
 
 export type DeviceSocketMessage = z.infer<typeof deviceSocketMessageSchema>

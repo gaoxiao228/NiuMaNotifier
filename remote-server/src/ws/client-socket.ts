@@ -9,7 +9,6 @@ import {
   clientSignalMessageSchema,
   connectionClientBindSchema
 } from '../modules/connections/connections.schemas.js'
-import { requireAuth, type AuthContext } from '../modules/auth/auth.middleware.js'
 import type { DeviceSocketRegistry } from '../modules/devices/device-socket-registry.js'
 import { createRedis } from '../redis/client.js'
 import { ensureWebsocketRegistered } from './websocket-plugin.js'
@@ -22,7 +21,6 @@ export type BoundClientConnection = {
 }
 
 export async function bindClientConnection(input: {
-  auth: AuthContext
   query: unknown
   tokenPepper: string
   state: { get(connectionId: string): Promise<ConnectionState | null> }
@@ -32,7 +30,6 @@ export async function bindClientConnection(input: {
 
   const state = await input.state.get(parsed.data.connection_id)
   if (!state) return { ok: false, code: 220401, message: '连接不存在' }
-  if (state.user_id !== input.auth.userId) return { ok: false, code: 220403, message: '连接权限不足' }
   if (new Date(state.expires_at).getTime() <= Date.now()) {
     return { ok: false, code: 220402, message: '连接已过期' }
   }
@@ -79,14 +76,7 @@ export async function registerClientSocket(app: FastifyInstance, registry: Devic
   })
 
   app.get('/ws/client', { websocket: true }, async (socket, request) => {
-    const auth = await requireAuth(request, config.jwtPublicKey)
-    if (!auth.ok) {
-      socket.close(4001, JSON.stringify({ code: 200001, message: '未登录' }))
-      return
-    }
-
     const bound = await bindClientConnection({
-      auth: auth.auth,
       query: request.query,
       tokenPepper: config.tokenPepper,
       state
@@ -95,6 +85,8 @@ export async function registerClientSocket(app: FastifyInstance, registry: Devic
       socket.close(4003, JSON.stringify({ code: bound.code, message: bound.message }))
       return
     }
+
+    registry.bindClient(bound.connection.connectionId, socket)
 
     socket.on('message', async (raw: { toString(): string }) => {
       try {
@@ -107,6 +99,10 @@ export async function registerClientSocket(app: FastifyInstance, registry: Devic
       } catch {
         socket.close(4002, 'invalid_client_signal')
       }
+    })
+
+    socket.on('close', () => {
+      registry.unbindClient(bound.connection.connectionId)
     })
   })
 }
