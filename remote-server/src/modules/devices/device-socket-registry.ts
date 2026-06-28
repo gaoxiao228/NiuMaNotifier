@@ -36,15 +36,21 @@ export function createDeviceSocketRegistry() {
     bindClient(connectionId: string, socket: DeviceSocket) {
       clientSockets.set(connectionId, socket)
     },
-    unbindClient(connectionId: string) {
+    unbindClient(connectionId: string, socket?: DeviceSocket) {
+      if (socket && clientSockets.get(connectionId) !== socket) return
+
       clientSockets.delete(connectionId)
     },
     sendToClient(connectionId: string, message: object) {
       const socket = clientSockets.get(connectionId)
       if (!socket?.send) return false
 
-      socket.send(JSON.stringify(message))
-      return true
+      try {
+        socket.send(JSON.stringify(message))
+        return true
+      } catch {
+        return false
+      }
     }
   }
 }

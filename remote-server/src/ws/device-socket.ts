@@ -122,6 +122,7 @@ export async function registerDeviceSocket(
           devices: devicesRepo
         })
         if (result?.kind === 'forward_to_client') {
+          // Web client 可能已断开，转发失败不应影响设备 socket 生命周期。
           registry.sendToClient(result.connectionId, result.message)
         }
       } catch {

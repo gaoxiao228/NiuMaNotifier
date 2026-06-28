@@ -58,8 +58,11 @@ export async function forwardClientSignal(input: {
   const message = clientSignalMessageSchema.parse(JSON.parse(input.raw))
   const sent = input.registry.sendToDevice(input.connection.deviceId, {
     ...message,
-    connection_id: input.connection.connectionId,
-    client_id: input.connection.clientId
+    data: {
+      ...message.data,
+      connection_id: input.connection.connectionId,
+      client_id: input.connection.clientId
+    }
   })
 
   return sent ? { ok: true as const } : { ok: false as const, code: 210404, message: '设备离线' }
@@ -102,7 +105,7 @@ export async function registerClientSocket(app: FastifyInstance, registry: Devic
     })
 
     socket.on('close', () => {
-      registry.unbindClient(bound.connection.connectionId)
+      registry.unbindClient(bound.connection.connectionId, socket)
     })
   })
 }

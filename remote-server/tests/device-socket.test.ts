@@ -35,7 +35,7 @@ describe('device websocket schema and registry', () => {
         version: 1,
         type: 'connection.accept',
         id: 'msg_3',
-        data: { connection_id: 'conn_1' }
+        data: { connection_id: 'conn_1', transport: 'webrtc' }
       }).type
     ).toBe('connection.accept')
 
@@ -47,6 +47,54 @@ describe('device websocket schema and registry', () => {
         data: { connection_id: 'conn_1', sdp: 'answer-sdp' }
       }).type
     ).toBe('signal.answer')
+  })
+
+  it('rejects device response messages missing protocol required fields', () => {
+    expect(() => deviceSocketMessageSchema.parse({
+      version: 1,
+      type: 'connection.accept',
+      id: 'msg_3',
+      data: { connection_id: 'conn_1' }
+    })).toThrow()
+
+    expect(() => deviceSocketMessageSchema.parse({
+      version: 1,
+      type: 'connection.reject',
+      id: 'msg_4',
+      data: { connection_id: 'conn_1' }
+    })).toThrow()
+
+    expect(() => deviceSocketMessageSchema.parse({
+      version: 1,
+      type: 'signal.answer',
+      id: 'msg_5',
+      data: { connection_id: 'conn_1' }
+    })).toThrow()
+
+    expect(() => deviceSocketMessageSchema.parse({
+      version: 1,
+      type: 'signal.ice_candidate',
+      id: 'msg_6',
+      data: { connection_id: 'conn_1' }
+    })).toThrow()
+
+    expect(() => deviceSocketMessageSchema.parse({
+      version: 1,
+      type: 'signal.cancel',
+      id: 'msg_7',
+      data: { connection_id: 'conn_1' }
+    })).toThrow()
+  })
+
+  it('rejects overlong device response fields', () => {
+    const longReason = 'x'.repeat(241)
+
+    expect(() => deviceSocketMessageSchema.parse({
+      version: 1,
+      type: 'signal.cancel',
+      id: 'msg_8',
+      data: { connection_id: 'conn_1', reason: longReason }
+    })).toThrow()
   })
 
   it('closes a registered socket when device is revoked', () => {
@@ -133,7 +181,7 @@ describe('device websocket lifecycle', () => {
         version: 1,
         type: 'connection.accept',
         id: 'msg_3',
-        data: { connection_id: 'conn_1' }
+        data: { connection_id: 'conn_1', transport: 'webrtc' }
       })
     })
     const answered = await handleDeviceMessage({
@@ -153,7 +201,7 @@ describe('device websocket lifecycle', () => {
         version: 1,
         type: 'connection.accept',
         id: 'msg_3',
-        data: { connection_id: 'conn_1' }
+        data: { connection_id: 'conn_1', transport: 'webrtc' }
       }
     })
     expect(answered).toMatchObject({

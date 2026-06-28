@@ -24,6 +24,33 @@ describe('client signaling prerequisites', () => {
     expect(send).toHaveBeenCalledWith(JSON.stringify({ type: 'connection.accept' }))
   })
 
+  it('does not let a stale client close remove a newer client binding', () => {
+    const registry = createDeviceSocketRegistry()
+    const oldSocket = { close: vi.fn(), send: vi.fn() }
+    const newSocket = { close: vi.fn(), send: vi.fn() }
+
+    registry.bindClient('conn_1', oldSocket)
+    registry.bindClient('conn_1', newSocket)
+    registry.unbindClient('conn_1', oldSocket)
+
+    expect(registry.sendToClient('conn_1', { type: 'connection.accept' })).toBe(true)
+    expect(oldSocket.send).not.toHaveBeenCalled()
+    expect(newSocket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'connection.accept' }))
+  })
+
+  it('returns false when sending to client socket fails', () => {
+    const registry = createDeviceSocketRegistry()
+
+    registry.bindClient('conn_1', {
+      close: vi.fn(),
+      send() {
+        throw new Error('send_failed')
+      }
+    })
+
+    expect(registry.sendToClient('conn_1', { type: 'connection.accept' })).toBe(false)
+  })
+
   it('validates signaling messages', () => {
     expect(
       clientSignalMessageSchema.parse({
@@ -127,7 +154,13 @@ describe('/ws/client signaling', () => {
     expect(sent[0]).toMatchObject({
       version: 1,
       type: 'signal.offer',
-      connection_id: 'conn_1'
+      data: {
+        sdp: 'offer',
+        connection_id: 'conn_1',
+        client_id: 'web_1'
+      }
     })
+    expect(sent[0]).not.toHaveProperty('connection_id')
+    expect(sent[0]).not.toHaveProperty('client_id')
   })
 })

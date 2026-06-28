@@ -22,28 +22,44 @@ export const deviceHeartbeatMessageSchema = baseMessageSchema.extend({
 
 const deviceConnectionResponseDataSchema = z.object({
   connection_id: z.string().min(1).max(160)
-}).passthrough()
+})
+
+const sdpSchema = z.string().min(1).max(262144)
+const reasonSchema = z.string().min(1).max(240)
+const candidateSchema = z.string().min(1).max(8192)
 
 export const deviceResponseMessageSchema = z.discriminatedUnion('type', [
   baseMessageSchema.extend({
     type: z.literal('connection.accept'),
-    data: deviceConnectionResponseDataSchema
+    data: deviceConnectionResponseDataSchema.extend({
+      transport: z.enum(['webrtc', 'relay', 'auto'])
+    })
   }),
   baseMessageSchema.extend({
     type: z.literal('connection.reject'),
-    data: deviceConnectionResponseDataSchema
+    data: deviceConnectionResponseDataSchema.extend({
+      reason: reasonSchema
+    })
   }),
   baseMessageSchema.extend({
     type: z.literal('signal.answer'),
-    data: deviceConnectionResponseDataSchema
+    data: deviceConnectionResponseDataSchema.extend({
+      sdp: sdpSchema
+    })
   }),
   baseMessageSchema.extend({
     type: z.literal('signal.ice_candidate'),
-    data: deviceConnectionResponseDataSchema
+    data: deviceConnectionResponseDataSchema.extend({
+      candidate: candidateSchema,
+      sdp_mid: z.string().min(1).max(160).nullable().optional(),
+      sdp_mline_index: z.number().int().nonnegative().nullable().optional()
+    })
   }),
   baseMessageSchema.extend({
     type: z.literal('signal.cancel'),
-    data: deviceConnectionResponseDataSchema
+    data: deviceConnectionResponseDataSchema.extend({
+      reason: reasonSchema
+    })
   })
 ])
 
