@@ -1,3 +1,4 @@
+pub mod agent_state;
 pub mod config;
 pub mod credentials;
 pub mod device_identity;
