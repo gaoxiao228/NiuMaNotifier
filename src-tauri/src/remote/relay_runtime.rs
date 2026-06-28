@@ -33,15 +33,30 @@ pub fn handle_relay_ciphertext(ciphertext: &str) -> Result<Option<String>, Strin
     let payload: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("relay payload JSON 解析失败：{error}"))?;
 
-    if payload.get("type").and_then(Value::as_str) != Some("ping") {
-        return Ok(None);
+    if payload.get("type").and_then(Value::as_str) == Some("ping") {
+        let response = serde_json::to_vec(&json!({ "type": "pong" }))
+            .map_err(|error| format!("relay pong JSON 编码失败：{error}"))?;
+        return Ok(Some(
+            base64::engine::general_purpose::STANDARD.encode(response),
+        ));
     }
 
-    let response = serde_json::to_vec(&json!({ "type": "pong" }))
-        .map_err(|error| format!("relay pong JSON 编码失败：{error}"))?;
-    Ok(Some(
-        base64::engine::general_purpose::STANDARD.encode(response),
-    ))
+    if is_plain_rpc_request_payload(&payload) {
+        let response = crate::remote::rpc_router::handle_plain_rpc(payload)?;
+        let response_bytes = serde_json::to_vec(&response)
+            .map_err(|error| format!("relay RPC response JSON 编码失败：{error}"))?;
+        return Ok(Some(
+            base64::engine::general_purpose::STANDARD.encode(response_bytes),
+        ));
+    }
+
+    Ok(None)
+}
+
+fn is_plain_rpc_request_payload(payload: &Value) -> bool {
+    // relay 层只做 envelope 分流；字段完整性由 rpc_router 统一校验。
+    payload.get("version").and_then(Value::as_u64) == Some(1)
+        && payload.get("type").and_then(Value::as_str) == Some("request")
 }
 
 pub fn build_relay_response_frame(
@@ -70,6 +85,31 @@ mod tests {
         assert_eq!(
             decode_relay_payload_for_test(&response.unwrap()),
             serde_json::json!({ "type": "pong" })
+        );
+    }
+
+    #[test]
+    fn handles_plain_rpc_ping_ciphertext_with_response_envelope() {
+        let request = serde_json::json!({
+            "version": 1,
+            "type": "request",
+            "id": "req_1",
+            "method": "rpc.ping",
+            "params": {}
+        });
+        let encoded_request = encode_relay_payload_for_test(&request);
+
+        let response = handle_relay_ciphertext(&encoded_request).unwrap();
+
+        assert_eq!(
+            decode_relay_payload_for_test(&response.unwrap()),
+            serde_json::json!({
+                "version": 1,
+                "type": "response",
+                "id": "req_1",
+                "ok": true,
+                "result": { "pong": true }
+            })
         );
     }
 
@@ -115,5 +155,12 @@ mod tests {
             .decode(encoded)
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn encode_relay_payload_for_test(value: &serde_json::Value) -> String {
+        use base64::Engine;
+
+        let bytes = serde_json::to_vec(value).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 }
