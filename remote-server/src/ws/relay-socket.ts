@@ -1,6 +1,17 @@
+import websocket from '@fastify/websocket'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { loadConfigFromEnv } from '../config.js'
+import { createDb } from '../db/client.js'
+import { requireAuth } from '../modules/auth/auth.middleware.js'
 import { createConnectionStateService, type ConnectionState } from '../modules/connections/connection-state.service.js'
 import { createConnectionTokenService } from '../modules/connections/connection-token.service.js'
+import { createDeviceTokenService } from '../modules/devices/device-token.service.js'
+import { createDevicesRepository } from '../modules/devices/devices.repository.js'
+import { createRelayRouteService } from '../modules/relay/relay-route.service.js'
+import { createRelaySocketRegistry, type RelaySocketRegistry } from '../modules/relay/relay-socket-registry.js'
 import { relayBindSchema, relayFrameSchema, type RelaySide } from '../modules/relay/relay.schemas.js'
+import { createRedis } from '../redis/client.js'
+import { createPublicId } from '../shared/id.js'
 
 export type RelayActor =
   | { kind: 'client'; userId: string }
@@ -74,5 +85,109 @@ export async function forwardRelayFrame(input: {
   return { ok: true }
 }
 
-// Keeps imported state service visible to route registration added in the next task.
-void createConnectionStateService
+async function resolveClientActor(request: FastifyRequest, jwtPublicKey: string) {
+  const auth = await requireAuth(request, jwtPublicKey)
+  return auth.ok
+    ? { ok: true as const, actor: { kind: 'client' as const, userId: auth.auth.userId } }
+    : { ok: false as const, code: 200001, message: '未登录' }
+}
+
+async function resolveDeviceActor(
+  request: FastifyRequest,
+  deviceTokenService: ReturnType<typeof createDeviceTokenService>
+) {
+  const auth = await deviceTokenService.authenticate(request.headers.authorization)
+  return auth.ok
+    ? { ok: true as const, actor: { kind: 'device' as const, deviceId: auth.device.id } }
+    : { ok: false as const, code: auth.code, message: auth.message }
+}
+
+export async function registerRelaySocket(
+  app: FastifyInstance,
+  registry: RelaySocketRegistry = createRelaySocketRegistry()
+) {
+  await app.register(websocket)
+
+  const config = loadConfigFromEnv()
+  const redis = createRedis(config.redisUrl)
+  const { db } = createDb(config.databaseUrl)
+  const state = createConnectionStateService({
+    redis,
+    ttlSeconds: config.connectionTokenTtlSeconds
+  })
+  const route = createRelayRouteService({
+    redis,
+    ttlSeconds: config.connectionTokenTtlSeconds
+  })
+  const devicesRepo = createDevicesRepository(db)
+  const deviceTokenService = createDeviceTokenService({
+    repo: devicesRepo,
+    tokenPepper: config.tokenPepper
+  })
+  const serverInstanceId = `srv_${process.pid}`
+
+  app.get('/ws/relay', { websocket: true }, async (socket, request) => {
+    const parsedQuery = relayBindSchema.safeParse(request.query)
+    if (!parsedQuery.success) {
+      socket.close(4002, JSON.stringify({ code: 100101, message: 'relay 连接参数无效' }))
+      return
+    }
+
+    const actor = parsedQuery.data.side === 'client'
+      ? await resolveClientActor(request, config.jwtPublicKey)
+      : await resolveDeviceActor(request, deviceTokenService)
+    if (!actor.ok) {
+      socket.close(4001, JSON.stringify({ code: actor.code, message: actor.message }))
+      return
+    }
+
+    const bound = await bindRelaySocket({
+      query: request.query,
+      actor: actor.actor,
+      tokenPepper: config.tokenPepper,
+      state
+    })
+    if (!bound.ok) {
+      socket.close(4003, JSON.stringify({ code: bound.code, message: bound.message }))
+      return
+    }
+
+    const socketId = createPublicId('relay')
+    registry.add({
+      connectionId: bound.binding.connectionId,
+      side: bound.binding.side,
+      socketId,
+      socket
+    })
+    await route.setRoute({
+      connectionId: bound.binding.connectionId,
+      clientSocketId: bound.binding.side === 'client'
+        ? socketId
+        : registry.getSocketId(bound.binding.connectionId, 'client'),
+      deviceSocketId: bound.binding.side === 'device'
+        ? socketId
+        : registry.getSocketId(bound.binding.connectionId, 'device'),
+      serverInstanceId,
+      startedAt: new Date().toISOString()
+    })
+
+    socket.on('message', async (raw: { toString(): string }) => {
+      try {
+        const result = await forwardRelayFrame({
+          raw: raw.toString(),
+          binding: bound.binding,
+          registry
+        })
+        if (!result.ok) socket.close(4004, JSON.stringify({ code: result.code, message: result.message }))
+      } catch {
+        socket.close(4002, JSON.stringify({ code: 100101, message: 'relay 帧格式无效' }))
+      }
+    })
+
+    socket.on('close', async () => {
+      registry.remove(bound.binding.connectionId, bound.binding.side)
+      registry.closeConnection(bound.binding.connectionId, 4000, 'relay_peer_closed')
+      await route.deleteRoute(bound.binding.connectionId)
+    })
+  })
+}

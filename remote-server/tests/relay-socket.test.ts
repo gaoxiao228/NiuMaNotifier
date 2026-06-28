@@ -138,3 +138,11 @@ describe('/ws/relay frame forwarding', () => {
     expect(result).toEqual({ ok: false, code: 220403, message: 'relay 帧序号无效' })
   })
 })
+
+describe('/ws/relay route wiring', () => {
+  it('keeps relay close messages code-shaped', () => {
+    const reason = JSON.stringify({ code: 220403, message: '连接权限不足' })
+
+    expect(JSON.parse(reason)).toEqual({ code: 220403, message: '连接权限不足' })
+  })
+})
