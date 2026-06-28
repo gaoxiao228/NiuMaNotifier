@@ -1,4 +1,9 @@
-import type { PluginConfigField, PluginManagementItem, RemoteSettingsPayload } from './api'
+import type {
+  PluginConfigField,
+  PluginManagementItem,
+  RemoteAgentStatus,
+  RemoteSettingsPayload
+} from './api'
 import { translations, type LanguageCode } from './i18n'
 import { renderPluginIcon } from './pluginIcon'
 import { escapeHtml } from './viewUtils'
@@ -30,6 +35,7 @@ export type PluginManagementRenderOptions = {
 export type RemoteSettingsRenderOptions = {
   language: LanguageCode
   settings: RemoteSettingsPayload | null
+  agentStatus: RemoteAgentStatus | null
   busyAction: 'save' | 'login' | 'logout' | null
   resultText: string
 }
@@ -98,6 +104,9 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
   const account = settings?.user?.email ?? t.remoteNotLoggedIn
   const device = settings?.device?.name ?? t.remoteNoBoundDevice
   const bound = settings?.bound === true
+  const agentStatus = options.agentStatus?.state
+    ? translateRemoteAgentState(options.language, options.agentStatus.state)
+    : t.loading
   return `
     <div class="settings-heading">
       <div>
@@ -136,6 +145,13 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
       <dd>${escapeHtml(device)}</dd>
       <dt>${escapeHtml(t.remoteBindingStatus)}</dt>
       <dd>${escapeHtml(bound ? t.remoteBound : t.remoteUnbound)}</dd>
+      <dt>${escapeHtml(t.remoteAgentStatus)}</dt>
+      <dd>${escapeHtml(agentStatus)}</dd>
+      ${
+        options.agentStatus?.last_error
+          ? `<dt>${escapeHtml(t.error)}</dt><dd>${escapeHtml(options.agentStatus.last_error)}</dd>`
+          : ''
+      }
     </dl>
     <div class="remote-actions">
       <button id="remote-logout" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(
@@ -144,6 +160,11 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
     </div>
     ${options.resultText ? `<p id="remote-settings-result" class="settings-result">${escapeHtml(options.resultText)}</p>` : ''}
   `
+}
+
+export function translateRemoteAgentState(language: LanguageCode, state: string) {
+  const t = translations[language]
+  return t.remoteAgentState[state] ?? state
 }
 
 export function renderPluginManagement(options: PluginManagementRenderOptions) {

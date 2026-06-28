@@ -80,6 +80,8 @@ export type Translation = {
   remoteAccount: string
   remoteDevice: string
   remoteBindingStatus: string
+  remoteAgentStatus: string
+  remoteAgentState: Record<string, string>
   remoteBound: string
   remoteUnbound: string
   remoteNotLoggedIn: string
@@ -246,6 +248,18 @@ export const translations: Record<LanguageCode, Translation> = {
     remoteAccount: '账号',
     remoteDevice: '设备',
     remoteBindingStatus: '绑定状态',
+    remoteAgentStatus: '远程状态',
+    remoteAgentState: {
+      disabled: '已关闭',
+      not_configured: '未配置',
+      binding: '绑定中',
+      connecting: '连接中',
+      online: '在线',
+      reconnecting: '重连中',
+      token_revoked: 'Token 已吊销',
+      server_unreachable: '服务不可达',
+      error: '错误'
+    },
     remoteBound: '已绑定',
     remoteUnbound: '未绑定',
     remoteNotLoggedIn: '未登录',
@@ -438,6 +452,18 @@ export const translations: Record<LanguageCode, Translation> = {
     remoteAccount: '帳號',
     remoteDevice: '裝置',
     remoteBindingStatus: '綁定狀態',
+    remoteAgentStatus: '遠端狀態',
+    remoteAgentState: {
+      disabled: '已關閉',
+      not_configured: '未設定',
+      binding: '綁定中',
+      connecting: '連線中',
+      online: '在線',
+      reconnecting: '重新連線中',
+      token_revoked: 'Token 已撤銷',
+      server_unreachable: '服務不可達',
+      error: '錯誤'
+    },
     remoteBound: '已綁定',
     remoteUnbound: '未綁定',
     remoteNotLoggedIn: '未登入',
@@ -631,6 +657,18 @@ export const translations: Record<LanguageCode, Translation> = {
     remoteAccount: 'Account',
     remoteDevice: 'Device',
     remoteBindingStatus: 'Binding status',
+    remoteAgentStatus: 'Remote status',
+    remoteAgentState: {
+      disabled: 'Disabled',
+      not_configured: 'Not configured',
+      binding: 'Binding',
+      connecting: 'Connecting',
+      online: 'Online',
+      reconnecting: 'Reconnecting',
+      token_revoked: 'Token revoked',
+      server_unreachable: 'Server unreachable',
+      error: 'Error'
+    },
     remoteBound: 'Bound',
     remoteUnbound: 'Not bound',
     remoteNotLoggedIn: 'Not signed in',
@@ -824,6 +862,18 @@ export const translations: Record<LanguageCode, Translation> = {
     remoteAccount: 'アカウント',
     remoteDevice: 'デバイス',
     remoteBindingStatus: '連携状態',
+    remoteAgentStatus: 'リモート状態',
+    remoteAgentState: {
+      disabled: '無効',
+      not_configured: '未設定',
+      binding: '連携中',
+      connecting: '接続中',
+      online: 'オンライン',
+      reconnecting: '再接続中',
+      token_revoked: 'Token が取り消されました',
+      server_unreachable: 'サーバーに到達できません',
+      error: 'エラー'
+    },
     remoteBound: '連携済み',
     remoteUnbound: '未連携',
     remoteNotLoggedIn: '未ログイン',
@@ -1017,6 +1067,18 @@ export const translations: Record<LanguageCode, Translation> = {
     remoteAccount: '계정',
     remoteDevice: '기기',
     remoteBindingStatus: '바인딩 상태',
+    remoteAgentStatus: '원격 상태',
+    remoteAgentState: {
+      disabled: '꺼짐',
+      not_configured: '설정 안 됨',
+      binding: '바인딩 중',
+      connecting: '연결 중',
+      online: '온라인',
+      reconnecting: '재연결 중',
+      token_revoked: 'Token 취소됨',
+      server_unreachable: '서버 연결 불가',
+      error: '오류'
+    },
     remoteBound: '바인딩됨',
     remoteUnbound: '바인딩 안 됨',
     remoteNotLoggedIn: '로그인 안 됨',
@@ -1210,6 +1272,18 @@ export const translations: Record<LanguageCode, Translation> = {
     remoteAccount: 'Konto',
     remoteDevice: 'Gerät',
     remoteBindingStatus: 'Bindungsstatus',
+    remoteAgentStatus: 'Remote-Status',
+    remoteAgentState: {
+      disabled: 'Deaktiviert',
+      not_configured: 'Nicht konfiguriert',
+      binding: 'Bindung läuft',
+      connecting: 'Verbindet',
+      online: 'Online',
+      reconnecting: 'Verbindet erneut',
+      token_revoked: 'Token widerrufen',
+      server_unreachable: 'Server nicht erreichbar',
+      error: 'Fehler'
+    },
     remoteBound: 'Gebunden',
     remoteUnbound: 'Nicht gebunden',
     remoteNotLoggedIn: 'Nicht angemeldet',

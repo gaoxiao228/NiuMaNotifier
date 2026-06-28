@@ -22,6 +22,10 @@ const html = renderRemoteSettingsPanel({
     has_credential: true,
     last_connected_at: null
   },
+  agentStatus: {
+    state: 'online',
+    last_error: null
+  },
   busyAction: null,
   resultText: ''
 })
@@ -36,4 +40,8 @@ if (!html.includes('user@example.com') || !html.includes('NiuMa MacBook')) {
 
 if (html.includes('device_token')) {
   throw new Error('远程设置页面不能渲染 device_token')
+}
+
+if (!html.includes('远程状态') || !html.includes('在线')) {
+  throw new Error('远程访问设置应显示 RemoteAgent 状态')
 }

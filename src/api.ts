@@ -272,6 +272,11 @@ export type RemoteLoginPollResult = {
   settings: RemoteSettingsPayload
 }
 
+export type RemoteAgentStatus = {
+  state: string
+  last_error: string | null
+}
+
 export type NotificationRecordStatus = 'pending' | 'sent' | 'failed' | 'skipped'
 
 export type NotificationRecord = {
@@ -637,6 +642,16 @@ export async function clearRemoteBinding() {
     throw new Error(response.message)
   }
   return response.data.settings
+}
+
+export async function getRemoteAgentStatus() {
+  const response = await invoke<ApiResponse<{ status: RemoteAgentStatus }>>(
+    'get_remote_agent_status'
+  )
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.status
 }
 
 export async function getLocalApiUrl() {

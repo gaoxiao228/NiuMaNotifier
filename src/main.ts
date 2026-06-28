@@ -6,6 +6,7 @@ import {
   getPluginConfig,
   getPlugins,
   getLocalApiUrl,
+  getRemoteAgentStatus,
   getRemoteSettings,
   pollRemoteLogin,
   refreshMainState,
@@ -25,6 +26,7 @@ import {
   type MainStatePayload,
   type NotificationRecord,
   type PluginManagementItem,
+  type RemoteAgentStatus,
   type RemoteSettingsPayload
 } from './api'
 import {
@@ -114,6 +116,7 @@ let activeSettingsPanel: SettingsPanel = 'plugins'
 let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
 let remoteSettings: RemoteSettingsPayload | null = null
+let remoteAgentStatus: RemoteAgentStatus | null = null
 let remoteSettingsBusyAction: 'save' | 'login' | 'logout' | null = null
 let remoteSettingsResultText = ''
 let remoteLoginPollTimer: number | null = null
@@ -306,6 +309,9 @@ function showSettingsView() {
   if (activeSettingsPanel === 'remote-access' && !remoteSettings) {
     void loadRemoteSettings()
   }
+  if (activeSettingsPanel === 'remote-access') {
+    void loadRemoteAgentStatus()
+  }
 }
 
 function renderToolListeners() {
@@ -339,6 +345,7 @@ function renderRemoteSettings() {
   element.innerHTML = renderRemoteSettingsPanel({
     language: currentLanguage,
     settings: remoteSettings,
+    agentStatus: remoteAgentStatus,
     busyAction: remoteSettingsBusyAction,
     resultText: remoteSettingsResultText
   })
@@ -351,6 +358,16 @@ async function loadRemoteSettings() {
   } catch (error) {
     remoteSettingsResultText =
       error instanceof Error ? error.message : translations[currentLanguage].error
+  }
+  await loadRemoteAgentStatus()
+  renderRemoteSettings()
+}
+
+async function loadRemoteAgentStatus() {
+  try {
+    remoteAgentStatus = await getRemoteAgentStatus()
+  } catch {
+    remoteAgentStatus = null
   }
   renderRemoteSettings()
 }
@@ -628,6 +645,9 @@ settingsViewEl?.addEventListener('click', async (event) => {
     }
     if (activeSettingsPanel === 'remote-access' && !remoteSettings) {
       await loadRemoteSettings()
+    }
+    if (activeSettingsPanel === 'remote-access') {
+      await loadRemoteAgentStatus()
     }
     return
   }
