@@ -35,6 +35,7 @@ pub(crate) struct AppRuntimeState {
     pub(crate) store: NiumaStore,
     pub(crate) mutation_service: StateMutationService,
     pub(crate) runtime_events: RuntimeEventBus,
+    pub(crate) remote_agent_status: crate::remote::status::RemoteAgentStatusHandle,
 }
 
 #[tauri::command]
@@ -124,6 +125,15 @@ pub(crate) fn save_listener_config(
         codex_listening_enabled,
         tool_listening_enabled,
     )
+}
+
+#[tauri::command]
+pub(crate) fn get_remote_agent_status(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    ApiResponse::ok(serde_json::json!({
+        "status": runtime_state.remote_agent_status.snapshot()
+    }))
 }
 
 #[tauri::command]

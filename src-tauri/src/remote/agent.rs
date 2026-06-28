@@ -1,10 +1,15 @@
 use crate::remote::device_socket::{
     run_device_socket_once, DeviceSocketConnectRequest, DeviceSocketRunResult,
 };
+use crate::remote::status::RemoteAgentStatusHandle;
 use niuma_core::remote::agent_state::RemoteAgentState;
 use niuma_core::remote::config::RemoteConfig;
 use niuma_core::remote::connection_policy::{DeviceSocketCloseReason, ReconnectBackoff};
-use niuma_core::remote::credentials::{RemoteCredentialPayload, RemoteCredentialStore};
+use niuma_core::remote::credentials::{
+    RemoteCredentialPayload, RemoteCredentialStore, RestrictedFileCredentialStore,
+};
+use niuma_core::store::NiumaStore;
+use std::thread;
 use std::time::Duration;
 use tokio::time;
 
@@ -53,6 +58,7 @@ pub fn state_after_socket_result(result: DeviceSocketRunResult) -> RemoteAgentSt
 pub async fn run_agent_loop(
     mut load_config: impl FnMut() -> Result<RemoteConfig, String>,
     credential_store: impl RemoteCredentialStore,
+    status: RemoteAgentStatusHandle,
 ) {
     let backoff = ReconnectBackoff::default();
     let mut attempt = 0u32;
@@ -60,18 +66,21 @@ pub async fn run_agent_loop(
         let config = match load_config() {
             Ok(value) => value,
             Err(error) => {
+                status.set_state(RemoteAgentState::Error, Some(error.clone()));
                 eprintln!("NiumaNotifier remote config load failed: {error}");
                 time::sleep(Duration::from_secs(30)).await;
                 continue;
             }
         };
         if !config.remote_access_enabled {
+            status.set_state(RemoteAgentState::Disabled, None);
             time::sleep(Duration::from_secs(30)).await;
             continue;
         }
         let credential = match credential_store.load(&config.server_url) {
             Ok(value) => value,
             Err(_) => {
+                status.set_state(RemoteAgentState::NotConfigured, None);
                 time::sleep(Duration::from_secs(30)).await;
                 continue;
             }
@@ -79,13 +88,17 @@ pub async fn run_agent_loop(
         let request = match build_connect_request(&config, &credential) {
             Ok(value) => value,
             Err(error) => {
+                status.set_state(RemoteAgentState::NotConfigured, Some(error.clone()));
                 eprintln!("NiumaNotifier remote connect request not ready: {error}");
                 time::sleep(Duration::from_secs(30)).await;
                 continue;
             }
         };
 
-        match state_after_socket_result(run_device_socket_once(request).await) {
+        status.set_state(RemoteAgentState::Connecting, None);
+        let result_state = state_after_socket_result(run_device_socket_once(request).await);
+        status.set_state(result_state, None);
+        match result_state {
             RemoteAgentState::TokenRevoked => {
                 if let Err(error) = credential_store.clear(&config.server_url) {
                     eprintln!("NiumaNotifier remote credential clear failed: {error}");
@@ -104,6 +117,38 @@ pub async fn run_agent_loop(
                 attempt = 0;
             }
         }
+    }
+}
+
+pub fn spawn_remote_agent_runtime(store: NiumaStore, status: RemoteAgentStatusHandle) {
+    if let Err(error) = thread::Builder::new()
+        .name("remote-agent-runtime".to_string())
+        .spawn(move || {
+            let credential_store = RestrictedFileCredentialStore::new(
+                NiumaStore::default_path()
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("remote-credentials"),
+            );
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("NiumaNotifier remote runtime not started: {error}");
+                    return;
+                }
+            };
+            runtime.block_on(run_agent_loop(
+                move || store.remote_config(),
+                credential_store,
+                status,
+            ));
+        })
+    {
+        eprintln!("NiumaNotifier remote agent startup thread not started: {error}");
     }
 }
 

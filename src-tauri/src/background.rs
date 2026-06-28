@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::tools;
+use crate::{remote, remote::status::RemoteAgentStatusHandle};
 
 const LOCAL_API_START_DELAY: Duration = Duration::ZERO;
 const WATCHER_START_DELAY: Duration = Duration::from_secs(1);
@@ -15,6 +16,7 @@ pub fn spawn_background_services(
     store: NiumaStore,
     runtime_events: RuntimeEventBus,
     tool_sessions: niuma_api::tool_sessions::ToolSessionRegistry,
+    remote_agent_status: RemoteAgentStatusHandle,
 ) {
     let spawn_result = thread::Builder::new()
         .name("niuma-background-services-startup".to_string())
@@ -36,6 +38,7 @@ pub fn spawn_background_services(
                 }
             }
             spawn_stale_sweep_runtime(store.clone(), runtime_events.clone());
+            remote::agent::spawn_remote_agent_runtime(store.clone(), remote_agent_status.clone());
 
             // Codex session 扫描放到首屏之后，避免文件系统监听和活跃文件轮询抢首屏资源。
             thread::sleep(WATCHER_START_DELAY);
