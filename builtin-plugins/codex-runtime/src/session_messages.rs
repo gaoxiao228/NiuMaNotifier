@@ -38,7 +38,9 @@ pub fn parse_codex_message_line(
 
     let item_type = row.payload.get("type").and_then(Value::as_str);
     let role = role_for_row(&row.row_type, item_type, &row.payload);
-    let content = content_for_row(&row.row_type, item_type, &row.payload);
+    let content = content_for_row(&row.row_type, item_type, &row.payload)
+        .and_then(|content| user_visible_content(&content))
+        .unwrap_or_default();
     let metadata = if content.is_empty() {
         metadata_with_reason(
             Some(row.row_type.as_str()),
@@ -91,10 +93,7 @@ pub fn detail_message_signature(line: &str) -> Option<DetailMessageSignature> {
         return None;
     }
     let role = role_for_row(&row.row_type, item_type, &row.payload);
-    let content = content_for_row(&row.row_type, item_type, &row.payload);
-    if content.is_empty() || is_injected_context_content(&content) {
-        return None;
-    }
+    let content = user_visible_content(&content_for_row(&row.row_type, item_type, &row.payload)?)?;
     Some(DetailMessageSignature {
         role,
         content,
@@ -174,20 +173,17 @@ fn role_for_message_payload(payload: &Value) -> ToolSessionMessageRole {
     }
 }
 
-fn content_for_row(row_type: &str, item_type: Option<&str>, payload: &Value) -> String {
+fn content_for_row(row_type: &str, item_type: Option<&str>, payload: &Value) -> Option<String> {
     if row_type == "event_msg" && item_type == Some("task_complete") {
         return payload
             .get("last_agent_message")
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
+            .and_then(trimmed_text);
     }
     if row_type == "event_msg" && item_type == Some("item_completed") {
         return payload
             .get("item")
-            .and_then(|item| text_from_value(item.get("text").unwrap_or(&Value::Null)))
-            .unwrap_or_default();
+            .and_then(|item| text_from_value(item.get("text").unwrap_or(&Value::Null)));
     }
     if matches!(
         item_type,
@@ -197,9 +193,7 @@ fn content_for_row(row_type: &str, item_type: Option<&str>, payload: &Value) -> 
         return payload
             .get("name")
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
+            .and_then(trimmed_text);
     }
 
     payload
@@ -209,7 +203,6 @@ fn content_for_row(row_type: &str, item_type: Option<&str>, payload: &Value) -> 
         .or_else(|| payload.get("output").and_then(text_from_value))
         .or_else(|| payload.get("content").and_then(text_from_value))
         .or_else(|| payload.get("summary").and_then(text_from_value))
-        .unwrap_or_default()
 }
 
 fn text_from_value(value: &Value) -> Option<String> {
@@ -244,21 +237,89 @@ fn is_injected_context_message_line(line: &str) -> bool {
         return false;
     }
     let item_type = row.payload.get("type").and_then(Value::as_str);
-    let content = content_for_row(&row.row_type, item_type, &row.payload);
-    is_injected_context_content(&content)
+    let Some(content) = content_for_row(&row.row_type, item_type, &row.payload) else {
+        return false;
+    };
+    user_visible_content(&content).is_none()
 }
 
-fn is_injected_context_content(content: &str) -> bool {
-    let content = content.trim_start();
-    // Codex 会把注入上下文和中断标记作为 role=user 写入 JSONL；这些不是用户真实提问。
-    (content.starts_with("# AGENTS.md instructions")
+fn user_visible_content(content: &str) -> Option<String> {
+    let mut remaining = content.trim_start();
+    loop {
+        let Some(stripped) = strip_known_injected_prefix(remaining) else {
+            break;
+        };
+        remaining = stripped.trim_start();
+    }
+    let cleaned = strip_embedded_runtime_instruction_blocks(remaining);
+    trimmed_text(&cleaned)
+}
+
+fn strip_known_injected_prefix(content: &str) -> Option<&str> {
+    // Codex 会把运行环境、权限和协作模式等注入块写成 user message；详情只保留真实对话。
+    if content.starts_with("# AGENTS.md instructions")
         && content.contains("<INSTRUCTIONS>")
-        && content.contains("</INSTRUCTIONS>"))
-        || (content.starts_with("<environment_context>")
-            && content.contains("</environment_context>"))
-        || (content.starts_with("<turn_aborted>") && content.contains("</turn_aborted>"))
-        || (content.starts_with("<subagent_notification>")
-            && content.contains("</subagent_notification>"))
+        && content.contains("</INSTRUCTIONS>")
+    {
+        return strip_through_marker(content, "</INSTRUCTIONS>");
+    }
+    strip_wrapped_block(content, "<environment_context>", "</environment_context>")
+        .or_else(|| strip_wrapped_block(content, "<turn_aborted>", "</turn_aborted>"))
+        .or_else(|| {
+            strip_wrapped_block(
+                content,
+                "<subagent_notification>",
+                "</subagent_notification>",
+            )
+        })
+        .or_else(|| strip_wrapped_block(content, "<collaboration_mode>", "</collaboration_mode>"))
+        .or_else(|| {
+            strip_wrapped_block(
+                content,
+                "<permissions instructions>",
+                "</permissions instructions>",
+            )
+        })
+}
+
+fn strip_wrapped_block<'a>(content: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    content
+        .starts_with(open)
+        .then(|| strip_through_marker(content, close))
+        .flatten()
+}
+
+fn strip_through_marker<'a>(content: &'a str, marker: &str) -> Option<&'a str> {
+    let marker_end = content.find(marker)? + marker.len();
+    Some(&content[marker_end..])
+}
+
+fn strip_embedded_runtime_instruction_blocks(content: &str) -> String {
+    [
+        ("<environment_context>", "</environment_context>"),
+        ("<turn_aborted>", "</turn_aborted>"),
+        ("<subagent_notification>", "</subagent_notification>"),
+        ("<collaboration_mode>", "</collaboration_mode>"),
+        ("<permissions instructions>", "</permissions instructions>"),
+    ]
+    .into_iter()
+    .fold(content.to_string(), |content, (open, close)| {
+        strip_all_wrapped_blocks(content, open, close)
+    })
+}
+
+fn strip_all_wrapped_blocks(mut content: String, open: &str, close: &str) -> String {
+    while let Some(start) = content.find(open) {
+        let Some(close_start) = content[start..].find(close).map(|index| start + index) else {
+            break;
+        };
+        let mut end = close_start + close.len();
+        if end < content.len() && content.as_bytes()[end] == b'\n' {
+            end += 1;
+        }
+        content.replace_range(start..end, "");
+    }
+    content
 }
 
 fn parse_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -408,6 +469,78 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, ToolSessionMessageRole::User);
         assert_eq!(messages[0].content, "真实用户问题");
+    }
+
+    #[test]
+    fn codex_messages_strip_leading_runtime_instruction_blocks() {
+        let lines = vec![
+            (
+                0,
+                r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<collaboration_mode># Plan Mode\n\nDo not mutate files.\n</collaboration_mode>\n<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>\n真实用户问题"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ToolSessionMessageRole::User);
+        assert_eq!(messages[0].content, "真实用户问题");
+    }
+
+    #[test]
+    fn codex_messages_skip_pure_runtime_instruction_blocks() {
+        let lines = vec![
+            (
+                0,
+                r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>"}]}}"#
+                    .to_string(),
+            ),
+            (
+                1,
+                r#"{"timestamp":"2026-06-22T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"真实用户问题"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "真实用户问题");
+    }
+
+    #[test]
+    fn codex_messages_strip_embedded_runtime_instruction_blocks() {
+        let lines = vec![(
+            0,
+            r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"今天几号\n<collaboration_mode># Plan Mode\nDo not mutate files.\n</collaboration_mode>\n目前会话详情里有模式切换提示词"}]}}"#
+                .to_string(),
+        )];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].content,
+            "今天几号\n目前会话详情里有模式切换提示词"
+        );
+    }
+
+    #[test]
+    fn codex_messages_keep_user_mentions_of_runtime_instruction_tags() {
+        let lines = vec![(
+            0,
+            r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"目前会话详情里会出现 <permissions instructions> 这类信息，如何去除？"}]}}"#
+                .to_string(),
+        )];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].content,
+            "目前会话详情里会出现 <permissions instructions> 这类信息，如何去除？"
+        );
     }
 
     #[test]
