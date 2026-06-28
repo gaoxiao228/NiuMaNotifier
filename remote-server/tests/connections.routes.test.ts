@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createConnectionInviteMessage } from '../src/modules/connections/connections.routes.js'
 import { buildApp } from '../src/app.js'
 import { ErrorCode } from '../src/shared/errors.js'
 import { apiFailure, apiSuccess } from '../src/shared/response.js'
@@ -41,5 +42,19 @@ describe('connection routes', () => {
       message: 'ok',
       data: { ice_servers: [] }
     })
+  })
+})
+
+describe('connection create device notification', () => {
+  it('uses a device invitation message shape', () => {
+    const message = createConnectionInviteMessage({
+      connectionId: 'conn_1',
+      clientId: 'web_1',
+      transportPreference: 'webrtc_first'
+    })
+
+    expect(message.type).toBe('connection.invite')
+    expect(message.connection_id).toBe('conn_1')
+    expect(message.data.transport_preference).toBe('webrtc_first')
   })
 })
