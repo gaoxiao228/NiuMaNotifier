@@ -182,9 +182,10 @@ export async function registerRelaySocket(
     })
 
     socket.on('close', async () => {
-      registry.remove(bound.binding.connectionId, bound.binding.side)
-      registry.closeConnection(bound.binding.connectionId, 4000, 'relay_peer_closed')
-      await route.deleteRoute(bound.binding.connectionId)
+      if (registry.remove(bound.binding.connectionId, bound.binding.side, socket)) {
+        registry.closeConnection(bound.binding.connectionId, 4000, 'relay_peer_closed')
+        await route.deleteRoute(bound.binding.connectionId)
+      }
     })
   })
 }

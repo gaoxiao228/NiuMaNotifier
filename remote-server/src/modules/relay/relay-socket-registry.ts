@@ -29,8 +29,13 @@ export function createRelaySocketRegistry() {
       sockets.set(sideKey(entry.connectionId, entry.side), entry)
     },
 
-    remove(connectionId: string, side: RelaySide) {
-      sockets.delete(sideKey(connectionId, side))
+    remove(connectionId: string, side: RelaySide, socket?: RelaySocket) {
+      const key = sideKey(connectionId, side)
+      const entry = sockets.get(key)
+      if (socket && entry?.socket !== socket) return false
+
+      sockets.delete(key)
+      return Boolean(entry)
     },
 
     getSocketId(connectionId: string, side: RelaySide) {
@@ -41,8 +46,12 @@ export function createRelaySocketRegistry() {
       const target = sockets.get(sideKey(connectionId, oppositeSide(fromSide)))
       if (!target) return false
 
-      target.socket.send(JSON.stringify(message))
-      return true
+      try {
+        target.socket.send(JSON.stringify(message))
+        return true
+      } catch {
+        return false
+      }
     },
 
     acceptSeq(connectionId: string, side: RelaySide, seq: number) {
@@ -59,7 +68,11 @@ export function createRelaySocketRegistry() {
         const key = sideKey(connectionId, side)
         const entry = sockets.get(key)
         if (entry) {
-          entry.socket.close(code, reason)
+          try {
+            entry.socket.close(code, reason)
+          } catch {
+            // 关闭失败不影响 registry 清理，避免异常冒泡到消息处理路径。
+          }
           sockets.delete(key)
         }
       }

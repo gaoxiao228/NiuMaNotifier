@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createRelaySocketRegistry } from '../src/modules/relay/relay-socket-registry.js'
 import { bindRelaySocket, forwardRelayFrame } from '../src/ws/relay-socket.js'
 import { createHash } from '../src/shared/crypto.js'
 
@@ -100,6 +101,60 @@ describe('/ws/relay bind', () => {
 })
 
 describe('/ws/relay frame forwarding', () => {
+  it('returns unavailable instead of throwing when target socket send fails', async () => {
+    const registry = createRelaySocketRegistry()
+    registry.add({
+      connectionId: 'conn_1',
+      side: 'device',
+      socketId: 'relay_device',
+      socket: {
+        send() {
+          throw new Error('send_failed')
+        },
+        close() {}
+      }
+    })
+
+    const result = await forwardRelayFrame({
+      raw: JSON.stringify({
+        version: 1,
+        type: 'relay.frame',
+        id: 'msg_1',
+        connection_id: 'conn_1',
+        seq: 1,
+        ciphertext: 'abc'
+      }),
+      binding: {
+        connectionId: 'conn_1',
+        side: 'client',
+        userId: 'usr_1',
+        deviceId: 'dev_1',
+        clientId: 'web_1'
+      },
+      registry
+    })
+
+    expect(result).toEqual({ ok: false, code: 220404, message: '远程设备不可连接' })
+  })
+
+  it('does not let a stale side close remove a newer relay socket', () => {
+    const registry = createRelaySocketRegistry()
+    const oldSocket = { send() {}, close() {} }
+    const newSocket = {
+      sent: [] as string[],
+      send(data: string) {
+        this.sent.push(data)
+      },
+      close() {}
+    }
+
+    registry.add({ connectionId: 'conn_1', side: 'client', socketId: 'old', socket: oldSocket })
+    registry.add({ connectionId: 'conn_1', side: 'client', socketId: 'new', socket: newSocket })
+
+    expect(registry.remove('conn_1', 'client', oldSocket)).toBe(false)
+    expect(registry.getSocketId('conn_1', 'client')).toBe('new')
+  })
+
   it('forwards ciphertext frame without inspecting payload', async () => {
     const forwarded: object[] = []
     const result = await forwardRelayFrame({
