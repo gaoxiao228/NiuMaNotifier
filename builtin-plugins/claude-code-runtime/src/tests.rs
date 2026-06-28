@@ -4,8 +4,11 @@ use niuma_core::tool_session_rpc::{
     ProviderRpcRequest, SessionDetailParams, SessionDetailResult, SessionSnapshotParams,
     SessionSnapshotResult,
 };
+use std::fs::OpenOptions;
+use std::io::Write;
 use tempfile::tempdir;
 
+use crate::claude::session_event_cursor::ClaudeSessionScanner;
 use crate::claude::session_protocol::current::ClaudeJsonlParser;
 use crate::claude::session_repository::ClaudeSessionRepository;
 use crate::session_messages::parse_claude_message_line;
@@ -184,4 +187,37 @@ fn provider_returns_snapshot_and_detail_for_claude_code_tool() {
         ToolSessionMessageRole::User
     );
     assert_eq!(detail_result.detail.messages[1].content, "你好");
+}
+
+#[test]
+fn scanner_reads_appended_tool_use_before_tool_result() {
+    let temp = tempdir().unwrap();
+    let file = temp.path().join("session.jsonl");
+    std::fs::write(&file, "").unwrap();
+    let repository = ClaudeSessionRepository::new(temp.path().to_path_buf());
+    let mut scanner = ClaudeSessionScanner::with_repository(repository);
+
+    {
+        let mut handle = OpenOptions::new().append(true).open(&file).unwrap();
+        writeln!(
+            handle,
+            r#"{{"type":"assistant","sessionId":"44444444-4444-4444-8444-444444444444","cwd":"/repo","timestamp":"2026-06-28T01:00:01.000Z","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_1","name":"Bash","input":{{"command":"sleep 10"}}}}]}}}}"#
+        )
+        .unwrap();
+    }
+    let first = scanner.scan_file(&file).unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].summary, "Claude Code 正在调用工具：Bash");
+
+    {
+        let mut handle = OpenOptions::new().append(true).open(&file).unwrap();
+        writeln!(
+            handle,
+            r#"{{"type":"user","sessionId":"44444444-4444-4444-8444-444444444444","cwd":"/repo","timestamp":"2026-06-28T01:00:02.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":"done","is_error":false}}]}}}}"#
+        )
+        .unwrap();
+    }
+    let second = scanner.scan_file(&file).unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].summary, "Claude Code 工具执行完成：done");
 }

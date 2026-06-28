@@ -1,3 +1,5 @@
+use std::io::{self, BufRead, Write};
+#[cfg(test)]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +16,11 @@ pub(crate) struct ClaudeSessionProvider {
 }
 
 impl ClaudeSessionProvider {
+    pub(crate) fn with_repository(repository: Arc<Mutex<ClaudeSessionRepository>>) -> Self {
+        Self { repository }
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_claude_home(claude_home: PathBuf) -> Self {
         Self {
             repository: Arc::new(Mutex::new(ClaudeSessionRepository::new(claude_home))),
@@ -100,4 +107,54 @@ impl ClaudeSessionProvider {
             .map_err(|_| ProviderError::internal("Claude Code session repository lock poisoned"))?
             .session_detail(&params)
     }
+}
+
+// 启动 stdio JSON Lines provider；stdout 必须只输出 RPC 消息，日志统一走 stderr。
+pub(crate) fn run_stdio_session_provider_with_repository(
+    repository: Arc<Mutex<ClaudeSessionRepository>>,
+) {
+    let stdin = io::stdin();
+    let stdout = Arc::new(Mutex::new(io::stdout()));
+    let provider = Arc::new(Mutex::new(ClaudeSessionProvider::with_repository(
+        repository,
+    )));
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else {
+            eprintln!("NiumaNotifier Claude Code session provider stdin read failed");
+            continue;
+        };
+        let request = match serde_json::from_str::<ProviderRpcRequest>(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                eprintln!(
+                    "NiumaNotifier Claude Code session provider ignored invalid JSON: {error}"
+                );
+                continue;
+            }
+        };
+        let response = match provider.lock() {
+            Ok(mut provider) => provider.handle_request(request),
+            Err(_) => {
+                eprintln!("NiumaNotifier Claude Code session provider state lock poisoned");
+                break;
+            }
+        };
+        if write_provider_message(&stdout, &response).is_err() {
+            break;
+        }
+    }
+}
+
+fn write_provider_message<W, T>(writer: &Arc<Mutex<W>>, message: &T) -> Result<(), String>
+where
+    W: Write,
+    T: serde::Serialize,
+{
+    let encoded = serde_json::to_string(message)
+        .map_err(|error| format!("序列化 Claude Code provider RPC 消息失败：{error}"))?;
+    let mut writer = writer
+        .lock()
+        .map_err(|_| "Claude Code provider stdout lock poisoned".to_string())?;
+    writeln!(writer, "{encoded}")
+        .map_err(|error| format!("写入 Claude Code provider stdout 失败：{error}"))
 }

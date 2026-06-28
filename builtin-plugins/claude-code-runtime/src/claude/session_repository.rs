@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::claude::discovery::recent_jsonl_files;
+use crate::claude::session_event_cursor::ClaudeEventCursor;
 use crate::claude::session_file_index::{
     read_indexed_line, session_file_signature, trim_jsonl_line_bytes, ClaudeMessageLineIndex,
     ClaudeSessionFileIndex,
@@ -27,6 +28,7 @@ const FIRST_USER_MESSAGE_PREVIEW_CHARS: usize = 200;
 pub(crate) struct ClaudeSessionRepository {
     claude_home: PathBuf,
     index: HashMap<String, SessionIndex>,
+    event_cursors: HashMap<PathBuf, ClaudeEventCursor>,
 }
 
 #[derive(Clone)]
@@ -94,6 +96,7 @@ impl ClaudeSessionRepository {
         Self {
             claude_home,
             index: HashMap::new(),
+            event_cursors: HashMap::new(),
         }
     }
 
@@ -139,8 +142,18 @@ impl ClaudeSessionRepository {
         detail_from_index(&index, params)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn clear_runtime_indexes(&mut self) {
         self.index.clear();
+        self.event_cursors.clear();
+    }
+
+    pub(crate) fn event_cursor_cloned(&self, path: &Path) -> Option<ClaudeEventCursor> {
+        self.event_cursors.get(path).cloned()
+    }
+
+    pub(crate) fn store_event_cursor(&mut self, path: &Path, cursor: ClaudeEventCursor) {
+        self.event_cursors.insert(path.to_path_buf(), cursor);
     }
 
     fn scan_session_file_index(
