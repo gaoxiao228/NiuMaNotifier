@@ -80,4 +80,35 @@ describe('DeviceConsolePage', () => {
 
     expect(onBack).toHaveBeenCalled()
   })
+
+  it('does not touch a localStorage accessor in the Node test environment', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')
+    const localStorageGetter = vi.fn(() => {
+      throw new Error('localStorage getter should not be touched in Node')
+    })
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: localStorageGetter
+    })
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+
+    try {
+      render(
+        <DeviceConsolePage
+          device={createDevice(true)}
+          connectionsApi={{ create }}
+          createConnection={vi.fn()}
+          t={t}
+          onBack={() => {}}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+      await waitFor(() => expect(create).toHaveBeenCalled())
+      expect(localStorageGetter).not.toHaveBeenCalled()
+    } finally {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor)
+    }
+  })
 })
