@@ -104,9 +104,16 @@ remote-server/
     index.html
     src/
       main.tsx
+      app.tsx
       api/
-      pages/
+      auth/
+      devices/
       remote/
+      audit/
+      admin/
+      pages/
+      i18n/
+      shared/
   migrations/
 ```
 
@@ -119,7 +126,7 @@ remote-server/
 - `modules/devices`：设备注册、设备 token、设备列表、设备在线状态。
 - `modules/connections`：连接创建、ICE 配置、信令、relay 路由。
 - `ws/`：WSS 连接生命周期，不放业务规则。
-- `web/`：Web 控制台，不直接访问数据库。
+- `web/`：Web 控制台，不直接访问数据库；页面与组件细节见 [NiuMaNotifier 远程 Web 控制台设计](./2026-06-28-remote-web-client-design.md)。
 
 ## 账号与登录
 
