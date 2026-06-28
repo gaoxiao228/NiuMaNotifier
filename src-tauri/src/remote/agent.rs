@@ -62,7 +62,7 @@ pub async fn run_agent_loop(
     status: RemoteAgentStatusHandle,
 ) {
     let backoff = ReconnectBackoff::default();
-    let signaling_manager = crate::remote::signaling::RemoteSignalingManager::default();
+    let signaling_manager = crate::remote::signaling::RemoteSignalingManager::with_status(status.clone());
     let mut attempt = 0u32;
     loop {
         let config = match load_config() {

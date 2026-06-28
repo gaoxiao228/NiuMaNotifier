@@ -275,6 +275,7 @@ export type RemoteLoginPollResult = {
 export type RemoteAgentStatus = {
   state: string
   last_error: string | null
+  active_connection_id?: string | null
 }
 
 export type NotificationRecordStatus = 'pending' | 'sent' | 'failed' | 'skipped'

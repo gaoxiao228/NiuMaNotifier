@@ -82,6 +82,7 @@ export type Translation = {
   remoteBindingStatus: string
   remoteAgentStatus: string
   remoteAgentState: Record<string, string>
+  remoteActiveConnection: string
   remoteBound: string
   remoteUnbound: string
   remoteNotLoggedIn: string
@@ -260,6 +261,7 @@ export const translations: Record<LanguageCode, Translation> = {
       server_unreachable: '服务不可达',
       error: '错误'
     },
+    remoteActiveConnection: '当前远程连接',
     remoteBound: '已绑定',
     remoteUnbound: '未绑定',
     remoteNotLoggedIn: '未登录',
@@ -464,6 +466,7 @@ export const translations: Record<LanguageCode, Translation> = {
       server_unreachable: '服務不可達',
       error: '錯誤'
     },
+    remoteActiveConnection: '目前遠端連線',
     remoteBound: '已綁定',
     remoteUnbound: '未綁定',
     remoteNotLoggedIn: '未登入',
@@ -669,6 +672,7 @@ export const translations: Record<LanguageCode, Translation> = {
       server_unreachable: 'Server unreachable',
       error: 'Error'
     },
+    remoteActiveConnection: 'Active remote connection',
     remoteBound: 'Bound',
     remoteUnbound: 'Not bound',
     remoteNotLoggedIn: 'Not signed in',
@@ -874,6 +878,7 @@ export const translations: Record<LanguageCode, Translation> = {
       server_unreachable: 'サーバーに到達できません',
       error: 'エラー'
     },
+    remoteActiveConnection: '現在のリモート接続',
     remoteBound: '連携済み',
     remoteUnbound: '未連携',
     remoteNotLoggedIn: '未ログイン',
@@ -1079,6 +1084,7 @@ export const translations: Record<LanguageCode, Translation> = {
       server_unreachable: '서버 연결 불가',
       error: '오류'
     },
+    remoteActiveConnection: '현재 원격 연결',
     remoteBound: '바인딩됨',
     remoteUnbound: '바인딩 안 됨',
     remoteNotLoggedIn: '로그인 안 됨',
@@ -1284,6 +1290,7 @@ export const translations: Record<LanguageCode, Translation> = {
       server_unreachable: 'Server nicht erreichbar',
       error: 'Fehler'
     },
+    remoteActiveConnection: 'Aktive Remoteverbindung',
     remoteBound: 'Gebunden',
     remoteUnbound: 'Nicht gebunden',
     remoteNotLoggedIn: 'Nicht angemeldet',

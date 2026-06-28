@@ -24,7 +24,8 @@ const html = renderRemoteSettingsPanel({
   },
   agentStatus: {
     state: 'online',
-    last_error: null
+    last_error: null,
+    active_connection_id: 'conn_1'
   },
   busyAction: null,
   resultText: ''
@@ -44,4 +45,8 @@ if (html.includes('device_token')) {
 
 if (!html.includes('远程状态') || !html.includes('在线')) {
   throw new Error('远程访问设置应显示 RemoteAgent 状态')
+}
+
+if (!html.includes('当前远程连接') || !html.includes('conn_1')) {
+  throw new Error('远程访问设置应显示当前活动连接')
 }

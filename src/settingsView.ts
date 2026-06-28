@@ -152,6 +152,13 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
           ? `<dt>${escapeHtml(t.error)}</dt><dd>${escapeHtml(options.agentStatus.last_error)}</dd>`
           : ''
       }
+      ${
+        options.agentStatus?.active_connection_id
+          ? `<dt>${escapeHtml(t.remoteActiveConnection)}</dt><dd>${escapeHtml(
+              options.agentStatus.active_connection_id
+            )}</dd>`
+          : ''
+      }
     </dl>
     <div class="remote-actions">
       <button id="remote-logout" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(

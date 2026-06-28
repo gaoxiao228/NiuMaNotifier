@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 pub struct RemoteAgentStatus {
     pub state: &'static str,
     pub last_error: Option<String>,
+    pub active_connection_id: Option<String>,
 }
 
 impl RemoteAgentStatus {
@@ -13,6 +14,7 @@ impl RemoteAgentStatus {
         Self {
             state: state_label(state),
             last_error: None,
+            active_connection_id: None,
         }
     }
 }
@@ -38,7 +40,14 @@ impl RemoteAgentStatusHandle {
             *value = RemoteAgentStatus {
                 state: state_label(state),
                 last_error,
+                active_connection_id: value.active_connection_id.clone(),
             };
+        }
+    }
+
+    pub fn set_active_connection(&self, connection_id: Option<String>) {
+        if let Ok(mut value) = self.inner.lock() {
+            value.active_connection_id = connection_id;
         }
     }
 
@@ -49,6 +58,7 @@ impl RemoteAgentStatusHandle {
             .unwrap_or_else(|_| RemoteAgentStatus {
                 state: "error",
                 last_error: Some("远程状态锁定失败".to_string()),
+                active_connection_id: None,
             })
     }
 }
@@ -86,5 +96,14 @@ mod tests {
         let handle = RemoteAgentStatusHandle::default();
         handle.set_state(RemoteAgentState::Connecting, None);
         assert_eq!(handle.snapshot().state, "connecting");
+    }
+
+    #[test]
+    fn status_can_show_signaling_connection() {
+        let handle = RemoteAgentStatusHandle::default();
+        handle.set_active_connection(Some("conn_1".to_string()));
+        let snapshot = handle.snapshot();
+
+        assert_eq!(snapshot.active_connection_id.as_deref(), Some("conn_1"));
     }
 }

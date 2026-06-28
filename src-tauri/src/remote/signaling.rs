@@ -18,9 +18,17 @@ pub struct RemoteSignalingSession {
 #[derive(Clone, Default)]
 pub struct RemoteSignalingManager {
     sessions: Arc<Mutex<HashMap<String, RemoteSignalingSession>>>,
+    status: Option<crate::remote::status::RemoteAgentStatusHandle>,
 }
 
 impl RemoteSignalingManager {
+    pub fn with_status(status: crate::remote::status::RemoteAgentStatusHandle) -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            status: Some(status),
+        }
+    }
+
     pub fn handle_message(&self, config: &RemoteConfig, message: DeviceSignalMessage) -> Vec<Value> {
         match message {
             DeviceSignalMessage::ConnectionInvite { data, .. } => self.handle_invite(config, data),
@@ -71,6 +79,9 @@ impl RemoteSignalingManager {
                 },
             );
         }
+        if let Some(status) = &self.status {
+            status.set_active_connection(Some(invite.connection_id.clone()));
+        }
         vec![connection_accept_message(&invite.connection_id, transport)]
     }
 
@@ -104,6 +115,9 @@ impl RemoteSignalingManager {
     fn handle_cancel(&self, cancel: SignalCancel) -> Vec<Value> {
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.remove(&cancel.connection_id);
+        }
+        if let Some(status) = &self.status {
+            status.set_active_connection(None);
         }
         vec![]
     }
