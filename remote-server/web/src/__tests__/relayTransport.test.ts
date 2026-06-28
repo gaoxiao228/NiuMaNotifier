@@ -10,12 +10,14 @@ import {
 } from '../remote/relayTransport.js'
 
 class FakeWebSocket {
+  static OPEN = 1
   static instances: FakeWebSocket[] = []
 
   onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
   onerror: (() => void) | null = null
   onclose: (() => void) | null = null
+  readyState = 0
   sent: string[] = []
   closed = false
 
@@ -119,6 +121,7 @@ describe('createRelayClient', () => {
     })
     const socket = FakeWebSocket.instances[0]
 
+    socket.readyState = FakeWebSocket.OPEN
     socket.onopen?.()
     client.send({ version: 1, type: 'request', id: 'rpc_1', method: 'rpc.ping' })
 
@@ -140,5 +143,33 @@ describe('createRelayClient', () => {
     socket.onclose?.()
     expect(socket.closed).toBe(true)
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('rejects send before the socket is open without consuming a sequence number', () => {
+    FakeWebSocket.instances = []
+    const client = createRelayClient({
+      url: 'ws://relay.example.com/ws/relay',
+      connectionId: 'conn_123',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      onOpen: vi.fn(),
+      onPayload: vi.fn(),
+      onClose: vi.fn(),
+      onError: vi.fn()
+    })
+    const socket = FakeWebSocket.instances[0]
+
+    expect(() => client.send({ type: 'request', id: 'rpc_before_open' })).toThrow(
+      'Relay websocket is not open'
+    )
+    expect(socket.sent).toHaveLength(0)
+
+    socket.readyState = FakeWebSocket.OPEN
+    socket.onopen?.()
+    client.send({ type: 'request', id: 'rpc_after_open' })
+
+    expect(JSON.parse(socket.sent[0]) as RelayFrame).toMatchObject({
+      id: 'relay_1',
+      seq: 1
+    })
   })
 })

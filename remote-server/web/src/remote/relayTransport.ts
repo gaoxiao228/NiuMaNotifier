@@ -108,9 +108,17 @@ function isRelayFrame(value: unknown): value is RelayFrame {
   )
 }
 
+function resolveOpenReadyState(WebSocketCtor: typeof WebSocket): number {
+  // 注入的 WebSocket 实现可能只在构造函数或全局 WebSocket 上暴露 OPEN 常量。
+  if (typeof WebSocketCtor.OPEN === 'number') return WebSocketCtor.OPEN
+  if (typeof WebSocket !== 'undefined' && typeof WebSocket.OPEN === 'number') return WebSocket.OPEN
+  return 1
+}
+
 export function createRelayClient(options: RelayClientOptions): RelayClient {
   const WebSocketCtor = options.WebSocketImpl ?? WebSocket
   const socket = new WebSocketCtor(options.url)
+  const openReadyState = resolveOpenReadyState(WebSocketCtor)
   let active = true
   let closedByClient = false
   let nextSeq = 1
@@ -141,6 +149,9 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     socket,
     send(value) {
       if (!active) return
+      if (socket.readyState !== openReadyState) {
+        throw new Error('Relay websocket is not open')
+      }
       const frame = createRelayFrame(options.connectionId, nextSeq, value)
       nextSeq += 1
       socket.send(JSON.stringify(frame))

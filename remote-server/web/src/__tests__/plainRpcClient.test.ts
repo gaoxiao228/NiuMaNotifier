@@ -94,4 +94,23 @@ describe('plain rpc client', () => {
       vi.useRealTimers()
     }
   })
+
+  it('clears a pending request immediately when send throws', async () => {
+    vi.useFakeTimers()
+    try {
+      const client = createPlainRpcClient({
+        timeoutMs: 1000,
+        send: () => {
+          throw new Error('Relay websocket is not open')
+        }
+      })
+
+      const resultPromise = client.request('rpc.ping')
+
+      await expect(resultPromise).rejects.toMatchObject({ message: 'Relay websocket is not open' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

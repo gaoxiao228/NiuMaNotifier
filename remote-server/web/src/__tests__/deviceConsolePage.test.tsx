@@ -302,4 +302,120 @@ describe('DeviceConsolePage', () => {
     expect(screen.getByText(/"state": "ready"/)).not.toBeNull()
     expect(screen.getByText(/"id": "s1"/)).not.toBeNull()
   })
+
+  it('closes pending RPC requests immediately when relay closes', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClients: Array<{ onStatus: (status: ConnectionStatus) => void }> = []
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      const client = {
+        socket: {} as WebSocket,
+        close: vi.fn(),
+        onStatus: options.onStatus,
+        onMessage: options.onMessage
+      }
+      signalClients.push(client)
+      return client
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      signalClients[0]?.onStatus('accepted')
+    })
+    await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      relayOptions?.onOpen()
+    })
+    expect(screen.getAllByText('Waiting for response')).toHaveLength(3)
+
+    await act(async () => {
+      relayOptions?.onClose()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('Relay closed')).not.toBeNull()
+    expect(screen.getAllByText('RPC request failed')).toHaveLength(3)
+    expect(screen.queryByText('Waiting for response')).toBeNull()
+  })
+
+  it('cleans relay RPC requests on unmount and ignores later relay callbacks', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      signalClient.onMessage = options.onMessage
+      return signalClient
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+
+    const { unmount } = render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      signalClient.onStatus('accepted')
+    })
+    await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      relayOptions?.onOpen()
+    })
+
+    unmount()
+
+    expect(signalClient.close).toHaveBeenCalledTimes(1)
+    expect(relayClient.close).toHaveBeenCalledTimes(1)
+    expect(() => {
+      relayOptions?.onClose()
+      relayOptions?.onError(new Error('late error'))
+      relayOptions?.onPayload({ version: 1, type: 'response', id: 'rpc_1', ok: true, result: { pong: true } })
+    }).not.toThrow()
+  })
 })

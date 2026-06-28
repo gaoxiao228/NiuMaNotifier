@@ -145,6 +145,7 @@ export function DeviceConsolePage({
 
   function displayJson(value: unknown): string {
     if (value === null) return t('waiting_for_relay')
+    if (typeof value === 'string') return value
     try {
       return JSON.stringify(value, null, 2)
     } catch {
@@ -193,6 +194,13 @@ export function DeviceConsolePage({
         })
     }
 
+    function closeRpcForRelayEvent() {
+      // relay 断开后本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
+      rpcClient.close()
+      if (rpcRef.current === rpcClient) rpcRef.current = null
+      if (relayRef.current === relayClient) relayRef.current = null
+    }
+
     relayClient = createRelay({
       url: relayUrl,
       connectionId: result.connection_id,
@@ -207,10 +215,14 @@ export function DeviceConsolePage({
         if (isActiveConnection(activeConnectionId)) rpcClient.handle(value)
       },
       onClose: () => {
-        if (isActiveConnection(activeConnectionId)) setRelayStatus('closed')
+        if (!isActiveConnection(activeConnectionId)) return
+        closeRpcForRelayEvent()
+        setRelayStatus('closed')
       },
       onError: () => {
-        if (isActiveConnection(activeConnectionId)) setRelayStatus('error')
+        if (!isActiveConnection(activeConnectionId)) return
+        closeRpcForRelayEvent()
+        setRelayStatus('error')
       }
     })
 

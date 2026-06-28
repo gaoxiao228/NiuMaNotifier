@@ -82,7 +82,12 @@ export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcCl
           rejectPending(id, new Error('Plain RPC request timed out'))
         }, options.timeoutMs)
         pending.set(id, { timer, resolve, reject })
-        options.send(createPlainRpcRequest(id, method, params))
+        try {
+          options.send(createPlainRpcRequest(id, method, params))
+        } catch (err) {
+          // send 失败代表请求不会离开本地，立即清理 pending，避免继续等 timeout。
+          rejectPending(id, err instanceof Error ? err : new Error('Plain RPC send failed'))
+        }
       })
     },
     handle(value) {
