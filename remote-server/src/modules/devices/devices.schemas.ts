@@ -13,3 +13,7 @@ export const deviceRegisterSchema = z.object({
   device_fingerprint: z.string().min(32).max(128),
   capabilities: deviceCapabilitiesSchema
 })
+
+export const deviceRevokeTokenSchema = z.object({
+  device_id: deviceIdSchema
+})
