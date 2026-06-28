@@ -98,8 +98,10 @@ pub async fn run_agent_loop(
         };
 
         status.set_state(RemoteAgentState::Connecting, None);
-        let result_state =
-            state_after_socket_result(run_device_socket_once(request, signaling_manager.clone()).await);
+        let webrtc_config = crate::remote::webrtc_transport::WebRtcTransportConfig::default();
+        let result_state = state_after_socket_result(
+            run_device_socket_once(request, signaling_manager.clone(), webrtc_config).await,
+        );
         status.set_state(result_state, None);
         match result_state {
             RemoteAgentState::TokenRevoked => {

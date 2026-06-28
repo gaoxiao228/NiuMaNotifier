@@ -40,6 +40,7 @@ pub fn device_authorization_header(device_token: &str) -> String {
 pub async fn run_device_socket_once(
     request: DeviceSocketConnectRequest,
     signaling_manager: crate::remote::signaling::RemoteSignalingManager,
+    webrtc_config: crate::remote::webrtc_transport::WebRtcTransportConfig,
 ) -> DeviceSocketRunResult {
     let socket_url = match request.socket_url() {
         Ok(value) => value,
@@ -96,13 +97,22 @@ pub async fn run_device_socket_once(
                         }
                     }
                     Some(Ok(Message::Text(text))) => {
-                        let outbound = match dispatch_device_text_message(
-                            &request.remote_config,
-                            text,
-                            |config, message| signaling_manager.handle_message(config, message),
-                        ) {
-                            Ok(messages) => messages,
+                        let message = match parse_device_text_message(text) {
+                            Ok(Some(value)) => value,
+                            Ok(None) => continue,
                             Err(error) => return DeviceSocketRunResult::Failed(error),
+                        };
+                        let outbound = match message {
+                            DeviceSignalMessage::SignalOffer { data, .. } => {
+                                signaling_manager
+                                    .handle_offer_async(
+                                        &request.remote_config,
+                                        data,
+                                        webrtc_config.clone(),
+                                    )
+                                    .await
+                            }
+                            other => signaling_manager.handle_message(&request.remote_config, other),
                         };
                         for message in outbound {
                             if let Err(error) = writer.send(Message::Text(message.to_string())).await {
@@ -121,24 +131,34 @@ pub async fn run_device_socket_once(
     }
 }
 
-pub fn dispatch_device_text_message(
-    config: &RemoteConfig,
-    text: String,
-    mut handler: impl FnMut(&RemoteConfig, DeviceSignalMessage) -> Vec<Value>,
-) -> Result<Vec<Value>, String> {
+pub fn parse_device_text_message(text: String) -> Result<Option<DeviceSignalMessage>, String> {
     let value: Value =
         serde_json::from_str(&text).map_err(|error| format!("远程设备消息 JSON 解析失败：{error}"))?;
     match parse_device_signal_message(value) {
-        Ok(message) => Ok(handler(config, message)),
+        Ok(message) => Ok(Some(message)),
         Err(error) => {
             // 非信令文本消息留给后续协议扩展；当前连接循环只消费已知信令。
             if error.starts_with("未知远程信令消息类型") {
-                Ok(vec![])
+                Ok(None)
             } else {
                 Err(error)
             }
         }
     }
+}
+
+pub fn dispatch_device_text_message(
+    config: &RemoteConfig,
+    text: String,
+    mut handler: impl FnMut(&RemoteConfig, DeviceSignalMessage) -> Vec<Value>,
+) -> Result<Vec<Value>, String> {
+    Ok(parse_device_text_message(text)?
+        .map(|message| handler(config, message))
+        .unwrap_or_default())
+}
+
+pub fn is_async_webrtc_offer(message: &DeviceSignalMessage) -> bool {
+    matches!(message, DeviceSignalMessage::SignalOffer { .. })
 }
 
 pub fn device_hello_message(device_id: &str) -> Value {
@@ -255,5 +275,24 @@ mod signaling_dispatch_tests {
         );
 
         assert_eq!(outbound.unwrap()[0]["type"], "connection.accept");
+    }
+}
+
+#[cfg(test)]
+mod offer_routing_tests {
+    use super::*;
+    use niuma_core::remote::signaling::{DeviceSignalMessage, SignalOffer};
+
+    #[test]
+    fn detects_offer_message_for_async_route() {
+        let message = DeviceSignalMessage::SignalOffer {
+            id: "msg_1".to_string(),
+            data: SignalOffer {
+                connection_id: "conn_1".to_string(),
+                sdp: "v=0".to_string(),
+            },
+        };
+
+        assert!(is_async_webrtc_offer(&message));
     }
 }
