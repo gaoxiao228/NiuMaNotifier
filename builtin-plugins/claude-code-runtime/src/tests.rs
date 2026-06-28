@@ -1,3 +1,6 @@
+use niuma_core::claude_code_managed_session::{
+    update_registry, ManagedClaudeCodeSession, ManagedClaudeCodeSessionState,
+};
 use niuma_core::models::{EventType, ToolKind};
 use niuma_core::tool_session::{ToolSessionMessageRole, ToolSessionStatus};
 use niuma_core::tool_session_rpc::{
@@ -220,4 +223,50 @@ fn scanner_reads_appended_tool_use_before_tool_result() {
     let second = scanner.scan_file(&file).unwrap();
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].summary, "Claude Code 工具执行完成：done");
+}
+
+#[test]
+fn repository_attaches_control_channel_for_managed_claude_session() {
+    let temp = tempdir().unwrap();
+    let project = temp.path().join("projects").join("-repo");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("11111111-1111-4111-8111-111111111111.jsonl"),
+        r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","cwd":"/repo","timestamp":"2026-06-28T01:00:00.000Z","message":{"role":"user","content":"你好"}}"#,
+    )
+    .unwrap();
+    let registry_path = temp.path().join("managed").join("claude-code.json");
+    update_registry(&registry_path, |registry| {
+        registry.upsert(ManagedClaudeCodeSession {
+            wrapper_session_id: "niuma_claude_1".to_string(),
+            state: ManagedClaudeCodeSessionState::Started,
+            cwd: "/repo".to_string(),
+            pid: Some(123),
+            control_socket: None,
+            started_at: chrono::Utc::now(),
+            claude_session_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+            transcript_path: None,
+            bound_at: None,
+            binding_failure_reason: None,
+        });
+    })
+    .unwrap();
+    let mut repository = ClaudeSessionRepository::with_managed_registry_path(
+        temp.path().to_path_buf(),
+        registry_path,
+    );
+
+    let sessions = repository.refresh_snapshot().unwrap();
+
+    let control = sessions[0].control.as_ref().unwrap();
+    assert_eq!(
+        control.preferred_channel_id.as_deref(),
+        Some("niuma_claude_managed:niuma_claude_1")
+    );
+    assert!(control.resumable);
+    assert_eq!(control.channels[0].provider, "niuma_claude");
+    assert!(control.channels[0]
+        .actions
+        .iter()
+        .any(|action| action.action_type == "send_instruction"));
 }

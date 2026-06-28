@@ -5,9 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
+use niuma_core::claude_code_managed_session::{
+    managed_claude_code_channel_id, read_registry, ManagedClaudeCodeRegistry,
+    ManagedClaudeCodeSession, ManagedClaudeCodeSessionState,
+};
 use niuma_core::models::ToolKind;
 use niuma_core::tool_session::{
-    ToolSessionDetail, ToolSessionListItem, ToolSessionScope, ToolSessionStatus,
+    ToolSessionControl, ToolSessionControlAction, ToolSessionControlChannel, ToolSessionDetail,
+    ToolSessionListItem, ToolSessionScope, ToolSessionStatus,
 };
 use niuma_core::tool_session_rpc::SessionDetailParams;
 use serde::Deserialize;
@@ -27,6 +32,7 @@ const FIRST_USER_MESSAGE_PREVIEW_CHARS: usize = 200;
 
 pub(crate) struct ClaudeSessionRepository {
     claude_home: PathBuf,
+    managed_registry_path: PathBuf,
     index: HashMap<String, SessionIndex>,
     event_cursors: HashMap<PathBuf, ClaudeEventCursor>,
 }
@@ -93,8 +99,19 @@ impl ProviderError {
 
 impl ClaudeSessionRepository {
     pub(crate) fn new(claude_home: PathBuf) -> Self {
+        Self::with_managed_registry_path(
+            claude_home,
+            niuma_core::platform::paths::claude_code_managed_registry_path(),
+        )
+    }
+
+    pub(crate) fn with_managed_registry_path(
+        claude_home: PathBuf,
+        managed_registry_path: PathBuf,
+    ) -> Self {
         Self {
             claude_home,
+            managed_registry_path,
             index: HashMap::new(),
             event_cursors: HashMap::new(),
         }
@@ -103,9 +120,17 @@ impl ClaudeSessionRepository {
     pub(crate) fn refresh_snapshot(&mut self) -> Result<Vec<ToolSessionListItem>, String> {
         let mut next_index = HashMap::new();
         let discovered_at = Utc::now();
+        let managed_registry = read_registry(&self.managed_registry_path).unwrap_or_else(|error| {
+            if self.managed_registry_path.exists() {
+                eprintln!("NiumaNotifier Claude Code managed registry 读取失败：{error}");
+            }
+            ManagedClaudeCodeRegistry::default()
+        });
         for path in recent_jsonl_files(&self.claude_home, SNAPSHOT_FILE_LIMIT) {
             match self.scan_session_file_index(&path, discovered_at) {
-                Ok(index) => {
+                Ok(mut index) => {
+                    index.list_item.control =
+                        control_for_session(&index.list_item.session_id, &managed_registry);
                     next_index.insert(index.list_item.session_id.clone(), index);
                 }
                 Err(error) => {
@@ -227,6 +252,94 @@ impl ClaudeSessionRepository {
             },
         })
     }
+}
+
+fn control_for_session(
+    session_id: &str,
+    registry: &ManagedClaudeCodeRegistry,
+) -> Option<ToolSessionControl> {
+    let mut channels = registry
+        .sessions
+        .iter()
+        .filter(|session| session.claude_session_id.as_deref() == Some(session_id))
+        .map(managed_session_control_channel)
+        .collect::<Vec<_>>();
+    if channels.is_empty() {
+        return None;
+    }
+    channels.sort_by(|left, right| {
+        right
+            .available
+            .cmp(&left.available)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let preferred_channel_id = channels
+        .iter()
+        .find(|channel| {
+            channel.available
+                && channel
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "send_instruction")
+        })
+        .map(|channel| channel.id.clone());
+    Some(ToolSessionControl {
+        resumable: preferred_channel_id.is_some(),
+        preferred_channel_id,
+        channels,
+    })
+}
+
+fn managed_session_control_channel(
+    session: &ManagedClaudeCodeSession,
+) -> ToolSessionControlChannel {
+    let available = matches!(
+        session.state,
+        ManagedClaudeCodeSessionState::Started | ManagedClaudeCodeSessionState::Bound
+    );
+    ToolSessionControlChannel {
+        id: managed_claude_code_channel_id(&session.wrapper_session_id),
+        provider: "niuma_claude".to_string(),
+        kind: "managed_process".to_string(),
+        available,
+        capabilities: if available {
+            vec!["send_instruction".to_string(), "interrupt".to_string()]
+        } else {
+            Vec::new()
+        },
+        actions: if available {
+            managed_channel_actions()
+        } else {
+            Vec::new()
+        },
+        unavailable_reason: (!available).then(|| unavailable_reason_for_managed_session(session)),
+        updated_at: session.bound_at.unwrap_or(session.started_at),
+    }
+}
+
+fn managed_channel_actions() -> Vec<ToolSessionControlAction> {
+    vec![
+        ToolSessionControlAction {
+            action_type: "send_instruction".to_string(),
+            transport: "local_api".to_string(),
+            endpoint: Some("/api/v1/session-control/send-instruction".to_string()),
+            debug_command: None,
+        },
+        ToolSessionControlAction {
+            action_type: "interrupt".to_string(),
+            transport: "local_api".to_string(),
+            endpoint: Some("/api/v1/session-control/interrupt".to_string()),
+            debug_command: None,
+        },
+    ]
+}
+
+fn unavailable_reason_for_managed_session(session: &ManagedClaudeCodeSession) -> String {
+    session
+        .binding_failure_reason
+        .clone()
+        .unwrap_or_else(|| format!("Claude Code managed session state: {:?}", session.state))
 }
 
 fn parse_session_file(path: &Path) -> Result<ParsedSessionFile, String> {

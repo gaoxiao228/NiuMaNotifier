@@ -4,9 +4,10 @@ use axum::extract::{Query, State};
 use axum::response::Response;
 use chrono::Utc;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
+use niuma_core::claude_code_managed_control;
 use niuma_core::codex_managed_control;
 use niuma_core::models::{EventType, NiumaEvent, ToolKind};
-use niuma_core::platform::paths::codex_managed_registry_path;
+use niuma_core::platform::paths::{claude_code_managed_registry_path, codex_managed_registry_path};
 use niuma_core::tool_session::ToolSessionDetail;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -252,23 +253,26 @@ pub(crate) async fn post_session_send_instruction(body: Bytes) -> Response {
             );
         }
     };
-    if request.tool.trim() != ToolKind::Codex.as_str() {
-        return json_response(
-            200,
-            ApiResponse::fail(
-                ApiErrorCode::BusinessValidation,
-                "当前仅支持 codex 会话续写",
-            ),
-        );
-    }
     let session_id = request.session_id.trim();
     let channel_id = request.channel_id.trim();
-    match codex_managed_control::send_instruction(
-        &codex_managed_registry_path(),
-        session_id,
-        channel_id,
-        &request.content,
-    ) {
+    let result = match request.tool.trim() {
+        tool if tool == ToolKind::Codex.as_str() => codex_managed_control::send_instruction(
+            &codex_managed_registry_path(),
+            session_id,
+            channel_id,
+            &request.content,
+        ),
+        tool if tool == ToolKind::ClaudeCode.as_str() => {
+            claude_code_managed_control::send_instruction(
+                &claude_code_managed_registry_path(),
+                session_id,
+                channel_id,
+                &request.content,
+            )
+        }
+        _ => Err("当前仅支持 codex/claude_code 会话续写".to_string()),
+    };
+    match result {
         Ok(result) => json_response(
             200,
             ApiResponse::ok(json!({
@@ -297,18 +301,20 @@ pub(crate) async fn post_session_interrupt(body: Bytes) -> Response {
             );
         }
     };
-    if request.tool.trim() != ToolKind::Codex.as_str() {
-        return json_response(
-            200,
-            ApiResponse::fail(
-                ApiErrorCode::BusinessValidation,
-                "当前仅支持 codex 会话中断",
-            ),
-        );
-    }
     let session_id = request.session_id.trim();
     let channel_id = request.channel_id.trim();
-    match codex_managed_control::interrupt(&codex_managed_registry_path(), session_id, channel_id) {
+    let result = match request.tool.trim() {
+        tool if tool == ToolKind::Codex.as_str() => {
+            codex_managed_control::interrupt(&codex_managed_registry_path(), session_id, channel_id)
+        }
+        tool if tool == ToolKind::ClaudeCode.as_str() => claude_code_managed_control::interrupt(
+            &claude_code_managed_registry_path(),
+            session_id,
+            channel_id,
+        ),
+        _ => Err("当前仅支持 codex/claude_code 会话中断".to_string()),
+    };
+    match result {
         Ok(result) => json_response(
             200,
             ApiResponse::ok(json!({

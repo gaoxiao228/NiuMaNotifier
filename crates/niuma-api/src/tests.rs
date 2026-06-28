@@ -3468,6 +3468,31 @@ async fn session_control_send_instruction_rejects_unknown_channel_prefix() {
 }
 
 #[tokio::test]
+async fn session_control_send_instruction_routes_claude_code_tool() {
+    let router = app(NiumaStore::new(test_path(
+        "session_control_send_claude_unknown_channel",
+    )));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/send-instruction",
+        serde_json::json!({
+            "tool": "claude_code",
+            "session_id": "session-1",
+            "channel_id": "invalid",
+            "content": "继续"
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(
+        value["message"],
+        "不支持的 session control channel：invalid"
+    );
+}
+
+#[tokio::test]
 async fn session_control_send_instruction_rejects_old_wrapper_session_id_body() {
     let router = app(NiumaStore::new(test_path("session_control_send_old_body")));
     let response = post_json_response(
@@ -3497,6 +3522,30 @@ async fn session_control_interrupt_rejects_unknown_channel_prefix() {
         "/api/v1/session-control/interrupt",
         serde_json::json!({
             "tool": "codex",
+            "session_id": "session-1",
+            "channel_id": "invalid"
+        }),
+    )
+    .await;
+
+    assert_eq!(value["code"], 100101);
+    assert_eq!(
+        value["message"],
+        "不支持的 session control channel：invalid"
+    );
+}
+
+#[tokio::test]
+async fn session_control_interrupt_routes_claude_code_tool() {
+    let router = app(NiumaStore::new(test_path(
+        "session_control_interrupt_claude_unknown_channel",
+    )));
+
+    let value = post_json(
+        &router,
+        "/api/v1/session-control/interrupt",
+        serde_json::json!({
+            "tool": "claude_code",
             "session_id": "session-1",
             "channel_id": "invalid"
         }),
