@@ -178,6 +178,16 @@ export function createAuthService(options: {
     async logoutAll(userId: string) {
       await repo.revokeAllRefreshTokens(userId)
       return { ok: true, data: {} } satisfies ServiceSuccess<object>
+    },
+
+    async me(userId: string) {
+      const user = await repo.findUserById(userId)
+      if (!user || user.status !== 'active') return failure(ErrorCode.UNAUTHORIZED, '未登录')
+
+      return {
+        ok: true,
+        data: { user: publicUser(user) }
+      } satisfies ServiceSuccess<object>
     }
   }
 }

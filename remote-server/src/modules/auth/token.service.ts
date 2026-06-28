@@ -11,6 +11,8 @@ export type AccessTokenConfig = {
   ttlSeconds: number
 }
 
+export type AccessTokenPayload = AccessTokenInput
+
 export async function createAccessToken(
   input: AccessTokenInput,
   config: AccessTokenConfig
@@ -28,7 +30,7 @@ export async function createAccessToken(
     .sign(privateKey)
 }
 
-export async function verifyAccessToken(token: string, publicKeyPem: string) {
+export async function verifyAccessToken(token: string, publicKeyPem: string): Promise<AccessTokenPayload> {
   const publicKey = await importSPKI(publicKeyPem, 'EdDSA')
   const { payload } = await jwtVerify(token, publicKey)
 

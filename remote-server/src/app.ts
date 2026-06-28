@@ -1,12 +1,17 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyInstance } from 'fastify'
 import { registerHealthRoutes } from './modules/health/health.routes.js'
 import { ErrorCode } from './shared/errors.js'
 import { apiFailure } from './shared/response.js'
 
-export function buildApp() {
+export type AppDeps = {
+  registerAuthRoutes?: (app: FastifyInstance) => Promise<void>
+}
+
+export function buildApp(deps: AppDeps = {}) {
   const app = Fastify({ logger: false })
 
   void registerHealthRoutes(app)
+  if (deps.registerAuthRoutes) void deps.registerAuthRoutes(app)
 
   app.setNotFoundHandler(async (_request, reply) => {
     return reply.status(404).send(apiFailure(ErrorCode.ROUTE_NOT_FOUND, '接口不存在'))
