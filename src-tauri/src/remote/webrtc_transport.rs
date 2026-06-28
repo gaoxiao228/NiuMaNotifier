@@ -1,3 +1,4 @@
+use niuma_core::remote::transport::RemoteTransportFrame;
 use niuma_core::remote::signaling::{
     signal_answer_message, signal_ice_candidate_message, SignalIceCandidate, SignalOffer,
 };
@@ -6,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -121,6 +123,34 @@ pub async fn add_remote_ice_candidate(
     .map_err(|error| format!("添加远程 ICE candidate 失败：{error}"))
 }
 
+pub fn validate_outbound_frame(
+    connection_id: &str,
+    payload: Vec<u8>,
+) -> Result<RemoteTransportFrame, String> {
+    if payload.is_empty() {
+        return Err("远程传输帧不能为空".to_string());
+    }
+    Ok(RemoteTransportFrame::new(connection_id, payload))
+}
+
+pub async fn send_data_channel_frame(
+    data_channel: &RTCDataChannel,
+    frame: RemoteTransportFrame,
+) -> Result<(), String> {
+    data_channel
+        .send(&frame.payload.into())
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("发送 WebRTC DataChannel 帧失败：{error}"))
+}
+
+pub fn data_channel_message_to_frame(
+    connection_id: &str,
+    message: DataChannelMessage,
+) -> Result<RemoteTransportFrame, String> {
+    validate_outbound_frame(connection_id, message.data.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +172,25 @@ mod tests {
 
         let rtc = config.to_rtc_configuration();
         assert_eq!(rtc.ice_servers[0].urls[0], "stun:stun.example.com:3478");
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn validates_non_empty_transport_frame() {
+        let frame = validate_outbound_frame("conn_1", vec![1]).unwrap();
+        assert_eq!(frame.connection_id, "conn_1");
+        assert_eq!(frame.payload, vec![1]);
+    }
+
+    #[test]
+    fn rejects_empty_transport_frame() {
+        assert_eq!(
+            validate_outbound_frame("conn_1", vec![]).unwrap_err(),
+            "远程传输帧不能为空"
+        );
     }
 }
