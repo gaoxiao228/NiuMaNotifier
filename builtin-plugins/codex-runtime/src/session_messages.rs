@@ -123,9 +123,16 @@ fn is_tool_trace_response_item(item_type: Option<&str>, payload: &Value) -> bool
             | "custom_tool_call_output"
             | "tool_search_output",
         ) => true,
-        Some("message") => payload.get("role").and_then(Value::as_str) == Some("tool"),
+        Some("message") => !is_user_visible_message_role(payload),
         _ => false,
     }
+}
+
+fn is_user_visible_message_role(payload: &Value) -> bool {
+    matches!(
+        payload.get("role").and_then(Value::as_str),
+        Some("user" | "assistant" | "system")
+    )
 }
 
 fn role_for_row(
@@ -301,6 +308,8 @@ fn strip_embedded_runtime_instruction_blocks(content: &str) -> String {
         ("<subagent_notification>", "</subagent_notification>"),
         ("<collaboration_mode>", "</collaboration_mode>"),
         ("<permissions instructions>", "</permissions instructions>"),
+        ("<skills_instructions>", "</skills_instructions>"),
+        ("<plugins_instructions>", "</plugins_instructions>"),
     ]
     .into_iter()
     .fold(content.to_string(), |content, (open, close)| {
@@ -541,6 +550,28 @@ mod tests {
             messages[0].content,
             "目前会话详情里会出现 <permissions instructions> 这类信息，如何去除？"
         );
+    }
+
+    #[test]
+    fn codex_messages_skip_developer_runtime_instruction_messages() {
+        let lines = vec![
+            (
+                0,
+                r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\nFilesystem sandboxing defines which files can be read or written.\n</permissions instructions>"},{"type":"input_text","text":"<skills_instructions>\n## Skills\n- backend-api-standard\n</skills_instructions>"},{"type":"input_text","text":"<plugins_instructions>\n## Plugins\nPlugin metadata\n</plugins_instructions>"}]}}"#
+                    .to_string(),
+            ),
+            (
+                1,
+                r#"{"timestamp":"2026-06-22T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"真实用户问题"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ToolSessionMessageRole::User);
+        assert_eq!(messages[0].content, "真实用户问题");
     }
 
     #[test]
