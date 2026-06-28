@@ -185,7 +185,7 @@ password_updated_at
 
 - Web 控制台普通 HTTP API。
 - Web 控制台 WSS 信令连接。
-- 本机登录 UI 调用设备注册和管理接口。
+- 浏览器登录设备绑定流程中的用户身份校验。
 
 属性：
 
@@ -199,7 +199,7 @@ password_updated_at
 用途：
 
 - Web 控制台刷新登录态。
-- 本机登录 UI 刷新登录态。
+- 浏览器 Web 登录态刷新。
 
 属性：
 
@@ -236,6 +236,21 @@ password_updated_at
 - 绑定 `connection_id`、`user_id`、`device_id`、`client_id`。
 - 建连后可换成连接内短期 session secret。
 - 不可用于账号 API、设备 API 或其他连接。
+
+### desktop login token
+
+用途：
+
+- 本机 NiumaNotifier 设置页点击登录后，创建一次性桌面绑定会话。
+- 桌面端轮询绑定结果。
+
+属性：
+
+- 随机高熵字符串，不使用 JWT。
+- 服务端只保存 token 哈希。
+- 短有效期，建议 10 分钟。
+- 只能用于查询对应 `desktop_login_sessions` 的完成状态。
+- 不能调用账号 API、设备 API、WebSocket 或 relay。
 
 ## PostgreSQL 数据模型
 
@@ -352,6 +367,40 @@ webrtc
 relay
 ```
 
+### desktop_login_sessions
+
+用于“本机点击登录，浏览器完成账号登录并绑定设备”的一次性流程。
+
+```text
+id uuid primary key
+request_id text unique not null
+poll_token_hash text unique not null
+desktop_public_key text not null
+device_name text not null
+fingerprint_hash text not null
+capability_json jsonb not null
+status text not null
+user_id uuid references users(id)
+device_id uuid references devices(id)
+encrypted_result_json jsonb
+expires_at timestamptz not null
+completed_at timestamptz
+consumed_at timestamptz
+created_at timestamptz not null
+```
+
+`status`：
+
+```text
+pending
+completed
+consumed
+expired
+cancelled
+```
+
+服务端只保存 `poll_token`、`device_fingerprint` 和最终 `device_token` 的哈希。绑定完成时，服务端用 `desktop_public_key` 把包含 `device_token` 的结果加密后保存到 `encrypted_result_json`；桌面端 poll 拿到密文后本地解密。`device_token` 明文不持久化。
+
 ### audit_events
 
 服务端审计只记录服务端可见摘要，不记录 E2EE RPC 明文。
@@ -445,6 +494,23 @@ connection:{connection_id}
 ```
 
 TTL 建议 2 到 5 分钟。过期后不能继续交换信令。
+
+### 桌面登录绑定
+
+```text
+desktop_login:{request_id}
+```
+
+值：
+
+```json
+{
+  "status": "pending",
+  "expires_at": "2026-06-28T12:10:00Z"
+}
+```
+
+该 key 用于加速浏览器登录页和桌面轮询状态判断，持久状态仍以 PostgreSQL 的 `desktop_login_sessions` 为准。
 
 ### relay 路由
 
@@ -540,6 +606,16 @@ rate_limit:connection_create:user:{user_id}
 210406 设备 token 已吊销
 ```
 
+桌面登录绑定：
+
+```text
+240401 桌面登录会话不存在
+240402 桌面登录会话已过期
+240403 桌面登录轮询 token 无效
+240404 桌面登录会话尚未完成
+240405 桌面登录会话已被消费
+```
+
 连接：
 
 ```text
@@ -600,6 +676,8 @@ rate_limit:connection_create:user:{user_id}
   "password": "password"
 }
 ```
+
+该接口只由浏览器 Web 登录页调用。本机 NiumaNotifier 设置页不内嵌邮箱密码表单，也不直接调用该接口。
 
 成功：
 
@@ -704,9 +782,171 @@ rate_limit:connection_create:user:{user_id}
 }
 ```
 
+### POST /api/v1/desktop-login/start
+
+用途：本机 NiumaNotifier 设置页点击“登录”后创建一次性浏览器登录绑定会话。该接口不需要账号登录态。
+
+请求：
+
+```json
+{
+  "device_name": "NiuMa MacBook",
+  "device_fingerprint": "stable-local-fingerprint",
+  "desktop_public_key": "base64-public-key",
+  "capabilities": {
+    "agent_protocol_version": 1,
+    "rpc_protocol_version": 1,
+    "supports_webrtc": true,
+    "supports_relay": true,
+    "supports_remote_control": true
+  }
+}
+```
+
+成功：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "request_id": "dlr_...",
+    "poll_token": "opaque_desktop_login_poll_token",
+    "login_url": "https://remote.example.com/desktop-login?request_id=dlr_...",
+    "expires_in": 600
+  }
+}
+```
+
+本机随后打开系统浏览器访问 `login_url`，并使用 `poll_token` 轮询绑定结果。`poll_token` 不放入浏览器 URL。`desktop_public_key` 是本次绑定会话的一次性公钥，对应私钥只保存在本机内存中，用于解密 poll 返回的绑定结果。
+
+设备指纹生成规则：
+
+```text
+第一次启用远程功能时，本机生成随机 device_install_id。
+device_install_id 明文只保存在本机应用配置。
+device_fingerprint = sha256("niuma-device-v1" + remote_server_origin + device_install_id)
+```
+
+服务端保存 `device_fingerprint` 的加 pepper 哈希，不保存原始 fingerprint。不同远程服务端 origin 会得到不同 fingerprint，避免官方服务和自托管服务之间关联同一台机器。
+
+### GET /desktop-login?request_id=...
+
+用途：浏览器页面入口，不是 JSON API。
+
+行为：
+
+```text
+如果浏览器未登录:
+  展示邮箱密码登录页。
+
+如果浏览器已登录:
+  自动完成该 request_id 对应的设备绑定。
+  展示“设备已绑定，可以返回 NiumaNotifier”的结果页。
+```
+
+首次登录不要求本机弹框确认，也不要求额外确认绑定。用户点击本机登录按钮并在浏览器完成账号登录，即视为授权绑定当前设备。
+
+### POST /api/v1/desktop-login/complete
+
+用途：浏览器登录态下完成桌面绑定。该接口由 Web 页面调用，需要 access token。
+
+请求：
+
+```json
+{
+  "request_id": "dlr_..."
+}
+```
+
+成功：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+服务端处理：
+
+```text
+校验 request_id 存在且未过期。
+读取 desktop_login_sessions 中的 device_name、fingerprint_hash、capability_json。
+按当前 user_id + fingerprint_hash 查找 active device。
+如果存在，更新设备名和 capabilities。
+如果不存在，创建 devices 记录。
+生成新的 device_token，保存 token_hash 到 devices。
+用 desktop_public_key 加密 user、device 和 device_token 结果，保存到 desktop_login_sessions.encrypted_result_json。
+标记会话为 completed。
+写入 audit_events: device.register 或 device.rebind。
+```
+
+### POST /api/v1/desktop-login/poll
+
+用途：本机 NiumaNotifier 轮询浏览器登录绑定结果。该接口不需要账号登录态，但必须提供 `poll_token`。
+
+请求：
+
+```json
+{
+  "request_id": "dlr_...",
+  "poll_token": "opaque_desktop_login_poll_token"
+}
+```
+
+未完成：
+
+```json
+{
+  "code": 240404,
+  "message": "桌面登录会话尚未完成",
+  "data": {
+    "status": "pending",
+    "expires_in": 540
+  }
+}
+```
+
+完成：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "encrypted_result": {
+      "alg": "x25519-xsalsa20poly1305-v1",
+      "nonce": "base64",
+      "ciphertext": "base64"
+    }
+  }
+}
+```
+
+本机使用创建绑定会话时生成的一次性私钥解密 `encrypted_result`，得到：
+
+```json
+{
+  "user": {
+    "id": "usr_...",
+    "email": "user@example.com",
+    "role": "user"
+  },
+  "device": {
+    "id": "dev_...",
+    "name": "NiuMa MacBook"
+  },
+  "device_token": "opaque_device_token"
+}
+```
+
+成功返回加密结果后，服务端将该桌面登录会话标记为 `consumed`。后续相同 `request_id` + `poll_token` 再次调用返回 `240405`。
+
 ### POST /api/v1/devices/register
 
-用途：本机登录 UI 使用 access token 注册或更新当前设备。
+用途：保留给自动化或未来本机内嵌登录模式。第一版 NiumaNotifier 设置页不直接使用该接口；正式设备绑定走 `/api/v1/desktop-login/start`、浏览器登录和 `/api/v1/desktop-login/poll`。
 
 请求：
 
@@ -741,6 +981,7 @@ rate_limit:connection_create:user:{user_id}
 ```
 
 服务端只保存 `device_fingerprint` 和 `device_token` 的哈希。
+
 
 ### GET /api/v1/devices/list
 
@@ -1160,6 +1401,10 @@ result = success
 - refresh token 刷新后旧 token 失效。
 - logout 吊销当前 refresh token。
 - logout-all 吊销用户全部 refresh token。
+- desktop-login/start 创建绑定会话，返回 login_url 和 poll_token，且 poll_token 不出现在 login_url 中。
+- desktop-login/complete 在浏览器登录态下绑定设备，并只保存 encrypted_result_json。
+- desktop-login/poll 未完成时返回 `240404`。
+- desktop-login/poll 完成时返回 encrypted_result，随后相同会话再次 poll 返回 `240405`。
 - 设备注册返回 device token，数据库只保存哈希。
 - device token 可以连接 `/ws/device`。
 - 吊销 device token 后 `/ws/device` 被拒绝。
