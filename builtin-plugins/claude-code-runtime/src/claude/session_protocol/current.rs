@@ -118,7 +118,10 @@ impl ClaudeJsonlParser {
             if item.get("type").and_then(Value::as_str) != Some("tool_result") {
                 continue;
             }
-            let tool_use_id = item.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+            let tool_use_id = item
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             self.pending_tools.remove(tool_use_id);
             let result = item
                 .get("content")
@@ -160,7 +163,10 @@ impl ClaudeJsonlParser {
         for item in row.message.get("content")?.as_array()? {
             match item.get("type").and_then(Value::as_str) {
                 Some("text") => {
-                    let text = item.get("text").and_then(Value::as_str).and_then(trimmed_text)?;
+                    let text = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .and_then(trimmed_text)?;
                     return Some(ParsedClaudeEvent {
                         event_type: EventType::AssistantMessageCompleted,
                         summary: text.clone(),
@@ -257,7 +263,11 @@ fn text_from_value(value: &Value) -> Option<String> {
                 .filter_map(|item| {
                     item.as_str()
                         .and_then(trimmed_text)
-                        .or_else(|| item.get("text").and_then(Value::as_str).and_then(trimmed_text))
+                        .or_else(|| {
+                            item.get("text")
+                                .and_then(Value::as_str)
+                                .and_then(trimmed_text)
+                        })
                         .or_else(|| {
                             item.get("content")
                                 .and_then(Value::as_str)

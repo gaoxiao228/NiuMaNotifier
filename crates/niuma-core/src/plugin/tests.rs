@@ -313,7 +313,10 @@ fn builtin_claude_code_manifest_runs_as_independent_plugin_process() {
     assert_eq!(manifest.id, "builtin-claude-code");
     assert_eq!(manifest.source, PluginSource::Builtin);
     assert_eq!(manifest.tool_id, Some(ToolKind::ClaudeCode));
-    assert_eq!(manifest.command.as_deref(), Some("niuma-claude-code-plugin"));
+    assert_eq!(
+        manifest.command.as_deref(),
+        Some("niuma-claude-code-plugin")
+    );
     assert_eq!(manifest.args, Vec::<String>::new());
     assert!(manifest
         .capabilities

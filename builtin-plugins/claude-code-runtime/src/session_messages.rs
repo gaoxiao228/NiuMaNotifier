@@ -40,6 +40,14 @@ pub(crate) fn parse_claude_message_line(
     }
 }
 
+pub(crate) fn is_detail_message_line(line: &str) -> bool {
+    let Ok(row) = serde_json::from_str::<ClaudeRow>(line) else {
+        return false;
+    };
+    let (_role, content, content_type) = role_content_for_row(&row);
+    content_type != "unmapped" && !content.trim().is_empty()
+}
+
 fn role_content_for_row(row: &ClaudeRow) -> (ToolSessionMessageRole, String, &'static str) {
     let content = row.message.get("content").unwrap_or(&Value::Null);
     if row.row_type == "user" {
@@ -67,7 +75,10 @@ fn first_assistant_item(content: &Value) -> Option<(ToolSessionMessageRole, Stri
     for item in content.as_array()? {
         match item.get("type").and_then(Value::as_str) {
             Some("text") => {
-                let text = item.get("text").and_then(Value::as_str).and_then(trimmed_text)?;
+                let text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .and_then(trimmed_text)?;
                 return Some((ToolSessionMessageRole::Assistant, text, "text"));
             }
             Some("thinking") => {
@@ -83,7 +94,11 @@ fn first_assistant_item(content: &Value) -> Option<(ToolSessionMessageRole, Stri
                     .and_then(Value::as_str)
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or("tool");
-                return Some((ToolSessionMessageRole::ToolCall, name.to_string(), "tool_use"));
+                return Some((
+                    ToolSessionMessageRole::ToolCall,
+                    name.to_string(),
+                    "tool_use",
+                ));
             }
             _ => {}
         }
@@ -98,7 +113,10 @@ fn first_tool_result(content: &Value) -> Option<(String, bool)> {
                 .get("content")
                 .and_then(text_from_value)
                 .unwrap_or_else(|| "工具结果已返回".to_string());
-            let is_error = item.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+            let is_error = item
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             return Some((text, is_error));
         }
     }
@@ -114,7 +132,11 @@ fn text_from_value(value: &Value) -> Option<String> {
                 .filter_map(|item| {
                     item.as_str()
                         .and_then(trimmed_text)
-                        .or_else(|| item.get("text").and_then(Value::as_str).and_then(trimmed_text))
+                        .or_else(|| {
+                            item.get("text")
+                                .and_then(Value::as_str)
+                                .and_then(trimmed_text)
+                        })
                         .or_else(|| {
                             item.get("content")
                                 .and_then(Value::as_str)

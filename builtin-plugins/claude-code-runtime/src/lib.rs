@@ -3,6 +3,8 @@
 mod claude;
 #[allow(dead_code)]
 mod session_messages;
+#[allow(dead_code)]
+mod session_provider;
 
 pub fn run_combined_from_env() {
     // Task 1 只注册进程入口；watcher/provider 在后续任务按 TDD 补齐。
