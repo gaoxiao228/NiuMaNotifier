@@ -1250,7 +1250,7 @@ mod tests {
         let registry = PluginRegistry::with_builtin_plugins();
         let manifests = managed_runtime_manifests(&registry);
 
-        assert_eq!(manifests.len(), 3);
+        assert_eq!(manifests.len(), 4);
         let codex = manifests
             .iter()
             .find(|manifest| manifest.id == "builtin-codex")
@@ -1258,6 +1258,17 @@ mod tests {
         assert_eq!(codex.source, PluginSource::Builtin);
         assert!(codex.capabilities.contains(&PluginCapability::EventWatcher));
         assert!(codex
+            .capabilities
+            .contains(&PluginCapability::ToolSessionListProvider));
+        let claude_code = manifests
+            .iter()
+            .find(|manifest| manifest.id == "builtin-claude-code")
+            .unwrap();
+        assert_eq!(claude_code.source, PluginSource::Builtin);
+        assert!(claude_code
+            .capabilities
+            .contains(&PluginCapability::EventWatcher));
+        assert!(claude_code
             .capabilities
             .contains(&PluginCapability::ToolSessionListProvider));
         assert!(manifests
