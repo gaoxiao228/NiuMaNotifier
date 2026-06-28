@@ -8,10 +8,14 @@ export function detectLanguage(language?: string): SupportedLanguage {
   }
 
   const normalized = detectedLanguage.toLowerCase()
-  const base = normalized.split('-')[0]
+  const parts = normalized.split('-')
+  const [base, scriptOrRegion, region] = parts
   if (base === 'zh') {
-    // 港澳台区域默认使用繁体，其余中文区域使用简体。
-    if (normalized === 'zh-tw' || normalized === 'zh-hk' || normalized === 'zh-mo') return 'zh-TW'
+    // 优先按 BCP 47 脚本子标签判断繁简，再按港澳台区域回退到繁体。
+    if (scriptOrRegion === 'hant') return 'zh-TW'
+    if (scriptOrRegion === 'hans') return 'zh-CN'
+    if (scriptOrRegion === 'tw' || scriptOrRegion === 'hk' || scriptOrRegion === 'mo') return 'zh-TW'
+    if (region === 'tw' || region === 'hk' || region === 'mo') return 'zh-TW'
     return 'zh-CN'
   }
   if (supportedLanguages.includes(base as SupportedLanguage)) return base as SupportedLanguage
