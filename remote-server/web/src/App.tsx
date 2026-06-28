@@ -9,6 +9,7 @@ import { createLocalStorageAuthStore } from './auth/authStore.js'
 import { DeviceListPage } from './devices/deviceListPage.js'
 import { createTranslator, detectLanguage } from './i18n/index.js'
 import { supportedLanguages, type SupportedLanguage } from './i18n/messages.js'
+import { toDisplayErrorMessage } from './shared/errorMessage.js'
 
 export function App() {
   const [language, setLanguage] = useState<SupportedLanguage>(() => detectLanguage())
@@ -38,7 +39,7 @@ export function App() {
       authStore.setToken(response.access_token)
       setToken(response.access_token)
     } catch (err) {
-      const message = err instanceof Error ? err.message : t('login_failed')
+      const message = toDisplayErrorMessage(t, err, 'login_failed')
       setLoginError(message === t('login_failed') ? message : `${t('login_failed')}: ${message}`)
     } finally {
       setLoginLoading(false)

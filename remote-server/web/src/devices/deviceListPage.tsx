@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RemoteDevice } from '../api/devicesApi.js'
 import { HttpError } from '../api/httpClient.js'
 import { ApiError } from '../shared/envelope.js'
+import { toDisplayErrorMessage } from '../shared/errorMessage.js'
 
 type DeviceListApi = {
   list(): Promise<{ list: RemoteDevice[] }>
@@ -42,7 +43,7 @@ export function DeviceListPage({ devicesApi, t, onSelectDevice, onUnauthorized }
         onUnauthorized?.()
         return
       }
-      setError(err instanceof Error ? err.message : t('error'))
+      setError(toDisplayErrorMessage(t, err, 'error'))
     } finally {
       if (!mountedRef.current || requestId !== requestIdRef.current) return
       setLoading(false)

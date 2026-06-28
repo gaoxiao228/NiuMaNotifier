@@ -12,6 +12,10 @@ describe('api envelope', () => {
     expect(unwrapEnvelope({ code: 0, message: 'ok', data: { value: 1 } })).toEqual({ value: 1 })
     expect(() => unwrapEnvelope({ code: 200001, message: '未登录', data: null })).toThrow(ApiError)
   })
+
+  it('uses a stable message key for client-side missing data errors', () => {
+    expect(() => unwrapEnvelope({ code: 0, message: 'ok', data: null })).toThrow('api_error_missing_data')
+  })
 })
 
 describe('createHttpClient', () => {
@@ -36,7 +40,19 @@ describe('createHttpClient', () => {
     expect(headers.get('Authorization')).toBe('Bearer access-token')
   })
 
-  it('reports HTTP and JSON boundary errors without leaking parser messages', async () => {
+  it('preserves business envelope errors from non-2xx responses', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 200001, message: '未登录', data: null }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    const client = createHttpClient(createMemoryAuthStore())
+
+    await expect(client.get('/unauthorized')).rejects.toMatchObject({ code: 200001, message: '未登录' })
+  })
+
+  it('reports HTTP and JSON boundary errors with stable message keys', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response('', { status: 500, statusText: 'Internal Server Error' }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
@@ -44,15 +60,15 @@ describe('createHttpClient', () => {
 
     const client = createHttpClient(createMemoryAuthStore())
 
-    await expect(client.get('/http-error')).rejects.toThrow(HttpError)
-    await expect(client.get('/empty')).rejects.toThrow('服务端响应为空')
-    await expect(client.get('/html')).rejects.toThrow('服务端响应格式错误')
+    await expect(client.get('/http-error')).rejects.toMatchObject({ messageKey: 'api_error_http' })
+    await expect(client.get('/empty')).rejects.toMatchObject({ messageKey: 'api_error_empty_response' })
+    await expect(client.get('/html')).rejects.toMatchObject({ messageKey: 'api_error_invalid_json' })
   })
 
   it('reports network errors with a stable message', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     const client = createHttpClient(createMemoryAuthStore())
 
-    await expect(client.get('/network-error')).rejects.toThrow('网络请求失败')
+    await expect(client.get('/network-error')).rejects.toMatchObject({ messageKey: 'api_error_network' })
   })
 })

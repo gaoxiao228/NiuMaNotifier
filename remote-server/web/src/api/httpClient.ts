@@ -4,9 +4,9 @@ import type { AuthStore } from '../auth/authStore.js'
 export class HttpError extends Error {
   constructor(
     public status: number,
-    message: string
+    public messageKey: string
   ) {
-    super(message)
+    super(messageKey)
   }
 }
 
@@ -20,15 +20,25 @@ function joinUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`
 }
 
+function parseEnvelope<T>(text: string): ApiEnvelope<T> | null {
+  try {
+    const payload = JSON.parse(text) as Partial<ApiEnvelope<T>>
+    if (typeof payload.code !== 'number' || typeof payload.message !== 'string' || !('data' in payload)) {
+      return null
+    }
+    return payload as ApiEnvelope<T>
+  } catch {
+    return null
+  }
+}
+
 async function readEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
   const text = await response.text()
-  if (!text.trim()) throw new HttpError(response.status, '服务端响应为空')
+  if (!text.trim()) throw new HttpError(response.status, 'api_error_empty_response')
 
-  try {
-    return JSON.parse(text) as ApiEnvelope<T>
-  } catch {
-    throw new HttpError(response.status, '服务端响应格式错误')
-  }
+  const envelope = parseEnvelope<T>(text)
+  if (!envelope) throw new HttpError(response.status, 'api_error_invalid_json')
+  return envelope
 }
 
 export function createHttpClient(authStore: AuthStore, baseUrl = ''): HttpClient {
@@ -48,11 +58,14 @@ export function createHttpClient(authStore: AuthStore, baseUrl = ''): HttpClient
         headers
       })
     } catch {
-      throw new HttpError(0, '网络请求失败')
+      throw new HttpError(0, 'api_error_network')
     }
 
     if (!response.ok) {
-      throw new HttpError(response.status, `HTTP ${response.status}`)
+      const text = await response.text()
+      const envelope = text.trim() ? parseEnvelope<T>(text) : null
+      if (envelope && envelope.code !== 0) return unwrapEnvelope(envelope)
+      throw new HttpError(response.status, 'api_error_http')
     }
 
     const payload = await readEnvelope<T>(response)
