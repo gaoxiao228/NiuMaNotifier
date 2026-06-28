@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 tokio = { version = "1", features = ["rt", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

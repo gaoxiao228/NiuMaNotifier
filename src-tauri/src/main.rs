@@ -10,6 +10,7 @@ mod builtin_plugins;
 mod commands;
 #[cfg(target_os = "macos")]
 mod macos;
+mod remote;
 mod tools;
 mod tray;
 
