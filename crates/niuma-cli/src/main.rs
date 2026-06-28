@@ -24,6 +24,9 @@ fn main() {
         Command::Status {
             tool: Some(ToolArg::Codex),
         } => tools::codex::hook_commands::codex_hook_status(),
+        Command::Status {
+            tool: Some(ToolArg::ClaudeCode),
+        } => tools::claude_code::sessions::claude_sessions(),
         Command::Codex(command) => return tools::codex::managed::run_codex_command(command.args),
         Command::CodexSessions => tools::codex::sessions::codex_sessions(),
         Command::CodexSend(command) => {
@@ -31,6 +34,14 @@ fn main() {
         }
         Command::CodexInterrupt(command) => {
             tools::codex::interrupt::codex_interrupt(command.wrapper_session_id)
+        }
+        Command::Claude(command) => tools::claude_code::managed::run_claude_command(command.args),
+        Command::ClaudeSessions => tools::claude_code::sessions::claude_sessions(),
+        Command::ClaudeSend(command) => {
+            tools::claude_code::send::claude_send(command.wrapper_session_id, command.message)
+        }
+        Command::ClaudeInterrupt(command) => {
+            tools::claude_code::interrupt::claude_interrupt(command.wrapper_session_id)
         }
         Command::Hook(command) => tools::codex::hook_commands::run_hook_command(command),
         Command::Internal(command) => return internal::run_internal_command(command),

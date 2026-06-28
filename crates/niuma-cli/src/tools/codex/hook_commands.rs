@@ -24,6 +24,10 @@ pub(crate) fn run_hook_command(command: HookCommand) -> ApiResponse<serde_json::
         ToolArg::Codex if command.uninstall => codex_hook_uninstall(),
         ToolArg::Codex if command.doctor => codex_hook_doctor(),
         ToolArg::Codex => codex_hook_status(),
+        ToolArg::ClaudeCode => ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            "Claude Code hook 命令尚未实现",
+        ),
     }
 }
 

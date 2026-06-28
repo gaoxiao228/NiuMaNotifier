@@ -15,6 +15,10 @@ pub(crate) enum Command {
     CodexSessions,
     CodexSend(CodexSendCommand),
     CodexInterrupt(CodexInterruptCommand),
+    Claude(ClaudeCommand),
+    ClaudeSessions,
+    ClaudeSend(ClaudeSendCommand),
+    ClaudeInterrupt(ClaudeInterruptCommand),
     Hook(HookCommand),
     Internal(InternalRootCommand),
     SampleEvent,
@@ -39,6 +43,25 @@ pub(crate) struct CodexSendCommand {
 
 #[derive(Args)]
 pub(crate) struct CodexInterruptCommand {
+    pub(crate) wrapper_session_id: String,
+}
+
+#[derive(Args)]
+#[command(disable_help_flag = true, disable_version_flag = true)]
+pub(crate) struct ClaudeCommand {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub(crate) args: Vec<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct ClaudeSendCommand {
+    pub(crate) wrapper_session_id: String,
+    #[arg(allow_hyphen_values = true)]
+    pub(crate) message: String,
+}
+
+#[derive(Args)]
+pub(crate) struct ClaudeInterruptCommand {
     pub(crate) wrapper_session_id: String,
 }
 
@@ -73,6 +96,7 @@ pub(crate) enum InternalCommand {
 #[derive(Clone, ValueEnum)]
 pub(crate) enum ToolArg {
     Codex,
+    ClaudeCode,
 }
 
 #[cfg(test)]
@@ -85,6 +109,14 @@ mod tests {
         match cli.command.unwrap() {
             Command::Codex(command) => command.args,
             _ => panic!("expected codex command"),
+        }
+    }
+
+    fn parse_claude_args(argv: &[&str]) -> Vec<String> {
+        let cli = Cli::try_parse_from(argv).unwrap();
+        match cli.command.unwrap() {
+            Command::Claude(command) => command.args,
+            _ => panic!("expected claude command"),
         }
     }
 
@@ -167,6 +199,34 @@ mod tests {
                 assert_eq!(command.wrapper_session_id, "niuma_codex_1");
             }
             _ => panic!("expected codex-interrupt command"),
+        }
+    }
+
+    #[test]
+    fn parses_claude_flags_as_trailing_args() {
+        assert_eq!(
+            parse_claude_args(&["niuma", "claude", "--model", "sonnet"]),
+            vec!["--model".to_string(), "sonnet".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_claude_send_and_interrupt_commands() {
+        let cli = Cli::try_parse_from(["niuma", "claude-send", "niuma_claude_1", "继续"]).unwrap();
+        match cli.command.unwrap() {
+            Command::ClaudeSend(command) => {
+                assert_eq!(command.wrapper_session_id, "niuma_claude_1");
+                assert_eq!(command.message, "继续");
+            }
+            _ => panic!("expected claude-send command"),
+        }
+
+        let cli = Cli::try_parse_from(["niuma", "claude-interrupt", "niuma_claude_1"]).unwrap();
+        match cli.command.unwrap() {
+            Command::ClaudeInterrupt(command) => {
+                assert_eq!(command.wrapper_session_id, "niuma_claude_1");
+            }
+            _ => panic!("expected claude-interrupt command"),
         }
     }
 }
