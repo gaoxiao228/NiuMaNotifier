@@ -1,4 +1,3 @@
-import websocket from '@fastify/websocket'
 import type { FastifyInstance } from 'fastify'
 import { loadConfigFromEnv } from '../config.js'
 import {
@@ -13,6 +12,7 @@ import {
 import { requireAuth, type AuthContext } from '../modules/auth/auth.middleware.js'
 import type { DeviceSocketRegistry } from '../modules/devices/device-socket-registry.js'
 import { createRedis } from '../redis/client.js'
+import { ensureWebsocketRegistered } from './websocket-plugin.js'
 
 export type BoundClientConnection = {
   connectionId: string
@@ -69,7 +69,7 @@ export async function forwardClientSignal(input: {
 }
 
 export async function registerClientSocket(app: FastifyInstance, registry: DeviceSocketRegistry) {
-  await app.register(websocket)
+  await ensureWebsocketRegistered(app)
 
   const config = loadConfigFromEnv()
   const redis = createRedis(config.redisUrl)

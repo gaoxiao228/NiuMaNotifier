@@ -1,4 +1,3 @@
-import websocket from '@fastify/websocket'
 import type { FastifyInstance } from 'fastify'
 import { loadConfigFromEnv } from '../config.js'
 import { createDb } from '../db/client.js'
@@ -14,6 +13,7 @@ import { createDevicesRepository } from '../modules/devices/devices.repository.j
 import { createPresenceService } from '../modules/devices/presence.service.js'
 import { createRedis } from '../redis/client.js'
 import { createPublicId } from '../shared/id.js'
+import { ensureWebsocketRegistered } from './websocket-plugin.js'
 import { deviceSocketMessageSchema } from './ws-message.schemas.js'
 
 export type DeviceMessageDeps = {
@@ -72,7 +72,7 @@ export async function registerDeviceSocket(
   app: FastifyInstance,
   registry: DeviceSocketRegistry = createDeviceSocketRegistry()
 ) {
-  await app.register(websocket)
+  await ensureWebsocketRegistered(app)
 
   const config = loadConfigFromEnv()
   const { db } = createDb(config.databaseUrl)

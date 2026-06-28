@@ -1,4 +1,3 @@
-import websocket from '@fastify/websocket'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { loadConfigFromEnv } from '../config.js'
 import { createDb } from '../db/client.js'
@@ -12,6 +11,7 @@ import { createRelaySocketRegistry, type RelaySocketRegistry } from '../modules/
 import { relayBindSchema, relayFrameSchema, type RelaySide } from '../modules/relay/relay.schemas.js'
 import { createRedis } from '../redis/client.js'
 import { createPublicId } from '../shared/id.js'
+import { ensureWebsocketRegistered } from './websocket-plugin.js'
 
 export type RelayActor =
   | { kind: 'client'; userId: string }
@@ -106,7 +106,7 @@ export async function registerRelaySocket(
   app: FastifyInstance,
   registry: RelaySocketRegistry = createRelaySocketRegistry()
 ) {
-  await app.register(websocket)
+  await ensureWebsocketRegistered(app)
 
   const config = loadConfigFromEnv()
   const redis = createRedis(config.redisUrl)

@@ -9,8 +9,10 @@ const envSchema = z.object({
   REMOTE_SERVER_PORT: z.coerce.number().int().positive().default(27880),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
-  JWT_PRIVATE_KEY: z.string().min(1),
-  JWT_PUBLIC_KEY: z.string().min(1),
+  JWT_PRIVATE_KEY: z.string().min(1).optional(),
+  JWT_PUBLIC_KEY: z.string().min(1).optional(),
+  JWT_PRIVATE_KEY_BASE64: z.string().min(1).optional(),
+  JWT_PUBLIC_KEY_BASE64: z.string().min(1).optional(),
   TOKEN_PEPPER: z.string().min(1),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
@@ -26,6 +28,31 @@ const envSchema = z.object({
 
 export type RemoteServerConfig = ReturnType<typeof loadConfigFromEnv>
 
+function wrapPemBody(body: string, label: 'PRIVATE KEY' | 'PUBLIC KEY') {
+  const lines = body.match(/.{1,64}/g)?.join('\n') ?? body
+  return `-----BEGIN ${label}-----\n${lines}\n-----END ${label}-----`
+}
+
+function decodeBase64Env(value: string, name: string, label: 'PRIVATE KEY' | 'PUBLIC KEY') {
+  try {
+    const decoded = Buffer.from(value, 'base64').toString('utf8')
+    return decoded.includes('-----BEGIN ') ? decoded : wrapPemBody(value, label)
+  } catch {
+    throw new Error(`${name} 不是有效的 base64 字符串`)
+  }
+}
+
+function requiredKey(
+  pem: string | undefined,
+  base64: string | undefined,
+  name: string,
+  label: 'PRIVATE KEY' | 'PUBLIC KEY'
+) {
+  if (pem) return pem
+  if (base64) return decodeBase64Env(base64, `${name}_BASE64`, label)
+  throw new Error(`${name} 或 ${name}_BASE64 必须配置`)
+}
+
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.parse(env)
 
@@ -39,8 +66,18 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env) {
     port: parsed.REMOTE_SERVER_PORT,
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
-    jwtPrivateKey: parsed.JWT_PRIVATE_KEY,
-    jwtPublicKey: parsed.JWT_PUBLIC_KEY,
+    jwtPrivateKey: requiredKey(
+      parsed.JWT_PRIVATE_KEY,
+      parsed.JWT_PRIVATE_KEY_BASE64,
+      'JWT_PRIVATE_KEY',
+      'PRIVATE KEY'
+    ),
+    jwtPublicKey: requiredKey(
+      parsed.JWT_PUBLIC_KEY,
+      parsed.JWT_PUBLIC_KEY_BASE64,
+      'JWT_PUBLIC_KEY',
+      'PUBLIC KEY'
+    ),
     tokenPepper: parsed.TOKEN_PEPPER,
     accessTokenTtlSeconds: parsed.ACCESS_TOKEN_TTL_SECONDS,
     refreshTokenTtlDays: parsed.REFRESH_TOKEN_TTL_DAYS,

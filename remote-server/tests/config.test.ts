@@ -28,4 +28,32 @@ describe('remote server config', () => {
       })
     ).toThrow('REMOTE_SERVER_PORT 不能使用常见默认端口')
   })
+
+  it('accepts base64 encoded jwt keys for docker env files', () => {
+    const privatePem = '-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----\n'
+    const publicPem = '-----BEGIN PUBLIC KEY-----\npublic\n-----END PUBLIC KEY-----\n'
+    const config = loadConfigFromEnv({
+      DATABASE_URL: 'postgres://niuma:pw@postgres:5432/niuma_remote',
+      REDIS_URL: 'redis://redis:6379',
+      JWT_PRIVATE_KEY_BASE64: Buffer.from(privatePem).toString('base64'),
+      JWT_PUBLIC_KEY_BASE64: Buffer.from(publicPem).toString('base64'),
+      TOKEN_PEPPER: 'pepper'
+    })
+
+    expect(config.jwtPrivateKey).toBe(privatePem)
+    expect(config.jwtPublicKey).toBe(publicPem)
+  })
+
+  it('wraps base64 der jwt keys as pem for docker env files', () => {
+    const config = loadConfigFromEnv({
+      DATABASE_URL: 'postgres://niuma:pw@postgres:5432/niuma_remote',
+      REDIS_URL: 'redis://redis:6379',
+      JWT_PRIVATE_KEY_BASE64: 'cHJpdmF0ZQ==',
+      JWT_PUBLIC_KEY_BASE64: 'cHVibGlj',
+      TOKEN_PEPPER: 'pepper'
+    })
+
+    expect(config.jwtPrivateKey).toContain('-----BEGIN PRIVATE KEY-----')
+    expect(config.jwtPublicKey).toContain('-----BEGIN PUBLIC KEY-----')
+  })
 })
