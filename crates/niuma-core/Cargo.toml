@@ -14,8 +14,10 @@ base64 = "0.22"
 chrono.workspace = true
 dirs = "6"
 fs2 = "0.4"
+hex = "0.4"
 hkdf = "0.12"
 libc = "0.2"
+rand = "0.8"
 rand_core = "0.6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde.workspace = true
