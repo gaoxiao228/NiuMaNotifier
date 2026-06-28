@@ -127,6 +127,133 @@ pub(crate) fn save_listener_config(
 }
 
 #[tauri::command]
+pub(crate) fn get_remote_settings(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    match runtime_state.store.remote_config() {
+        Ok(config) => ApiResponse::ok(serde_json::json!({
+            "settings": crate::remote::commands::remote_settings_payload(config, false)
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn save_remote_settings(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    server_url: String,
+    remote_access_enabled: bool,
+    remote_control_enabled: bool,
+) -> ApiResponse<serde_json::Value> {
+    crate::remote::commands::save_remote_settings_to_store(
+        &runtime_state.store,
+        server_url,
+        remote_access_enabled,
+        remote_control_enabled,
+    )
+}
+
+#[tauri::command]
+pub(crate) fn clear_remote_binding(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    let mut config = match runtime_state.store.remote_config() {
+        Ok(config) => config,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    config.user = None;
+    config.device = None;
+    config.last_connected_at = None;
+    match runtime_state.store.save_remote_config(&config) {
+        Ok(()) => ApiResponse::ok(serde_json::json!({
+            "cleared": true,
+            "settings": crate::remote::commands::remote_settings_payload(config, false)
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn start_remote_login(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> Result<ApiResponse<serde_json::Value>, String> {
+    let config = match runtime_state.store.remote_config() {
+        Ok(config) => config,
+        Err(error) => return Ok(ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+    if !config.remote_access_enabled {
+        return Ok(ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            "远程访问未启用",
+        ));
+    }
+
+    Ok(
+        match crate::remote::login_flow::start_remote_login_session(&config).await {
+            Ok(started) => ApiResponse::ok(serde_json::json!({
+                "started": true,
+                "server_url": config.server_url,
+                "request_id": started.request_id,
+                "poll_token": started.poll_token,
+                "login_url": started.login_url,
+                "expires_in": started.expires_in
+            })),
+            Err(error) => ApiResponse::fail(ApiErrorCode::System, error),
+        },
+    )
+}
+
+#[tauri::command]
+pub(crate) async fn poll_remote_login(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+    request_id: String,
+    poll_token: String,
+) -> Result<ApiResponse<serde_json::Value>, String> {
+    if request_id.trim().is_empty() || poll_token.trim().is_empty() {
+        return Ok(ApiResponse::fail(
+            ApiErrorCode::BusinessValidation,
+            "登录轮询参数不能为空",
+        ));
+    }
+    let config = match runtime_state.store.remote_config() {
+        Ok(config) => config,
+        Err(error) => return Ok(ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+
+    let poll_result = match crate::remote::login_flow::poll_remote_login_session(
+        &config.server_url,
+        &request_id,
+        &poll_token,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => return Ok(ApiResponse::fail(ApiErrorCode::System, error)),
+    };
+
+    if let Some(binding) = poll_result.binding {
+        let credential_store = crate::remote::commands::credential_store_for_data_dir(
+            NiumaStore::default_path()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(std::env::temp_dir),
+        );
+        return Ok(crate::remote::commands::apply_remote_binding_result(
+            &runtime_state.store,
+            &credential_store,
+            &config.server_url,
+            poll_result.device_identity_private_key,
+            binding,
+        ));
+    }
+
+    Ok(ApiResponse::ok(serde_json::json!({
+        "completed": false,
+        "settings": crate::remote::commands::remote_settings_payload(config, false)
+    })))
+}
+
+#[tauri::command]
 pub(crate) fn get_plugins(
     runtime_state: tauri::State<'_, AppRuntimeState>,
 ) -> ApiResponse<serde_json::Value> {

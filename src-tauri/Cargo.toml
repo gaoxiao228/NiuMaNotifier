@@ -15,6 +15,9 @@ tauri-build = { version = "2", features = [] }
 chrono.workspace = true
 niuma-api = { path = "../crates/niuma-api" }
 niuma-core = { path = "../crates/niuma-core" }
+once_cell = "1"
+open = "5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15"
 serde.workspace = true
 serde_json.workspace = true
