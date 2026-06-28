@@ -38,6 +38,7 @@ select {
 .brand,
 .language-picker,
 .panel-title,
+.panel-title-label,
 .status {
   display: inline-flex;
   align-items: center;
@@ -126,6 +127,38 @@ select {
   padding: 14px;
 }
 
+.device-panel-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-title-label {
+  gap: 8px;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid #b8c2ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #18202a;
+  cursor: pointer;
+}
+
+.state-message {
+  margin: 12px 0 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.state-message-error {
+  color: #b42318;
+}
+
 .device-table {
   width: 100%;
   margin-top: 12px;
@@ -136,7 +169,7 @@ select {
 
 .device-row {
   display: grid;
-  grid-template-columns: minmax(160px, 2fr) 120px 90px 120px 80px;
+  grid-template-columns: minmax(180px, 2fr) 120px minmax(180px, 1.4fr) 80px;
   min-width: 640px;
   align-items: center;
   border-top: 1px solid #e2e8f0;
@@ -185,6 +218,26 @@ select {
   background: #ffffff;
   color: #0f766e;
   cursor: pointer;
+}
+
+button:disabled,
+.icon-button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.json-preview {
+  margin: 12px 0 0;
+  overflow: auto;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+  color: #18202a;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 @media (max-width: 760px) {

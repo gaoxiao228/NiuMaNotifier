@@ -55,6 +55,6 @@ describe('i18n messages', () => {
     expect(document.title).toBe(messages.en.app_title)
     expect(document.documentElement.lang).toBe('en')
     expect(screen.getByLabelText(messages.en.language)).not.toBeNull()
-    expect(screen.getByRole('columnheader', { name: messages.en.identifier })).not.toBeNull()
+    expect(screen.getByRole('textbox', { name: messages.en.email })).not.toBeNull()
   })
 })

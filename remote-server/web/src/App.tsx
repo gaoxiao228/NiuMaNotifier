@@ -1,24 +1,49 @@
-import { Activity, Globe2, LockKeyhole, MonitorUp, PlugZap, Server } from 'lucide-react'
+import { Globe2, LockKeyhole, MonitorUp, PlugZap } from 'lucide-react'
+import type { FormEvent } from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { createAuthApi } from './api/authApi.js'
+import type { RemoteDevice } from './api/devicesApi.js'
+import { createDevicesApi } from './api/devicesApi.js'
+import { createHttpClient } from './api/httpClient.js'
+import { createLocalStorageAuthStore } from './auth/authStore.js'
+import { DeviceListPage } from './devices/deviceListPage.js'
 import { createTranslator, detectLanguage } from './i18n/index.js'
 import { supportedLanguages, type SupportedLanguage } from './i18n/messages.js'
-
-const deviceRows = [
-  { id: 'mac-studio-01', state: 'online', sessions: 3, relay: 'sha-01' },
-  { id: 'win-lab-07', state: 'offline', sessions: 0, relay: 'fra-02' },
-  { id: 'linux-edge-03', state: 'online', sessions: 1, relay: 'nrt-01' }
-] as const
 
 export function App() {
   const [language, setLanguage] = useState<SupportedLanguage>(() => detectLanguage())
   const t = useMemo(() => createTranslator(language), [language])
+  const authStore = useMemo(() => createLocalStorageAuthStore(), [])
+  const http = useMemo(() => createHttpClient(authStore), [authStore])
+  const authApi = useMemo(() => createAuthApi(http), [http])
+  const devicesApi = useMemo(() => createDevicesApi(http), [http])
+  const [token, setToken] = useState<string | null>(() => authStore.getToken())
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const [selectedDevice, setSelectedDevice] = useState<RemoteDevice | null>(null)
 
   useEffect(() => {
     document.title = t('app_title')
     document.documentElement.lang = language
   }, [language, t])
 
-  // 首屏使用静态数据占位，后续任务接入真实登录态和设备 API。
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const response = await authApi.login(email, password)
+      authStore.setToken(response.access_token)
+      setToken(response.access_token)
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : t('login_failed'))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
   return (
     <main className="console-shell">
       <header className="topbar">
@@ -43,58 +68,54 @@ export function App() {
       </header>
 
       <section className="workspace" aria-label={t('devices')}>
-        <aside className="login-panel">
-          <div className="panel-title">
-            <LockKeyhole aria-hidden="true" size={18} />
-            <span>{t('login')}</span>
-          </div>
-          <label>
-            {t('email')}
-            <input type="email" autoComplete="email" placeholder="operator@example.com" />
-          </label>
-          <label>
-            {t('password')}
-            <input type="password" autoComplete="current-password" placeholder="••••••••" />
-          </label>
-          <button type="button">
-            <PlugZap aria-hidden="true" size={16} />
-            {t('connect')}
-          </button>
-        </aside>
-
-        <section className="device-panel">
-          <div className="panel-title">
-            <Server aria-hidden="true" size={18} />
-            <span>{t('devices')}</span>
-          </div>
-          <div className="device-table" role="table" aria-label={t('devices')}>
-            <div className="device-row device-row-head" role="row">
-              <span role="columnheader">{t('identifier')}</span>
-              <span role="columnheader">{t('state')}</span>
-              <span role="columnheader">{t('sessions')}</span>
-              <span role="columnheader">{t('relay')}</span>
-              <span role="columnheader">{t('connect')}</span>
+        {!token ? (
+          <form className="login-panel" onSubmit={handleLogin}>
+            <div className="panel-title">
+              <LockKeyhole aria-hidden="true" size={18} />
+              <span>{t('login')}</span>
             </div>
-            {deviceRows.map((device) => (
-              <div className="device-row" role="row" key={device.id}>
-                <span role="cell" className="device-id">
-                  {device.id}
-                </span>
-                <span role="cell" className={`status status-${device.state}`}>
-                  <Activity aria-hidden="true" size={14} />
-                  {t(device.state)}
-                </span>
-                <span role="cell">{device.sessions}</span>
-                <span role="cell">{device.relay}</span>
-                <span role="cell">
-                  <button type="button" className="icon-button" aria-label={`${t('connect')} ${device.id}`}>
-                    <PlugZap aria-hidden="true" size={15} />
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
+            <label>
+              {t('email')}
+              <input
+                type="email"
+                autoComplete="email"
+                placeholder={t('email_placeholder')}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              {t('password')}
+              <input
+                type="password"
+                autoComplete="current-password"
+                placeholder={t('password_placeholder')}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+            </label>
+            {loginError ? (
+              <p className="state-message state-message-error" role="alert">
+                {t('login_failed')}: {loginError}
+              </p>
+            ) : null}
+            <button type="submit" disabled={loginLoading}>
+              <PlugZap aria-hidden="true" size={16} />
+              {loginLoading ? t('connecting') : t('login')}
+            </button>
+          </form>
+        ) : selectedDevice ? (
+          <section className="device-panel">
+            <div className="panel-title">
+              <span>{t('selected_device')}</span>
+            </div>
+            <pre className="json-preview">{JSON.stringify(selectedDevice, null, 2)}</pre>
+          </section>
+        ) : (
+          <DeviceListPage devicesApi={devicesApi} t={t} onSelectDevice={setSelectedDevice} />
+        )}
       </section>
     </main>
   )
