@@ -33,6 +33,12 @@ pub fn codex_managed_registry_path() -> PathBuf {
     app_data_dir().join("managed-sessions").join("codex.json")
 }
 
+pub fn claude_code_managed_registry_path() -> PathBuf {
+    app_data_dir()
+        .join("managed-sessions")
+        .join("claude-code.json")
+}
+
 pub fn app_data_dir_from_env(
     appdata: Option<&str>,
     xdg_data_home: Option<&str>,
