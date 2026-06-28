@@ -38,10 +38,17 @@ export function App() {
       authStore.setToken(response.access_token)
       setToken(response.access_token)
     } catch (err) {
-      setLoginError(err instanceof Error ? err.message : t('login_failed'))
+      const message = err instanceof Error ? err.message : t('login_failed')
+      setLoginError(message === t('login_failed') ? message : `${t('login_failed')}: ${message}`)
     } finally {
       setLoginLoading(false)
     }
+  }
+
+  function clearSession() {
+    authStore.clearToken()
+    setToken(null)
+    setSelectedDevice(null)
   }
 
   return (
@@ -67,7 +74,7 @@ export function App() {
         </label>
       </header>
 
-      <section className="workspace" aria-label={t('devices')}>
+      <section className={`workspace ${token ? 'workspace-authenticated' : ''}`} aria-label={t('devices')}>
         {!token ? (
           <form className="login-panel" onSubmit={handleLogin}>
             <div className="panel-title">
@@ -98,7 +105,7 @@ export function App() {
             </label>
             {loginError ? (
               <p className="state-message state-message-error" role="alert">
-                {t('login_failed')}: {loginError}
+                {loginError}
               </p>
             ) : null}
             <button type="submit" disabled={loginLoading}>
@@ -114,7 +121,12 @@ export function App() {
             <pre className="json-preview">{JSON.stringify(selectedDevice, null, 2)}</pre>
           </section>
         ) : (
-          <DeviceListPage devicesApi={devicesApi} t={t} onSelectDevice={setSelectedDevice} />
+          <DeviceListPage
+            devicesApi={devicesApi}
+            t={t}
+            onSelectDevice={setSelectedDevice}
+            onUnauthorized={clearSession}
+          />
         )}
       </section>
     </main>

@@ -73,6 +73,10 @@ select {
   padding: 16px;
 }
 
+.workspace-authenticated {
+  grid-template-columns: 1fr;
+}
+
 .login-panel,
 .device-panel {
   border: 1px solid #cfd6df;
