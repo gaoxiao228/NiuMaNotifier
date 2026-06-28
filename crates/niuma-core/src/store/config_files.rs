@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::listener_config::ListenerConfig;
 use crate::platform::locale::LanguagePreference;
+use crate::remote::config::RemoteConfig;
+use crate::remote::settings::default_remote_config;
 
 #[derive(Clone, Debug)]
 pub(super) struct ConfigFileStore {
@@ -20,6 +22,8 @@ struct AppConfigFile {
     language_preference: String,
     #[serde(default)]
     plugin_enabled_map: BTreeMap<String, bool>,
+    #[serde(default = "default_remote_config")]
+    remote_config: RemoteConfig,
 }
 
 impl Default for AppConfigFile {
@@ -28,6 +32,7 @@ impl Default for AppConfigFile {
             listener_config: ListenerConfig::default(),
             language_preference: default_language_preference(),
             plugin_enabled_map: BTreeMap::new(),
+            remote_config: default_remote_config(),
         }
     }
 }
@@ -76,6 +81,16 @@ impl ConfigFileStore {
     ) -> Result<(), String> {
         let mut app_config = self.read_app_config()?;
         app_config.plugin_enabled_map = map.clone();
+        self.write_app_config(&app_config)
+    }
+
+    pub(super) fn remote_config(&self) -> Result<RemoteConfig, String> {
+        Ok(self.read_app_config()?.remote_config)
+    }
+
+    pub(super) fn save_remote_config(&self, config: &RemoteConfig) -> Result<(), String> {
+        let mut app_config = self.read_app_config()?;
+        app_config.remote_config = config.clone();
         self.write_app_config(&app_config)
     }
 

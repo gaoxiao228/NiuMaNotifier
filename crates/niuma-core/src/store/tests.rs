@@ -1862,6 +1862,40 @@ fn language_preference_defaults_to_system_and_persists() {
 }
 
 #[test]
+fn remote_config_defaults_and_persists_without_device_token() {
+    let root = test_data_dir("json_remote_config");
+    let path = root.join("niuma.sqlite");
+    let store = NiumaStore::new(path.clone());
+
+    let default_config = store.remote_config().unwrap();
+    assert_eq!(default_config.server_url, "https://remote.niuma.example");
+    assert!(default_config.remote_access_enabled);
+    assert!(default_config.remote_control_enabled);
+    assert!(default_config.device.is_none());
+
+    let mut saved = default_config;
+    saved.server_url = "https://self-hosted.example.com".to_string();
+    saved.remote_control_enabled = false;
+    saved.user = Some(crate::remote::config::RemoteUserSummary {
+        id: "user_1".to_string(),
+        email: "user@example.com".to_string(),
+        role: "owner".to_string(),
+    });
+    saved.device = Some(crate::remote::config::RemoteDeviceSummary {
+        id: "dev_1".to_string(),
+        name: "NiuMa MacBook".to_string(),
+    });
+
+    store.save_remote_config(&saved).unwrap();
+    let reloaded = NiumaStore::new(path).remote_config().unwrap();
+
+    assert_eq!(reloaded.server_url, "https://self-hosted.example.com");
+    assert!(!reloaded.remote_control_enabled);
+    assert_eq!(reloaded.user.unwrap().email, "user@example.com");
+    assert_eq!(reloaded.device.unwrap().id, "dev_1");
+}
+
+#[test]
 fn plugin_runtime_states_are_memory_only() {
     let path = test_sqlite_path("runtime_states_memory_only");
     let store = NiumaStore::new(&path);
