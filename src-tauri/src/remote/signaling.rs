@@ -58,12 +58,8 @@ impl RemoteSignalingManager {
         }
         let transport = match invite.transport_preference {
             TransportPreference::Webrtc | TransportPreference::Auto => TransportPreference::Webrtc,
-            TransportPreference::Relay => {
-                return vec![connection_reject_message(
-                    &invite.connection_id,
-                    ConnectionRejectReason::UnsupportedTransport,
-                )]
-            }
+            // Task 5 只完成 relay bind 握手，后续 ping/pong 和帧收发由 relay_runtime 接入。
+            TransportPreference::Relay => TransportPreference::Relay,
         };
         if let Ok(mut sessions) = self.sessions.lock() {
             if !sessions.is_empty() && !sessions.contains_key(&invite.connection_id) {
@@ -188,6 +184,20 @@ mod tests {
         let outbound = manager.handle_invite(&config, sample_invite());
 
         assert_eq!(outbound[0]["type"], "connection.accept");
+        assert!(manager.has_session("conn_1"));
+    }
+
+    #[test]
+    fn accepts_relay_invite_and_tracks_session() {
+        let manager = RemoteSignalingManager::default();
+        let config = RemoteConfig::default_for_server("https://remote.example.com");
+        let mut invite = sample_invite();
+        invite.transport_preference = TransportPreference::Relay;
+
+        let outbound = manager.handle_invite(&config, invite);
+
+        assert_eq!(outbound[0]["type"], "connection.accept");
+        assert_eq!(outbound[0]["data"]["transport"], "relay");
         assert!(manager.has_session("conn_1"));
     }
 

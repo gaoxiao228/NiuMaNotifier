@@ -12,9 +12,10 @@ import { createConnectionsRepository } from './connections.repository.js'
 import { connectionCreateSchema } from './connections.schemas.js'
 import { createConnectionsService } from './connections.service.js'
 
-function mapInviteTransportPreference(_input: 'webrtc_first' | 'relay_first' | 'relay_only') {
-  // 本机 relay runtime 在 Task 5 接入前不接受 relay 邀请，先统一使用 auto 保持信令闭环。
-  return 'auto'
+function mapInviteTransportPreference(input: 'webrtc_first' | 'relay_first' | 'relay_only') {
+  // 本机 Task 5 已支持 relay accept；完整 relay ping/pong 由后续 runtime 接入。
+  if (input === 'webrtc_first') return 'auto'
+  return 'relay'
 }
 
 export function createConnectionInviteMessage(input: {
