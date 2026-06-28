@@ -3,7 +3,7 @@ import { bindRelaySocket, forwardRelayFrame } from '../src/ws/relay-socket.js'
 import { createHash } from '../src/shared/crypto.js'
 
 describe('/ws/relay bind', () => {
-  it('binds when connection token and user/device ownership match', async () => {
+  it('binds browser clients with only a matching connection token', async () => {
     const tokenHash = createHash('cnt_valid_token_with_enough_length_123456', 'pepper')
     const result = await bindRelaySocket({
       query: {
@@ -11,7 +11,7 @@ describe('/ws/relay bind', () => {
         connection_token: 'cnt_valid_token_with_enough_length_123456',
         side: 'client'
       },
-      actor: { kind: 'client', userId: 'usr_1' },
+      actor: { kind: 'client' },
       tokenPepper: 'pepper',
       state: {
         async get() {
@@ -58,6 +58,35 @@ describe('/ws/relay bind', () => {
             device_id: 'dev_1',
             client_id: 'web_1',
             token_hash: 'bad_hash',
+            status: 'signaling',
+            created_at: '2026-06-28T00:00:00.000Z',
+            expires_at: '2099-01-01T00:00:00.000Z'
+          }
+        }
+      }
+    })
+
+    expect(result).toEqual({ ok: false, code: 220403, message: '连接权限不足' })
+  })
+
+  it('rejects device side actor mismatch', async () => {
+    const tokenHash = createHash('cnt_valid_token_with_enough_length_123456', 'pepper')
+    const result = await bindRelaySocket({
+      query: {
+        connection_id: 'conn_1',
+        connection_token: 'cnt_valid_token_with_enough_length_123456',
+        side: 'device'
+      },
+      actor: { kind: 'device', deviceId: 'dev_other' },
+      tokenPepper: 'pepper',
+      state: {
+        async get() {
+          return {
+            connection_id: 'conn_1',
+            user_id: 'usr_1',
+            device_id: 'dev_1',
+            client_id: 'web_1',
+            token_hash: tokenHash,
             status: 'signaling',
             created_at: '2026-06-28T00:00:00.000Z',
             expires_at: '2099-01-01T00:00:00.000Z'
@@ -136,6 +165,36 @@ describe('/ws/relay frame forwarding', () => {
     })
 
     expect(result).toEqual({ ok: false, code: 220403, message: 'relay 帧序号无效' })
+  })
+
+  it('rejects frames for another connection id', async () => {
+    const result = await forwardRelayFrame({
+      raw: JSON.stringify({
+        version: 1,
+        type: 'relay.frame',
+        id: 'msg_1',
+        connection_id: 'conn_other',
+        seq: 1,
+        ciphertext: 'abc'
+      }),
+      binding: {
+        connectionId: 'conn_1',
+        side: 'client',
+        userId: 'usr_1',
+        deviceId: 'dev_1',
+        clientId: 'web_1'
+      },
+      registry: {
+        acceptSeq() {
+          return true
+        },
+        forward() {
+          return true
+        }
+      }
+    })
+
+    expect(result).toEqual({ ok: false, code: 220403, message: '连接权限不足' })
   })
 })
 

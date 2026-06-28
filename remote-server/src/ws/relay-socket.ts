@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { loadConfigFromEnv } from '../config.js'
 import { createDb } from '../db/client.js'
-import { requireAuth } from '../modules/auth/auth.middleware.js'
 import { createConnectionStateService, type ConnectionState } from '../modules/connections/connection-state.service.js'
 import { createConnectionTokenService } from '../modules/connections/connection-token.service.js'
 import { createDeviceTokenService } from '../modules/devices/device-token.service.js'
@@ -14,7 +13,7 @@ import { createPublicId } from '../shared/id.js'
 import { ensureWebsocketRegistered } from './websocket-plugin.js'
 
 export type RelayActor =
-  | { kind: 'client'; userId: string }
+  | { kind: 'client' }
   | { kind: 'device'; deviceId: string }
 
 export type RelayBinding = {
@@ -45,7 +44,7 @@ export async function bindRelaySocket(input: {
     return { ok: false, code: 220403, message: '连接权限不足' }
   }
 
-  if (parsed.data.side === 'client' && (input.actor.kind !== 'client' || input.actor.userId !== state.user_id)) {
+  if (parsed.data.side === 'client' && input.actor.kind !== 'client') {
     return { ok: false, code: 220403, message: '连接权限不足' }
   }
   if (parsed.data.side === 'device' && (input.actor.kind !== 'device' || input.actor.deviceId !== state.device_id)) {
@@ -85,11 +84,9 @@ export async function forwardRelayFrame(input: {
   return { ok: true }
 }
 
-async function resolveClientActor(request: FastifyRequest, jwtPublicKey: string) {
-  const auth = await requireAuth(request, jwtPublicKey)
-  return auth.ok
-    ? { ok: true as const, actor: { kind: 'client' as const, userId: auth.auth.userId } }
-    : { ok: false as const, code: 200001, message: '未登录' }
+async function resolveClientActor(_request: FastifyRequest) {
+  // 浏览器 WebSocket 无法携带自定义 Authorization header；client side 只通过短期连接 token 绑定。
+  return { ok: true as const, actor: { kind: 'client' as const } }
 }
 
 async function resolveDeviceActor(
@@ -134,7 +131,7 @@ export async function registerRelaySocket(
     }
 
     const actor = parsedQuery.data.side === 'client'
-      ? await resolveClientActor(request, config.jwtPublicKey)
+      ? await resolveClientActor(request)
       : await resolveDeviceActor(request, deviceTokenService)
     if (!actor.ok) {
       socket.close(4001, JSON.stringify({ code: actor.code, message: actor.message }))
