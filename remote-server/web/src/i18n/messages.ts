@@ -1,0 +1,95 @@
+export const supportedLanguages = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'de'] as const
+export type SupportedLanguage = (typeof supportedLanguages)[number]
+
+export const messages: Record<SupportedLanguage, Record<string, string>> = {
+  'zh-CN': {
+    app_title: 'NiuMaNotifier 远程控制台',
+    login: '登录',
+    email: '邮箱',
+    password: '密码',
+    devices: '设备',
+    online: '在线',
+    offline: '离线',
+    connect: '连接',
+    connecting: '连接中',
+    connected: '已连接',
+    relay: 'relay',
+    state: '状态',
+    sessions: '会话'
+  },
+  'zh-TW': {
+    app_title: 'NiuMaNotifier 遠端控制台',
+    login: '登入',
+    email: '電子郵件',
+    password: '密碼',
+    devices: '裝置',
+    online: '在線',
+    offline: '離線',
+    connect: '連線',
+    connecting: '連線中',
+    connected: '已連線',
+    relay: 'relay',
+    state: '狀態',
+    sessions: '會話'
+  },
+  en: {
+    app_title: 'NiuMaNotifier Remote Console',
+    login: 'Sign in',
+    email: 'Email',
+    password: 'Password',
+    devices: 'Devices',
+    online: 'Online',
+    offline: 'Offline',
+    connect: 'Connect',
+    connecting: 'Connecting',
+    connected: 'Connected',
+    relay: 'relay',
+    state: 'State',
+    sessions: 'Sessions'
+  },
+  ja: {
+    app_title: 'NiuMaNotifier リモートコンソール',
+    login: 'ログイン',
+    email: 'メール',
+    password: 'パスワード',
+    devices: 'デバイス',
+    online: 'オンライン',
+    offline: 'オフライン',
+    connect: '接続',
+    connecting: '接続中',
+    connected: '接続済み',
+    relay: 'relay',
+    state: '状態',
+    sessions: 'セッション'
+  },
+  ko: {
+    app_title: 'NiuMaNotifier 원격 콘솔',
+    login: '로그인',
+    email: '이메일',
+    password: '비밀번호',
+    devices: '기기',
+    online: '온라인',
+    offline: '오프라인',
+    connect: '연결',
+    connecting: '연결 중',
+    connected: '연결됨',
+    relay: 'relay',
+    state: '상태',
+    sessions: '세션'
+  },
+  de: {
+    app_title: 'NiuMaNotifier Remote-Konsole',
+    login: 'Anmelden',
+    email: 'E-Mail',
+    password: 'Passwort',
+    devices: 'Geräte',
+    online: 'Online',
+    offline: 'Offline',
+    connect: 'Verbinden',
+    connecting: 'Verbindung läuft',
+    connected: 'Verbunden',
+    relay: 'relay',
+    state: 'Status',
+    sessions: 'Sitzungen'
+  }
+}
