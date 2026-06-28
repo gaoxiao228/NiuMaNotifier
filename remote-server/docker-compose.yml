@@ -1,0 +1,42 @@
+services:
+  remote-server:
+    build: .
+    ports:
+      - "27880:27880"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: niuma_remote
+      POSTGRES_USER: niuma
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  coturn:
+    image: coturn/coturn:latest
+    profiles:
+      - turn
+    ports:
+      - "13478:3478/udp"
+      - "13478:3478/tcp"
+    command:
+      - --listening-port=3478
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=niuma-remote
+
+volumes:
+  postgres_data:
+  redis_data:
