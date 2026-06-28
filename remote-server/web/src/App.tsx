@@ -2,6 +2,7 @@ import { Globe2, LockKeyhole, MonitorUp, PlugZap } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { createAuthApi } from './api/authApi.js'
+import { createConnectionsApi } from './api/connectionsApi.js'
 import type { RemoteDevice } from './api/devicesApi.js'
 import { createDevicesApi } from './api/devicesApi.js'
 import { createHttpClient } from './api/httpClient.js'
@@ -9,6 +10,7 @@ import { createLocalStorageAuthStore } from './auth/authStore.js'
 import { DeviceListPage } from './devices/deviceListPage.js'
 import { createTranslator, detectLanguage } from './i18n/index.js'
 import { supportedLanguages, type SupportedLanguage } from './i18n/messages.js'
+import { DeviceConsolePage } from './remote/deviceConsolePage.js'
 import { toDisplayErrorMessage } from './shared/errorMessage.js'
 
 export function App() {
@@ -18,6 +20,7 @@ export function App() {
   const http = useMemo(() => createHttpClient(authStore), [authStore])
   const authApi = useMemo(() => createAuthApi(http), [http])
   const devicesApi = useMemo(() => createDevicesApi(http), [http])
+  const connectionsApi = useMemo(() => createConnectionsApi(http), [http])
   const [token, setToken] = useState<string | null>(() => authStore.getToken())
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -115,12 +118,12 @@ export function App() {
             </button>
           </form>
         ) : selectedDevice ? (
-          <section className="device-panel">
-            <div className="panel-title">
-              <span>{t('selected_device')}</span>
-            </div>
-            <pre className="json-preview">{JSON.stringify(selectedDevice, null, 2)}</pre>
-          </section>
+          <DeviceConsolePage
+            device={selectedDevice}
+            connectionsApi={connectionsApi}
+            t={t}
+            onBack={() => setSelectedDevice(null)}
+          />
         ) : (
           <DeviceListPage
             devicesApi={devicesApi}

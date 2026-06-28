@@ -126,6 +126,19 @@ select {
   cursor: pointer;
 }
 
+.console-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #0f766e;
+  color: #ffffff;
+  cursor: pointer;
+}
+
 .device-panel {
   min-width: 0;
   padding: 14px;
@@ -198,6 +211,46 @@ select {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+.console-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.console-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.console-summary > div {
+  min-width: 0;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.console-summary strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.summary-label {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.console-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.signal-log {
+  min-width: 0;
+}
+
 .status {
   gap: 6px;
   font-weight: 700;
@@ -256,6 +309,10 @@ button:disabled,
   }
 
   .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .console-summary {
     grid-template-columns: 1fr;
   }
 }
