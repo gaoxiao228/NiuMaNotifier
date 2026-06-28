@@ -2481,6 +2481,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "niuma-claude-code-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "niuma-core",
+ "notify",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "niuma-cli"
 version = "0.1.0"
 dependencies = [

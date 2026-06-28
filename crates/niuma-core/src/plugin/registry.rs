@@ -10,7 +10,8 @@ use crate::listener_config::ListenerConfig;
 use crate::models::ToolKind;
 
 use super::{
-    builtin_bark_manifest, builtin_codex_manifest, builtin_ntfy_manifest, enablement,
+    builtin_bark_manifest, builtin_claude_code_manifest, builtin_codex_manifest,
+    builtin_ntfy_manifest, enablement,
     validation::{plugin_capability_id, provider_capabilities},
     PluginCapability, PluginConfigField, PluginKind, PluginManifest, PluginRuntimeState,
     PluginRuntimeStatus, PluginSource, BUILTIN_CODEX_PLUGIN_ID,
@@ -103,6 +104,7 @@ impl PluginRegistry {
     pub fn with_builtin_plugins() -> Self {
         let mut registry = Self::new();
         registry.register(builtin_codex_manifest());
+        registry.register(builtin_claude_code_manifest());
         registry.register(builtin_bark_manifest());
         registry.register(builtin_ntfy_manifest());
         registry

@@ -304,6 +304,60 @@ fn builtin_ntfy_manifest_uses_command_override_from_env() {
 }
 
 #[test]
+fn builtin_claude_code_manifest_runs_as_independent_plugin_process() {
+    let _guard = env_lock().lock().unwrap();
+    std::env::remove_var(CLAUDE_CODE_PLUGIN_COMMAND_ENV);
+
+    let manifest = builtin_claude_code_manifest();
+
+    assert_eq!(manifest.id, "builtin-claude-code");
+    assert_eq!(manifest.source, PluginSource::Builtin);
+    assert_eq!(manifest.tool_id, Some(ToolKind::ClaudeCode));
+    assert_eq!(manifest.command.as_deref(), Some("niuma-claude-code-plugin"));
+    assert_eq!(manifest.args, Vec::<String>::new());
+    assert!(manifest
+        .capabilities
+        .contains(&PluginCapability::EventWatcher));
+    assert!(manifest
+        .capabilities
+        .contains(&PluginCapability::ToolSessionListProvider));
+    assert!(manifest
+        .capabilities
+        .contains(&PluginCapability::ToolSessionDetailProvider));
+}
+
+#[test]
+fn builtin_claude_code_manifest_uses_command_override_from_env() {
+    let _guard = env_lock().lock().unwrap();
+    std::env::set_var(
+        CLAUDE_CODE_PLUGIN_COMMAND_ENV,
+        "/tmp/niuma-claude-code-plugin-test",
+    );
+
+    let manifest = builtin_claude_code_manifest();
+
+    std::env::remove_var(CLAUDE_CODE_PLUGIN_COMMAND_ENV);
+    assert_eq!(
+        manifest.command.as_deref(),
+        Some("/tmp/niuma-claude-code-plugin-test")
+    );
+    assert!(manifest.args.is_empty());
+}
+
+#[test]
+fn builtin_registry_contains_claude_code_plugin() {
+    let _guard = env_lock().lock().unwrap();
+    std::env::remove_var(CLAUDE_CODE_PLUGIN_COMMAND_ENV);
+
+    let registry = PluginRegistry::with_builtin_plugins();
+    let plugin = registry.plugin_for_tool(&ToolKind::ClaudeCode).unwrap();
+
+    assert_eq!(plugin.id, "builtin-claude-code");
+    assert_eq!(plugin.source, PluginSource::Builtin);
+    assert_eq!(plugin.tool_id, Some(ToolKind::ClaudeCode));
+}
+
+#[test]
 fn builtin_codex_manifest_runs_as_independent_plugin_process() {
     let _guard = env_lock().lock().unwrap();
     std::env::remove_var(CODEX_PLUGIN_COMMAND_ENV);

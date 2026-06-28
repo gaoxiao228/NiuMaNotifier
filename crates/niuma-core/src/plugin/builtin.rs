@@ -1,17 +1,22 @@
 use super::{parse_plugin_manifest, PluginManifest, PluginSource};
 
 pub const CODEX_PLUGIN_COMMAND_ENV: &str = "NIUMA_CODEX_PLUGIN_COMMAND";
+pub const CLAUDE_CODE_PLUGIN_COMMAND_ENV: &str = "NIUMA_CLAUDE_CODE_PLUGIN_COMMAND";
 pub const BARK_PLUGIN_COMMAND_ENV: &str = "NIUMA_BARK_PLUGIN_COMMAND";
 pub const NTFY_PLUGIN_COMMAND_ENV: &str = "NIUMA_NTFY_PLUGIN_COMMAND";
 pub const BUILTIN_CODEX_PLUGIN_ID: &str = "builtin-codex";
+pub const BUILTIN_CLAUDE_CODE_PLUGIN_ID: &str = "builtin-claude-code";
 pub const BUILTIN_BARK_PLUGIN_ID: &str = "builtin-bark";
 pub const BUILTIN_NTFY_PLUGIN_ID: &str = "builtin-ntfy";
 
 const CODEX_PLUGIN_COMMAND: &str = "niuma-codex-plugin";
+const CLAUDE_CODE_PLUGIN_COMMAND: &str = "niuma-claude-code-plugin";
 const BARK_PLUGIN_COMMAND: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_COMMAND: &str = "niuma-plugin-ntfy";
 const BUILTIN_CODEX_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../../builtin-plugins/codex/plugin.json");
+const BUILTIN_CLAUDE_CODE_PLUGIN_MANIFEST_JSON: &str =
+    include_str!("../../../../builtin-plugins/claude-code/plugin.json");
 const BUILTIN_BARK_PLUGIN_MANIFEST_JSON: &str =
     include_str!("../../../../builtin-plugins/bark/plugin.json");
 const BUILTIN_NTFY_PLUGIN_MANIFEST_JSON: &str =
@@ -22,6 +27,20 @@ pub fn builtin_codex_manifest() -> PluginManifest {
         .expect("内置 Codex 插件 manifest 必须是有效 plugin.json");
     manifest.source = PluginSource::Builtin;
     manifest.command = Some(builtin_codex_plugin_command(manifest.command));
+    // 内置插件的 binary 路径由桌面端/环境变量解析，不使用源码目录作为运行目录。
+    manifest.base_dir = None;
+    manifest
+}
+
+pub fn builtin_claude_code_manifest() -> PluginManifest {
+    let mut manifest = parse_plugin_manifest(BUILTIN_CLAUDE_CODE_PLUGIN_MANIFEST_JSON)
+        .expect("内置 Claude Code 插件 manifest 必须是有效 plugin.json");
+    manifest.source = PluginSource::Builtin;
+    manifest.command = Some(builtin_plugin_command(
+        CLAUDE_CODE_PLUGIN_COMMAND_ENV,
+        manifest.command,
+        CLAUDE_CODE_PLUGIN_COMMAND,
+    ));
     // 内置插件的 binary 路径由桌面端/环境变量解析，不使用源码目录作为运行目录。
     manifest.base_dir = None;
     manifest

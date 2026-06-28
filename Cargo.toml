@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "builtin-plugins/bark-runtime",
+    "builtin-plugins/claude-code-runtime",
     "builtin-plugins/codex-runtime",
     "builtin-plugins/ntfy-runtime",
     "crates/niuma-api",

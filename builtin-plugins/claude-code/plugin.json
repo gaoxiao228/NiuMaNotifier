@@ -1,0 +1,16 @@
+{
+  "id": "builtin-claude-code",
+  "kind": "tool",
+  "tool_id": "claude_code",
+  "display_name": "Claude Code",
+  "version": "0.1.0",
+  "command": "niuma-claude-code-plugin",
+  "args": [],
+  "platforms": ["macos", "windows", "linux"],
+  "capabilities": [
+    "event_watcher",
+    "tool_session_list_provider",
+    "tool_session_detail_provider"
+  ],
+  "source": "builtin"
+}

@@ -8,9 +8,10 @@ mod runtime_state;
 mod validation;
 
 pub use builtin::{
-    builtin_bark_manifest, builtin_codex_manifest, builtin_ntfy_manifest, BARK_PLUGIN_COMMAND_ENV,
-    BUILTIN_BARK_PLUGIN_ID, BUILTIN_CODEX_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
-    CODEX_PLUGIN_COMMAND_ENV, NTFY_PLUGIN_COMMAND_ENV,
+    builtin_bark_manifest, builtin_claude_code_manifest, builtin_codex_manifest,
+    builtin_ntfy_manifest, BARK_PLUGIN_COMMAND_ENV, BUILTIN_BARK_PLUGIN_ID,
+    BUILTIN_CLAUDE_CODE_PLUGIN_ID, BUILTIN_CODEX_PLUGIN_ID, BUILTIN_NTFY_PLUGIN_ID,
+    CLAUDE_CODE_PLUGIN_COMMAND_ENV, CODEX_PLUGIN_COMMAND_ENV, NTFY_PLUGIN_COMMAND_ENV,
 };
 pub use config::{
     merge_plugin_config_with_defaults, plugin_config_defaults, resolve_plugin_config,
