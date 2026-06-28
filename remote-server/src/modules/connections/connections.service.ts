@@ -116,6 +116,7 @@ export function createConnectionsService(options: {
         data: {
           connection_id: connectionId,
           connection_token: issued.token,
+          expires_at: expiresAt.toISOString(),
           expires_in: options.ttlSeconds,
           signaling_url: toWebSocketUrl(options.publicUrl, '/ws/client'),
           relay_url: toWebSocketUrl(options.publicUrl, '/ws/relay')

@@ -46,15 +46,46 @@ describe('connection routes', () => {
 })
 
 describe('connection create device notification', () => {
-  it('uses a device invitation message shape', () => {
+  it('uses a RemoteAgent compatible invitation message shape', () => {
     const message = createConnectionInviteMessage({
       connectionId: 'conn_1',
       clientId: 'web_1',
-      transportPreference: 'webrtc_first'
+      transportPreference: 'webrtc_first',
+      expiresAt: '2026-06-28T00:02:00.000Z'
     })
 
-    expect(message.type).toBe('connection.invite')
-    expect(message.connection_id).toBe('conn_1')
-    expect(message.data.transport_preference).toBe('webrtc_first')
+    expect(message).toEqual({
+      version: 1,
+      type: 'connection.invite',
+      id: 'msg_conn_1',
+      data: {
+        connection_id: 'conn_1',
+        client_id: 'web_1',
+        transport_preference: 'auto',
+        expires_at: '2026-06-28T00:02:00.000Z'
+      }
+    })
+    expect(message).not.toHaveProperty('connection_id')
+  })
+
+  it('maps server transport preference to RemoteAgent protocol values', () => {
+    expect(createConnectionInviteMessage({
+      connectionId: 'conn_1',
+      clientId: 'web_1',
+      transportPreference: 'webrtc_first',
+      expiresAt: '2026-06-28T00:02:00.000Z'
+    }).data.transport_preference).toBe('auto')
+    expect(createConnectionInviteMessage({
+      connectionId: 'conn_2',
+      clientId: 'web_1',
+      transportPreference: 'relay_first',
+      expiresAt: '2026-06-28T00:02:00.000Z'
+    }).data.transport_preference).toBe('relay')
+    expect(createConnectionInviteMessage({
+      connectionId: 'conn_3',
+      clientId: 'web_1',
+      transportPreference: 'relay_only',
+      expiresAt: '2026-06-28T00:02:00.000Z'
+    }).data.transport_preference).toBe('relay')
   })
 })

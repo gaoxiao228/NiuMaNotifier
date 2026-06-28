@@ -108,6 +108,20 @@ describe('device websocket schema and registry', () => {
     expect(close).toHaveBeenCalledWith(4003, 'token_revoked')
     expect(registry.has('dev_1')).toBe(false)
   })
+
+  it('does not let a stale device close remove a newer device socket', () => {
+    const registry = createDeviceSocketRegistry()
+    const oldSocket = { close: vi.fn(), send: vi.fn() }
+    const newSocket = { close: vi.fn(), send: vi.fn() }
+
+    registry.add('dev_1', oldSocket)
+    registry.add('dev_1', newSocket)
+
+    expect(registry.remove('dev_1', oldSocket)).toBe(false)
+    expect(registry.sendToDevice('dev_1', { type: 'connection.invite' })).toBe(true)
+    expect(oldSocket.send).not.toHaveBeenCalled()
+    expect(newSocket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'connection.invite' }))
+  })
 })
 
 describe('device websocket lifecycle', () => {

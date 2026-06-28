@@ -61,6 +61,22 @@ describe('client signaling prerequisites', () => {
       }).type
     ).toBe('signal.offer')
   })
+
+  it('rejects client signal messages missing protocol required fields', () => {
+    expect(() => clientSignalMessageSchema.parse({
+      version: 1,
+      id: 'msg_1',
+      type: 'signal.offer',
+      data: {}
+    })).toThrow()
+
+    expect(() => clientSignalMessageSchema.parse({
+      version: 1,
+      id: 'msg_2',
+      type: 'signal.ice_candidate',
+      data: {}
+    })).toThrow()
+  })
 })
 
 describe('/ws/client signaling', () => {

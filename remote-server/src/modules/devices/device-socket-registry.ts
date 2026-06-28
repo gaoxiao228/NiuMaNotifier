@@ -12,8 +12,11 @@ export function createDeviceSocketRegistry() {
     add(deviceId: string, socket: DeviceSocket) {
       sockets.set(deviceId, socket)
     },
-    remove(deviceId: string) {
+    remove(deviceId: string, socket?: DeviceSocket) {
+      if (socket && sockets.get(deviceId) !== socket) return false
+
       sockets.delete(deviceId)
+      return true
     },
     has(deviceId: string) {
       return sockets.has(deviceId)

@@ -131,8 +131,9 @@ export async function registerDeviceSocket(
     })
 
     socket.on('close', async () => {
-      registry.remove(auth.device.id)
-      await presence.markOffline(auth.device.id)
+      if (registry.remove(auth.device.id, socket)) {
+        await presence.markOffline(auth.device.id)
+      }
     })
   })
 }

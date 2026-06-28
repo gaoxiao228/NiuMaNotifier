@@ -11,9 +11,21 @@ export const connectionClientBindSchema = z.object({
   connection_token: z.string().min(32)
 })
 
-export const signalingPayloadSchema = z.object({
-  sdp: z.string().optional(),
-  candidate: z.unknown().optional()
+const sdpSchema = z.string().min(1).max(262144)
+const candidateSchema = z.string().min(1).max(8192)
+
+export const signalOfferPayloadSchema = z.object({
+  sdp: sdpSchema
+})
+
+export const signalAnswerPayloadSchema = z.object({
+  sdp: sdpSchema
+})
+
+export const signalIceCandidatePayloadSchema = z.object({
+  candidate: candidateSchema,
+  sdp_mid: z.string().min(1).max(160).nullable().optional(),
+  sdp_mline_index: z.number().int().nonnegative().nullable().optional()
 })
 
 export const clientSignalMessageSchema = z.discriminatedUnion('type', [
@@ -21,19 +33,19 @@ export const clientSignalMessageSchema = z.discriminatedUnion('type', [
     version: z.literal(1),
     id: z.string().min(1),
     type: z.literal('signal.offer'),
-    data: signalingPayloadSchema
+    data: signalOfferPayloadSchema
   }),
   z.object({
     version: z.literal(1),
     id: z.string().min(1),
     type: z.literal('signal.answer'),
-    data: signalingPayloadSchema
+    data: signalAnswerPayloadSchema
   }),
   z.object({
     version: z.literal(1),
     id: z.string().min(1),
     type: z.literal('signal.ice_candidate'),
-    data: signalingPayloadSchema
+    data: signalIceCandidatePayloadSchema
   }),
   z.object({
     version: z.literal(1),
