@@ -15,6 +15,22 @@ export type RelaySocketBind = {
   side: RelaySide
 }
 
+export type RelayClientOptions = {
+  url: string
+  connectionId: string
+  WebSocketImpl?: typeof WebSocket
+  onOpen(): void
+  onPayload(value: unknown): void
+  onClose(): void
+  onError(error: Error): void
+}
+
+export type RelayClient = {
+  socket: WebSocket
+  send(value: unknown): void
+  close(): void
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64')
 
@@ -44,6 +60,17 @@ export function decodeRelayPayload(payload: string): unknown {
   return JSON.parse(json) as unknown
 }
 
+export function createRelayFrame(connectionId: string, seq: number, payloadValue: unknown): RelayFrame {
+  return {
+    version: 1,
+    type: 'relay.frame',
+    id: `relay_${seq}`,
+    connection_id: connectionId,
+    seq,
+    ciphertext: encodeRelayPayload(payloadValue)
+  }
+}
+
 export function buildRelaySocketUrl(baseUrlOrWsUrl: string, bind: RelaySocketBind): string {
   const source = baseUrlOrWsUrl || window.location.origin
   const url = new URL(source, window.location.origin)
@@ -62,4 +89,67 @@ export function buildRelaySocketUrl(baseUrlOrWsUrl: string, bind: RelaySocketBin
   url.searchParams.set('connection_token', bind.connection_token)
   url.searchParams.set('side', bind.side)
   return url.toString()
+}
+
+function parseRelayMessage(data: unknown): unknown {
+  if (typeof data !== 'string') return data
+  return JSON.parse(data) as unknown
+}
+
+function isRelayFrame(value: unknown): value is RelayFrame {
+  if (value === null || typeof value !== 'object') return false
+  const item = value as Partial<RelayFrame>
+  return (
+    item.version === 1 &&
+    item.type === 'relay.frame' &&
+    typeof item.connection_id === 'string' &&
+    typeof item.seq === 'number' &&
+    typeof item.ciphertext === 'string'
+  )
+}
+
+export function createRelayClient(options: RelayClientOptions): RelayClient {
+  const WebSocketCtor = options.WebSocketImpl ?? WebSocket
+  const socket = new WebSocketCtor(options.url)
+  let active = true
+  let closedByClient = false
+  let nextSeq = 1
+
+  socket.onopen = () => {
+    if (active) options.onOpen()
+  }
+  socket.onmessage = (event) => {
+    if (!active) return
+    try {
+      const frame = parseRelayMessage(event.data)
+      if (!isRelayFrame(frame) || frame.connection_id !== options.connectionId) return
+      options.onPayload(decodeRelayPayload(frame.ciphertext))
+    } catch (err) {
+      options.onError(err instanceof Error ? err : new Error('Relay payload decode failed'))
+    }
+  }
+  socket.onerror = () => {
+    if (active) options.onError(new Error('Relay websocket error'))
+  }
+  socket.onclose = () => {
+    if (!active) return
+    active = false
+    if (!closedByClient) options.onClose()
+  }
+
+  return {
+    socket,
+    send(value) {
+      if (!active) return
+      const frame = createRelayFrame(options.connectionId, nextSeq, value)
+      nextSeq += 1
+      socket.send(JSON.stringify(frame))
+    },
+    close() {
+      if (!active && closedByClient) return
+      closedByClient = true
+      active = false
+      socket.close()
+    }
+  }
 }

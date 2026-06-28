@@ -251,6 +251,47 @@ select {
   min-width: 0;
 }
 
+.relay-log {
+  min-width: 0;
+}
+
+.relay-log .panel-title {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.relay-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.relay-status-open {
+  border-color: #99d3ca;
+  color: #0f766e;
+}
+
+.relay-status-error {
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.rpc-result-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.rpc-result {
+  min-width: 0;
+}
+
 .status {
   gap: 6px;
   font-weight: 700;
@@ -313,6 +354,10 @@ button:disabled,
   }
 
   .console-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .rpc-result-grid {
     grid-template-columns: 1fr;
   }
 }

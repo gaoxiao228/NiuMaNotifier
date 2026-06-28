@@ -1,11 +1,36 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildRelaySocketUrl,
+  createRelayClient,
+  createRelayFrame,
   decodeRelayPayload,
   encodeRelayPayload,
   type RelayFrame
 } from '../remote/relayTransport.js'
+
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = []
+
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: unknown }) => void) | null = null
+  onerror: (() => void) | null = null
+  onclose: (() => void) | null = null
+  sent: string[] = []
+  closed = false
+
+  constructor(readonly url: string) {
+    FakeWebSocket.instances.push(this)
+  }
+
+  send(data: string) {
+    this.sent.push(data)
+  }
+
+  close() {
+    this.closed = true
+  }
+}
 
 describe('relayTransport payload codec', () => {
   it('round-trips ping payloads with UTF-8 content', () => {
@@ -60,5 +85,60 @@ describe('RelayFrame', () => {
       connection_id: 'conn_123',
       seq: 1
     })
+  })
+
+  it('creates relay frames with encoded plain payloads', () => {
+    const frame = createRelayFrame('conn_123', 2, { type: 'request', id: 'rpc_1' })
+
+    expect(frame).toMatchObject({
+      version: 1,
+      type: 'relay.frame',
+      id: 'relay_2',
+      connection_id: 'conn_123',
+      seq: 2
+    })
+    expect(decodeRelayPayload(frame.ciphertext)).toEqual({ type: 'request', id: 'rpc_1' })
+  })
+})
+
+describe('createRelayClient', () => {
+  it('sends encoded payload frames and emits decoded incoming payloads', () => {
+    FakeWebSocket.instances = []
+    const onOpen = vi.fn()
+    const onPayload = vi.fn()
+    const onClose = vi.fn()
+    const onError = vi.fn()
+    const client = createRelayClient({
+      url: 'ws://relay.example.com/ws/relay',
+      connectionId: 'conn_123',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      onOpen,
+      onPayload,
+      onClose,
+      onError
+    })
+    const socket = FakeWebSocket.instances[0]
+
+    socket.onopen?.()
+    client.send({ version: 1, type: 'request', id: 'rpc_1', method: 'rpc.ping' })
+
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(socket.sent[0]) as RelayFrame).toMatchObject({
+      version: 1,
+      type: 'relay.frame',
+      id: 'relay_1',
+      connection_id: 'conn_123',
+      seq: 1
+    })
+
+    socket.onmessage?.({
+      data: JSON.stringify(createRelayFrame('conn_123', 7, { version: 1, type: 'response', id: 'rpc_1', ok: true }))
+    })
+
+    expect(onPayload).toHaveBeenCalledWith({ version: 1, type: 'response', id: 'rpc_1', ok: true })
+    client.close()
+    socket.onclose?.()
+    expect(socket.closed).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

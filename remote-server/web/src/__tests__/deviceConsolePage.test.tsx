@@ -5,6 +5,7 @@ import type { RemoteDevice } from '../api/devicesApi.js'
 import type { ConnectionCreateResult } from '../api/connectionsApi.js'
 import { DeviceConsolePage } from '../remote/deviceConsolePage.js'
 import type { ConnectionClientOptions, ConnectionStatus } from '../remote/connectionClient.js'
+import type { RelayClient, RelayClientOptions } from '../remote/relayTransport.js'
 import { createTranslator } from '../i18n/index.js'
 
 const t = createTranslator('en')
@@ -202,5 +203,103 @@ describe('DeviceConsolePage', () => {
       client.onStatus('error')
       client.onMessage({ type: 'connection.accept' })
     }).not.toThrow()
+  })
+
+  it('opens relay after accept, sends console RPC requests, and renders JSON responses', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClients: Array<{
+      close: ReturnType<typeof vi.fn>
+      onStatus: (status: ConnectionStatus) => void
+      onMessage: (value: unknown) => void
+    }> = []
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      const client = {
+        socket: {} as WebSocket,
+        close: vi.fn(),
+        onStatus: options.onStatus,
+        onMessage: options.onMessage
+      }
+      signalClients.push(client)
+      return client
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      signalClients[0]?.onStatus('accepted')
+      signalClients[0]?.onMessage({ type: 'connection.accept' })
+    })
+
+    await waitFor(() => {
+      expect(createRelay).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'wss://relay.example.com/ws/relay?connection_id=conn_123&connection_token=short_token&side=client',
+          connectionId: 'conn_123'
+        })
+      )
+    })
+
+    act(() => {
+      relayOptions?.onOpen()
+    })
+
+    expect(relayClient.send).toHaveBeenCalledTimes(3)
+    expect(relayClient.send).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ id: 'rpc_1', method: 'rpc.ping' })
+    )
+    expect(relayClient.send).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: 'rpc_2', method: 'state.get' })
+    )
+    expect(relayClient.send).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ id: 'rpc_3', method: 'session.list' })
+    )
+
+    act(() => {
+      relayOptions?.onPayload({ version: 1, type: 'response', id: 'rpc_1', ok: true, result: { pong: true } })
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: 'rpc_2',
+        ok: true,
+        result: { state: 'ready' }
+      })
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: 'rpc_3',
+        ok: true,
+        result: { sessions: [{ id: 's1' }] }
+      })
+    })
+
+    expect(await screen.findByText('Ping')).not.toBeNull()
+    expect(screen.getByText(/"pong": true/)).not.toBeNull()
+    expect(screen.getByText(/"state": "ready"/)).not.toBeNull()
+    expect(screen.getByText(/"id": "s1"/)).not.toBeNull()
   })
 })

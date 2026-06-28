@@ -1,4 +1,5 @@
 import { ArrowLeft, PlugZap, TerminalSquare } from 'lucide-react'
+import type { Dispatch, SetStateAction } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ConnectionCreateResult } from '../api/connectionsApi.js'
@@ -11,15 +12,28 @@ import {
   type ConnectionClientOptions,
   type ConnectionStatus
 } from './connectionClient.js'
+import { createPlainRpcClient, type PlainRpcClient } from './plainRpcClient.js'
+import {
+  buildRelaySocketUrl,
+  createRelayClient,
+  type RelayClient,
+  type RelayClientOptions
+} from './relayTransport.js'
 
 type ConnectionsApi = {
   create(deviceId: string, clientId: string): Promise<ConnectionCreateResult>
+}
+
+type RpcResultState = {
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  value: unknown
 }
 
 type DeviceConsolePageProps = {
   device: RemoteDevice
   connectionsApi: ConnectionsApi
   createConnection?: (options: ConnectionClientOptions) => ConnectionClient
+  createRelay?: (options: RelayClientOptions) => RelayClient
   t: (key: string) => string
   onBack(): void
 }
@@ -78,15 +92,22 @@ export function DeviceConsolePage({
   device,
   connectionsApi,
   createConnection = createConnectionClient,
+  createRelay = createRelayClient,
   t,
   onBack
 }: DeviceConsolePageProps) {
   const clientId = useMemo(() => getStableClientId(), [])
   const [status, setStatus] = useState<ConnectionStatus | 'idle'>('idle')
+  const [relayStatus, setRelayStatus] = useState<'idle' | 'connecting' | 'open' | 'closed' | 'error'>('idle')
   const [connectionId, setConnectionId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<unknown[]>([])
+  const [pingResult, setPingResult] = useState<RpcResultState>({ status: 'idle', value: null })
+  const [stateResult, setStateResult] = useState<RpcResultState>({ status: 'idle', value: null })
+  const [sessionsResult, setSessionsResult] = useState<RpcResultState>({ status: 'idle', value: null })
   const socketRef = useRef<ConnectionClient | null>(null)
+  const relayRef = useRef<RelayClient | null>(null)
+  const rpcRef = useRef<PlainRpcClient | null>(null)
   const activeConnectionRef = useRef(0)
   const mountedRef = useRef(false)
 
@@ -96,7 +117,11 @@ export function DeviceConsolePage({
       mountedRef.current = false
       activeConnectionRef.current += 1
       socketRef.current?.close()
+      rpcRef.current?.close()
+      relayRef.current?.close()
       socketRef.current = null
+      rpcRef.current = null
+      relayRef.current = null
     }
   }, [])
 
@@ -104,16 +129,107 @@ export function DeviceConsolePage({
     return mountedRef.current && activeConnectionRef.current === connectionId
   }
 
+  function resetRelayConsole() {
+    setRelayStatus('idle')
+    setPingResult({ status: 'idle', value: null })
+    setStateResult({ status: 'idle', value: null })
+    setSessionsResult({ status: 'idle', value: null })
+  }
+
+  function closeRelayConsole() {
+    rpcRef.current?.close()
+    relayRef.current?.close()
+    rpcRef.current = null
+    relayRef.current = null
+  }
+
+  function displayJson(value: unknown): string {
+    if (value === null) return t('waiting_for_relay')
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+
+  function displayRpcResult(result: RpcResultState): string {
+    if (result.status === 'idle') return t('waiting_for_relay')
+    if (result.status === 'loading') return t('waiting_for_response')
+    return displayJson(result.value)
+  }
+
+  function openRelayConsole(result: ConnectionCreateResult, activeConnectionId: number) {
+    closeRelayConsole()
+    resetRelayConsole()
+    setRelayStatus('connecting')
+
+    const relayUrl = buildRelaySocketUrl(result.relay_url || result.signaling_url || window.location.origin, {
+      connection_id: result.connection_id,
+      connection_token: result.connection_token,
+      side: 'client'
+    })
+    let relayClient: RelayClient
+    const rpcClient = createPlainRpcClient({
+      timeoutMs: 10_000,
+      send: (value) => {
+        relayClient.send(value)
+      }
+    })
+
+    function updateRpcResult(
+      method: string,
+      setResult: Dispatch<SetStateAction<RpcResultState>>
+    ) {
+      setResult({ status: 'loading', value: null })
+      void rpcClient
+        .request(method)
+        .then((value) => {
+          if (isActiveConnection(activeConnectionId)) setResult({ status: 'ready', value })
+        })
+        .catch(() => {
+          if (isActiveConnection(activeConnectionId)) {
+            setResult({ status: 'error', value: t('remote_rpc_failed') })
+          }
+        })
+    }
+
+    relayClient = createRelay({
+      url: relayUrl,
+      connectionId: result.connection_id,
+      onOpen: () => {
+        if (!isActiveConnection(activeConnectionId)) return
+        setRelayStatus('open')
+        updateRpcResult('rpc.ping', setPingResult)
+        updateRpcResult('state.get', setStateResult)
+        updateRpcResult('session.list', setSessionsResult)
+      },
+      onPayload: (value) => {
+        if (isActiveConnection(activeConnectionId)) rpcClient.handle(value)
+      },
+      onClose: () => {
+        if (isActiveConnection(activeConnectionId)) setRelayStatus('closed')
+      },
+      onError: () => {
+        if (isActiveConnection(activeConnectionId)) setRelayStatus('error')
+      }
+    })
+
+    relayRef.current = relayClient
+    rpcRef.current = rpcClient
+  }
+
   async function handleConnect() {
     if (!device.online || status === 'connecting') return
     const activeConnectionId = activeConnectionRef.current + 1
     activeConnectionRef.current = activeConnectionId
     socketRef.current?.close()
+    closeRelayConsole()
     socketRef.current = null
 
     setStatus('connecting')
     setError(null)
     setMessages([])
+    resetRelayConsole()
 
     try {
       const result = await connectionsApi.create(device.id, clientId)
@@ -123,10 +239,16 @@ export function DeviceConsolePage({
         connection_id: result.connection_id,
         connection_token: result.connection_token
       })
+      let relayStarted = false
       socketRef.current = createConnection({
         url: socketUrl,
         onStatus: (nextStatus) => {
-          if (isActiveConnection(activeConnectionId)) setStatus(nextStatus)
+          if (!isActiveConnection(activeConnectionId)) return
+          setStatus(nextStatus)
+          if (nextStatus === 'accepted' && !relayStarted) {
+            relayStarted = true
+            openRelayConsole(result, activeConnectionId)
+          }
         },
         onMessage: (value) => {
           if (isActiveConnection(activeConnectionId)) {
@@ -189,6 +311,29 @@ export function DeviceConsolePage({
           {status === 'connecting' ? t('connecting') : t('connect')}
         </button>
       </div>
+
+      <section className="relay-log" aria-label={t('remote_rpc_status')}>
+        <div className="panel-title">
+          {t('remote_rpc_status')}
+          <span className={`relay-status relay-status-${relayStatus}`}>
+            {t(`relay_status_${relayStatus}`)}
+          </span>
+        </div>
+        <div className="rpc-result-grid">
+          <div className="rpc-result">
+            <div className="summary-label">{t('remote_ping')}</div>
+            <pre className="json-preview">{displayRpcResult(pingResult)}</pre>
+          </div>
+          <div className="rpc-result">
+            <div className="summary-label">{t('remote_state')}</div>
+            <pre className="json-preview">{displayRpcResult(stateResult)}</pre>
+          </div>
+          <div className="rpc-result">
+            <div className="summary-label">{t('remote_sessions')}</div>
+            <pre className="json-preview">{displayRpcResult(sessionsResult)}</pre>
+          </div>
+        </div>
+      </section>
 
       <section className="signal-log" aria-label={t('signal_messages')}>
         <div className="panel-title">{t('signal_messages')}</div>
