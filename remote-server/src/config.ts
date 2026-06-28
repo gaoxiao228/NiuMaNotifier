@@ -15,6 +15,8 @@ const envSchema = z.object({
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   CONNECTION_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(120),
+  DEVICE_PRESENCE_TTL_SECONDS: z.coerce.number().int().positive().default(90),
+  DEVICE_HEARTBEAT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(45),
   REGISTRATION_MODE: z.enum(['open', 'admin_invite', 'disabled']).default('admin_invite'),
   TURN_ENABLED: z.coerce.boolean().default(false),
   TURN_URLS: z.string().default(''),
@@ -43,6 +45,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env) {
     accessTokenTtlSeconds: parsed.ACCESS_TOKEN_TTL_SECONDS,
     refreshTokenTtlDays: parsed.REFRESH_TOKEN_TTL_DAYS,
     connectionTokenTtlSeconds: parsed.CONNECTION_TOKEN_TTL_SECONDS,
+    devicePresenceTtlSeconds: parsed.DEVICE_PRESENCE_TTL_SECONDS,
+    deviceHeartbeatTimeoutSeconds: parsed.DEVICE_HEARTBEAT_TIMEOUT_SECONDS,
     registrationMode: parsed.REGISTRATION_MODE,
     turn: {
       enabled: parsed.TURN_ENABLED,
