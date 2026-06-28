@@ -15,6 +15,7 @@ export type DevicesRepository = {
       capabilityJson: unknown
     }>
   >
+  revokeDeviceToken?(userId: string, deviceId: string, revokedAt: Date): Promise<void>
 }
 
 export function createDevicesService(options: { repo: DevicesRepository }) {
