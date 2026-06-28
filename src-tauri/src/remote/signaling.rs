@@ -1,9 +1,11 @@
+use crate::remote::webrtc_transport::{create_webrtc_answer, WebRtcTransportConfig};
 use niuma_core::remote::config::RemoteConfig;
 use niuma_core::remote::signaling::{
     connection_accept_message, connection_reject_message, signal_cancel_message, ConnectionInvite,
     ConnectionRejectReason, DeviceSignalMessage, SignalCancel, SignalIceCandidate, SignalOffer,
     TransportPreference,
 };
+use niuma_core::remote::transport::RemoteTransportKind;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -92,6 +94,43 @@ impl RemoteSignalingManager {
             .unwrap_or(false)
     }
 
+    pub async fn handle_offer_async(
+        &self,
+        config: &RemoteConfig,
+        offer: SignalOffer,
+        webrtc_config: WebRtcTransportConfig,
+    ) -> Vec<Value> {
+        if !self.has_session(&offer.connection_id) {
+            return vec![signal_cancel_message(
+                &offer.connection_id,
+                "unknown_connection",
+            )];
+        }
+        if !config.remote_access_enabled || !config.remote_control_enabled {
+            return vec![signal_cancel_message(
+                &offer.connection_id,
+                "remote_control_disabled",
+            )];
+        }
+        let connection_id = offer.connection_id.clone();
+        match create_webrtc_answer(&connection_id, offer, webrtc_config).await {
+            Ok(mut result) => {
+                if let Some(status) = &self.status {
+                    status.set_selected_transport(Some(RemoteTransportKind::Webrtc));
+                }
+                let mut outbound = vec![result.answer_message];
+                while let Ok(candidate) = result.ice_rx.try_recv() {
+                    outbound.push(candidate);
+                }
+                outbound
+            }
+            Err(error) => vec![signal_cancel_message(
+                &connection_id,
+                &format!("webrtc_failed:{error}"),
+            )],
+        }
+    }
+
     fn handle_offer(&self, offer: SignalOffer) -> Vec<Value> {
         if !self.has_session(&offer.connection_id) {
             return vec![signal_cancel_message(
@@ -160,5 +199,32 @@ mod tests {
             transport_preference: TransportPreference::Webrtc,
             expires_at: "2026-06-28T00:02:00.000Z".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod webrtc_policy_tests {
+    use super::*;
+    use niuma_core::remote::config::RemoteConfig;
+    use niuma_core::remote::signaling::{DeviceSignalMessage, SignalOffer};
+
+    #[test]
+    fn offer_without_session_is_cancelled() {
+        let manager = RemoteSignalingManager::default();
+        let config = RemoteConfig::default_for_server("https://remote.example.com");
+
+        let outbound = manager.handle_message(
+            &config,
+            DeviceSignalMessage::SignalOffer {
+                id: "msg_1".to_string(),
+                data: SignalOffer {
+                    connection_id: "conn_missing".to_string(),
+                    sdp: "v=0".to_string(),
+                },
+            },
+        );
+
+        assert_eq!(outbound[0]["type"], "signal.cancel");
+        assert_eq!(outbound[0]["data"]["reason"], "unknown_connection");
     }
 }

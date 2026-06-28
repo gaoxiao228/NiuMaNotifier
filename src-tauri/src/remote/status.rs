@@ -1,4 +1,5 @@
 use niuma_core::remote::agent_state::RemoteAgentState;
+use niuma_core::remote::transport::RemoteTransportKind;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +8,7 @@ pub struct RemoteAgentStatus {
     pub state: &'static str,
     pub last_error: Option<String>,
     pub active_connection_id: Option<String>,
+    pub selected_transport: Option<RemoteTransportKind>,
 }
 
 impl RemoteAgentStatus {
@@ -15,6 +17,7 @@ impl RemoteAgentStatus {
             state: state_label(state),
             last_error: None,
             active_connection_id: None,
+            selected_transport: None,
         }
     }
 }
@@ -41,6 +44,7 @@ impl RemoteAgentStatusHandle {
                 state: state_label(state),
                 last_error,
                 active_connection_id: value.active_connection_id.clone(),
+                selected_transport: value.selected_transport,
             };
         }
     }
@@ -48,6 +52,12 @@ impl RemoteAgentStatusHandle {
     pub fn set_active_connection(&self, connection_id: Option<String>) {
         if let Ok(mut value) = self.inner.lock() {
             value.active_connection_id = connection_id;
+        }
+    }
+
+    pub fn set_selected_transport(&self, transport: Option<RemoteTransportKind>) {
+        if let Ok(mut value) = self.inner.lock() {
+            value.selected_transport = transport;
         }
     }
 
@@ -59,6 +69,7 @@ impl RemoteAgentStatusHandle {
                 state: "error",
                 last_error: Some("远程状态锁定失败".to_string()),
                 active_connection_id: None,
+                selected_transport: None,
             })
     }
 }
