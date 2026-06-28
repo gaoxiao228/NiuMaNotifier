@@ -1,5 +1,5 @@
 import { Activity, Globe2, LockKeyhole, MonitorUp, PlugZap, Server } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createTranslator, detectLanguage } from './i18n/index.js'
 import { supportedLanguages, type SupportedLanguage } from './i18n/messages.js'
 
@@ -13,6 +13,10 @@ export function App() {
   const [language, setLanguage] = useState<SupportedLanguage>(() => detectLanguage())
   const t = useMemo(() => createTranslator(language), [language])
 
+  useEffect(() => {
+    document.title = t('app_title')
+  }, [t])
+
   // 首屏使用静态数据占位，后续任务接入真实登录态和设备 API。
   return (
     <main className="console-shell">
@@ -24,7 +28,7 @@ export function App() {
         <label className="language-picker">
           <Globe2 aria-hidden="true" size={16} />
           <select
-            aria-label="language"
+            aria-label={t('language')}
             value={language}
             onChange={(event) => setLanguage(event.target.value as SupportedLanguage)}
           >
@@ -64,7 +68,7 @@ export function App() {
           </div>
           <div className="device-table" role="table" aria-label={t('devices')}>
             <div className="device-row device-row-head" role="row">
-              <span role="columnheader">ID</span>
+              <span role="columnheader">{t('identifier')}</span>
               <span role="columnheader">{t('state')}</span>
               <span role="columnheader">{t('sessions')}</span>
               <span role="columnheader">{t('relay')}</span>

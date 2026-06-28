@@ -15,7 +15,9 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     connected: '已连接',
     relay: 'relay',
     state: '状态',
-    sessions: '会话'
+    sessions: '会话',
+    language: '语言',
+    identifier: '标识'
   },
   'zh-TW': {
     app_title: 'NiuMaNotifier 遠端控制台',
@@ -30,7 +32,9 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     connected: '已連線',
     relay: 'relay',
     state: '狀態',
-    sessions: '會話'
+    sessions: '會話',
+    language: '語言',
+    identifier: '識別碼'
   },
   en: {
     app_title: 'NiuMaNotifier Remote Console',
@@ -45,7 +49,9 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     connected: 'Connected',
     relay: 'relay',
     state: 'State',
-    sessions: 'Sessions'
+    sessions: 'Sessions',
+    language: 'Language',
+    identifier: 'Identifier'
   },
   ja: {
     app_title: 'NiuMaNotifier リモートコンソール',
@@ -60,7 +66,9 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     connected: '接続済み',
     relay: 'relay',
     state: '状態',
-    sessions: 'セッション'
+    sessions: 'セッション',
+    language: '言語',
+    identifier: '識別子'
   },
   ko: {
     app_title: 'NiuMaNotifier 원격 콘솔',
@@ -75,7 +83,9 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     connected: '연결됨',
     relay: 'relay',
     state: '상태',
-    sessions: '세션'
+    sessions: '세션',
+    language: '언어',
+    identifier: '식별자'
   },
   de: {
     app_title: 'NiuMaNotifier Remote-Konsole',
@@ -90,6 +100,8 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     connected: 'Verbunden',
     relay: 'relay',
     state: 'Status',
-    sessions: 'Sitzungen'
+    sessions: 'Sitzungen',
+    language: 'Sprache',
+    identifier: 'Kennung'
   }
 }
