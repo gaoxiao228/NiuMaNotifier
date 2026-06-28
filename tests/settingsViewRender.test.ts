@@ -22,6 +22,10 @@ if (!shell.includes('data-settings-panel="notification-history"')) {
   throw new Error('通知历史入口应声明设置页切换目标')
 }
 
+if (!shell.includes('data-settings-panel="remote-access"')) {
+  throw new Error('设置页左侧应包含远程访问入口')
+}
+
 if (shell.includes('id="settings-event-center"')) {
   throw new Error('设置页不应再渲染事件中心内容容器')
 }

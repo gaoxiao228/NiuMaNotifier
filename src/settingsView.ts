@@ -1,4 +1,4 @@
-import type { PluginConfigField, PluginManagementItem } from './api'
+import type { PluginConfigField, PluginManagementItem, RemoteSettingsPayload } from './api'
 import { translations, type LanguageCode } from './i18n'
 import { renderPluginIcon } from './pluginIcon'
 import { escapeHtml } from './viewUtils'
@@ -8,7 +8,7 @@ export type SettingsShellRenderOptions = {
   activePanel?: SettingsPanel
 }
 
-export type SettingsPanel = 'plugins' | 'notification-history'
+export type SettingsPanel = 'plugins' | 'notification-history' | 'remote-access'
 
 export type PluginManagementRenderOptions = {
   element: HTMLElement | null
@@ -27,10 +27,18 @@ export type PluginManagementRenderOptions = {
   pluginConfigs: Record<string, Record<string, unknown>>
 }
 
+export type RemoteSettingsRenderOptions = {
+  language: LanguageCode
+  settings: RemoteSettingsPayload | null
+  busyAction: 'save' | 'login' | 'logout' | null
+  resultText: string
+}
+
 export function renderSettingsShell(options: SettingsShellRenderOptions) {
   const t = translations[options.language]
   const activePanel = options.activePanel ?? 'plugins'
   const pluginsActive = activePanel === 'plugins'
+  const remoteAccessActive = activePanel === 'remote-access'
   const notificationHistoryActive = activePanel === 'notification-history'
   return `
     <div class="settings-layout">
@@ -41,6 +49,9 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
         <button class="settings-nav-item ${notificationHistoryActive ? 'active' : ''}" type="button" data-settings-panel="notification-history" ${
           notificationHistoryActive ? 'aria-current="page"' : ''
         }>${escapeHtml(t.notificationHistory)}</button>
+        <button class="settings-nav-item ${remoteAccessActive ? 'active' : ''}" type="button" data-settings-panel="remote-access" ${
+          remoteAccessActive ? 'aria-current="page"' : ''
+        }>${escapeHtml(t.remoteAccess)}</button>
       </aside>
       <section class="settings-content">
         <div id="settings-panel-plugins" class="settings-panel plugin-management-panel" ${pluginsActive ? '' : 'hidden'}>
@@ -67,8 +78,69 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
           </div>
           <ol id="settings-notification-history" class="notification-history-list"></ol>
         </div>
+        <div id="settings-panel-remote-access" class="settings-panel remote-settings-panel" ${
+          remoteAccessActive ? '' : 'hidden'
+        }>
+          <div id="remote-settings-panel"></div>
+        </div>
       </section>
     </div>
+  `
+}
+
+export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) {
+  const t = translations[options.language]
+  const settings = options.settings
+  const saveBusy = options.busyAction === 'save'
+  const loginBusy = options.busyAction === 'login'
+  const logoutBusy = options.busyAction === 'logout'
+  const serverUrl = settings?.server_url ?? ''
+  const account = settings?.user?.email ?? t.remoteNotLoggedIn
+  const device = settings?.device?.name ?? t.remoteNoBoundDevice
+  const bound = settings?.bound === true
+  return `
+    <div class="settings-heading">
+      <div>
+        <h2>${escapeHtml(t.remoteAccess)}</h2>
+        <p>${escapeHtml(t.remoteAccessDescription)}</p>
+      </div>
+      <button id="remote-login" type="button" ${loginBusy ? 'disabled' : ''}>${escapeHtml(
+        loginBusy ? t.remoteLoginOpening : t.remoteLogin
+      )}</button>
+    </div>
+    <form id="remote-settings-form" class="remote-settings-form">
+      <label class="plugin-config-field" for="remote-server-url">
+        <span>${escapeHtml(t.remoteServerUrl)}</span>
+        <input id="remote-server-url" name="server_url" type="url" value="${escapeHtml(serverUrl)}">
+      </label>
+      <label class="plugin-enable-toggle remote-toggle">
+        <span>${escapeHtml(t.remoteAccessEnabled)}</span>
+        <input id="remote-access-enabled" name="remote_access_enabled" type="checkbox" ${
+          settings?.remote_access_enabled !== false ? 'checked' : ''
+        }>
+      </label>
+      <label class="plugin-enable-toggle remote-toggle">
+        <span>${escapeHtml(t.remoteControlEnabled)}</span>
+        <input id="remote-control-enabled" name="remote_control_enabled" type="checkbox" ${
+          settings?.remote_control_enabled !== false ? 'checked' : ''
+        }>
+      </label>
+      <button id="remote-settings-save" type="submit" ${saveBusy ? 'disabled' : ''}>${escapeHtml(
+        saveBusy ? t.saving : t.save
+      )}</button>
+    </form>
+    <dl class="remote-binding-summary">
+      <dt>${escapeHtml(t.remoteAccount)}</dt>
+      <dd>${escapeHtml(account)}</dd>
+      <dt>${escapeHtml(t.remoteDevice)}</dt>
+      <dd>${escapeHtml(device)}</dd>
+      <dt>${escapeHtml(t.remoteBindingStatus)}</dt>
+      <dd>${escapeHtml(bound ? t.remoteBound : t.remoteUnbound)}</dd>
+    </dl>
+    <button id="remote-clear-binding" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(
+      logoutBusy ? t.remoteLogoutClearing : t.remoteLogout
+    )}</button>
+    ${options.resultText ? `<p class="settings-result">${escapeHtml(options.resultText)}</p>` : ''}
   `
 }
 

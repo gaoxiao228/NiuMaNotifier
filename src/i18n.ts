@@ -65,6 +65,22 @@ export type Translation = {
   backToDashboard: string
   pluginManagement: string
   pluginManagementDescription: string
+  remoteAccess: string
+  remoteAccessDescription: string
+  remoteServerUrl: string
+  remoteAccessEnabled: string
+  remoteControlEnabled: string
+  remoteLogin: string
+  remoteLoginOpening: string
+  remoteLogout: string
+  remoteLogoutClearing: string
+  remoteAccount: string
+  remoteDevice: string
+  remoteBindingStatus: string
+  remoteBound: string
+  remoteUnbound: string
+  remoteNotLoggedIn: string
+  remoteNoBoundDevice: string
   pluginConfig: string
   importPlugin: string
   importingPlugin: string
@@ -212,6 +228,22 @@ export const translations: Record<LanguageCode, Translation> = {
     backToDashboard: '返回主界面',
     pluginManagement: '插件管理',
     pluginManagementDescription: '管理已发现的工具、通知和状态指示插件，启用后插件会按自身能力运行。',
+    remoteAccess: '远程访问',
+    remoteAccessDescription: '配置外网服务端、账号绑定和远程控制开关。',
+    remoteServerUrl: '远程服务地址',
+    remoteAccessEnabled: '启用远程访问',
+    remoteControlEnabled: '启用远程控制',
+    remoteLogin: '登录并绑定',
+    remoteLoginOpening: '打开中...',
+    remoteLogout: '清除绑定',
+    remoteLogoutClearing: '清除中...',
+    remoteAccount: '账号',
+    remoteDevice: '设备',
+    remoteBindingStatus: '绑定状态',
+    remoteBound: '已绑定',
+    remoteUnbound: '未绑定',
+    remoteNotLoggedIn: '未登录',
+    remoteNoBoundDevice: '未绑定设备',
     pluginConfig: '插件配置',
     importPlugin: '导入插件',
     importingPlugin: '正在导入...',
@@ -385,6 +417,22 @@ export const translations: Record<LanguageCode, Translation> = {
     backToDashboard: '返回主畫面',
     pluginManagement: '外掛管理',
     pluginManagementDescription: '管理已發現的工具、通知和狀態指示外掛，啟用後外掛會依自身能力執行。',
+    remoteAccess: '遠端存取',
+    remoteAccessDescription: '設定外網服務端、帳號綁定與遠端控制開關。',
+    remoteServerUrl: '遠端服務地址',
+    remoteAccessEnabled: '啟用遠端存取',
+    remoteControlEnabled: '啟用遠端控制',
+    remoteLogin: '登入並綁定',
+    remoteLoginOpening: '開啟中...',
+    remoteLogout: '清除綁定',
+    remoteLogoutClearing: '清除中...',
+    remoteAccount: '帳號',
+    remoteDevice: '裝置',
+    remoteBindingStatus: '綁定狀態',
+    remoteBound: '已綁定',
+    remoteUnbound: '未綁定',
+    remoteNotLoggedIn: '未登入',
+    remoteNoBoundDevice: '未綁定裝置',
     pluginConfig: '外掛設定',
     importPlugin: '匯入外掛',
     importingPlugin: '正在匯入...',
@@ -559,6 +607,22 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: 'Plugin management',
     pluginManagementDescription:
       'Manage discovered tool, notification, and status indicator plugins. Enabled plugins run according to their capabilities.',
+    remoteAccess: 'Remote access',
+    remoteAccessDescription: 'Configure the remote server, account binding, and remote control switches.',
+    remoteServerUrl: 'Remote server URL',
+    remoteAccessEnabled: 'Enable remote access',
+    remoteControlEnabled: 'Enable remote control',
+    remoteLogin: 'Sign in and bind',
+    remoteLoginOpening: 'Opening...',
+    remoteLogout: 'Clear binding',
+    remoteLogoutClearing: 'Clearing...',
+    remoteAccount: 'Account',
+    remoteDevice: 'Device',
+    remoteBindingStatus: 'Binding status',
+    remoteBound: 'Bound',
+    remoteUnbound: 'Not bound',
+    remoteNotLoggedIn: 'Not signed in',
+    remoteNoBoundDevice: 'No bound device',
     pluginConfig: 'Plugin config',
     importPlugin: 'Import plugin',
     importingPlugin: 'Importing...',
@@ -733,6 +797,22 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: 'プラグイン管理',
     pluginManagementDescription:
       '検出されたツール、通知、ステータス表示プラグインを管理します。有効なプラグインはそれぞれの機能に応じて動作します。',
+    remoteAccess: 'リモートアクセス',
+    remoteAccessDescription: 'リモートサーバー、アカウント連携、リモート制御のスイッチを設定します。',
+    remoteServerUrl: 'リモートサーバー URL',
+    remoteAccessEnabled: 'リモートアクセスを有効化',
+    remoteControlEnabled: 'リモート制御を有効化',
+    remoteLogin: 'ログインして連携',
+    remoteLoginOpening: '起動中...',
+    remoteLogout: '連携を解除',
+    remoteLogoutClearing: '解除中...',
+    remoteAccount: 'アカウント',
+    remoteDevice: 'デバイス',
+    remoteBindingStatus: '連携状態',
+    remoteBound: '連携済み',
+    remoteUnbound: '未連携',
+    remoteNotLoggedIn: '未ログイン',
+    remoteNoBoundDevice: '連携済みデバイスなし',
     pluginConfig: 'プラグイン設定',
     importPlugin: 'プラグインを取り込む',
     importingPlugin: '取り込み中...',
@@ -907,6 +987,22 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: '플러그인 관리',
     pluginManagementDescription:
       '발견된 도구, 알림 및 상태 표시 플러그인을 관리합니다. 활성화된 플러그인은 각 기능에 따라 실행됩니다.',
+    remoteAccess: '원격 액세스',
+    remoteAccessDescription: '원격 서버, 계정 바인딩, 원격 제어 스위치를 설정합니다.',
+    remoteServerUrl: '원격 서버 URL',
+    remoteAccessEnabled: '원격 액세스 활성화',
+    remoteControlEnabled: '원격 제어 활성화',
+    remoteLogin: '로그인 및 바인딩',
+    remoteLoginOpening: '여는 중...',
+    remoteLogout: '바인딩 해제',
+    remoteLogoutClearing: '해제 중...',
+    remoteAccount: '계정',
+    remoteDevice: '기기',
+    remoteBindingStatus: '바인딩 상태',
+    remoteBound: '바인딩됨',
+    remoteUnbound: '바인딩 안 됨',
+    remoteNotLoggedIn: '로그인 안 됨',
+    remoteNoBoundDevice: '바인딩된 기기 없음',
     pluginConfig: '플러그인 설정',
     importPlugin: '플러그인 가져오기',
     importingPlugin: '가져오는 중...',
@@ -1081,6 +1177,22 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: 'Plugin-Verwaltung',
     pluginManagementDescription:
       'Erkannte Tool-, Benachrichtigungs- und Statusanzeige-Plugins verwalten. Aktivierte Plugins laufen entsprechend ihren Fähigkeiten.',
+    remoteAccess: 'Fernzugriff',
+    remoteAccessDescription: 'Remote-Server, Kontobindung und Fernsteuerung konfigurieren.',
+    remoteServerUrl: 'Remote-Server-URL',
+    remoteAccessEnabled: 'Fernzugriff aktivieren',
+    remoteControlEnabled: 'Fernsteuerung aktivieren',
+    remoteLogin: 'Anmelden und binden',
+    remoteLoginOpening: 'Wird geöffnet...',
+    remoteLogout: 'Bindung löschen',
+    remoteLogoutClearing: 'Wird gelöscht...',
+    remoteAccount: 'Konto',
+    remoteDevice: 'Gerät',
+    remoteBindingStatus: 'Bindungsstatus',
+    remoteBound: 'Gebunden',
+    remoteUnbound: 'Nicht gebunden',
+    remoteNotLoggedIn: 'Nicht angemeldet',
+    remoteNoBoundDevice: 'Kein gebundenes Gerät',
     pluginConfig: 'Plugin-Konfiguration',
     importPlugin: 'Plugin importieren',
     importingPlugin: 'Importiert...',
