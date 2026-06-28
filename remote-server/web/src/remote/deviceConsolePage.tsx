@@ -194,9 +194,10 @@ export function DeviceConsolePage({
         })
     }
 
-    function closeRpcForRelayEvent() {
+    function closeRpcForRelayEvent(options: { closeRelay: boolean }) {
       // relay 断开后本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
       rpcClient.close()
+      if (options.closeRelay) relayClient.close()
       if (rpcRef.current === rpcClient) rpcRef.current = null
       if (relayRef.current === relayClient) relayRef.current = null
     }
@@ -216,12 +217,12 @@ export function DeviceConsolePage({
       },
       onClose: () => {
         if (!isActiveConnection(activeConnectionId)) return
-        closeRpcForRelayEvent()
+        closeRpcForRelayEvent({ closeRelay: false })
         setRelayStatus('closed')
       },
       onError: () => {
         if (!isActiveConnection(activeConnectionId)) return
-        closeRpcForRelayEvent()
+        closeRpcForRelayEvent({ closeRelay: true })
         setRelayStatus('error')
       }
     })

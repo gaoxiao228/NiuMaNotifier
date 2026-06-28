@@ -361,6 +361,62 @@ describe('DeviceConsolePage', () => {
     expect(screen.queryByText('Waiting for response')).toBeNull()
   })
 
+  it('closes relay socket when relay reports an error before close', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClients: Array<{ onStatus: (status: ConnectionStatus) => void }> = []
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      const client = {
+        socket: {} as WebSocket,
+        close: vi.fn(),
+        onStatus: options.onStatus,
+        onMessage: options.onMessage
+      }
+      signalClients.push(client)
+      return client
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      signalClients[0]?.onStatus('accepted')
+    })
+    await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      relayOptions?.onOpen()
+    })
+    await act(async () => {
+      relayOptions?.onError(new Error('invalid relay payload'))
+      await Promise.resolve()
+    })
+
+    expect(relayClient.close).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Relay error')).not.toBeNull()
+    expect(screen.getAllByText('RPC request failed')).toHaveLength(3)
+  })
+
   it('cleans relay RPC requests on unmount and ignores later relay callbacks', async () => {
     const create = vi.fn().mockResolvedValue(createConnectionResult())
     const signalClient = {
