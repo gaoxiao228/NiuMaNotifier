@@ -65,7 +65,7 @@ pub fn parse_codex_messages_newest_first(
     let mut messages = indexed_lines
         .iter()
         .filter_map(|(line_index, line)| {
-            (!is_injected_context_message_line(line))
+            (is_detail_message_line(line) && !is_injected_context_message_line(line))
                 .then(|| parse_codex_message_line(session_id, *line_index, line))
         })
         .collect::<Vec<_>>();
@@ -78,17 +78,18 @@ pub fn is_detail_message_line(line: &str) -> bool {
     let Ok(row) = serde_json::from_str::<CodexRow>(line) else {
         return false;
     };
-    matches!(row.row_type.as_str(), "event_msg" | "response_item")
+    let item_type = row.payload.get("type").and_then(Value::as_str);
+    is_user_visible_detail_row(&row.row_type, item_type, &row.payload)
 }
 
 pub fn detail_message_signature(line: &str) -> Option<DetailMessageSignature> {
     let Ok(row) = serde_json::from_str::<CodexRow>(line) else {
         return None;
     };
-    if !matches!(row.row_type.as_str(), "event_msg" | "response_item") {
+    let item_type = row.payload.get("type").and_then(Value::as_str);
+    if !is_user_visible_detail_row(&row.row_type, item_type, &row.payload) {
         return None;
     }
-    let item_type = row.payload.get("type").and_then(Value::as_str);
     let role = role_for_row(&row.row_type, item_type, &row.payload);
     let content = content_for_row(&row.row_type, item_type, &row.payload);
     if content.is_empty() || is_injected_context_content(&content) {
@@ -100,6 +101,32 @@ pub fn detail_message_signature(line: &str) -> Option<DetailMessageSignature> {
         created_at: parse_timestamp(row.timestamp.as_deref()).unwrap_or_else(epoch),
         is_structured_message: row.row_type == "response_item" && item_type == Some("message"),
     })
+}
+
+fn is_user_visible_detail_row(row_type: &str, item_type: Option<&str>, payload: &Value) -> bool {
+    match row_type {
+        "event_msg" => true,
+        // 普通详情消息只承载用户可读对话，工具调用与输出保留给独立 trace/debug 视图。
+        "response_item" => !is_tool_trace_response_item(item_type, payload),
+        _ => false,
+    }
+}
+
+fn is_tool_trace_response_item(item_type: Option<&str>, payload: &Value) -> bool {
+    match item_type {
+        Some(
+            "function_call"
+            | "custom_tool_call"
+            | "web_search_call"
+            | "tool_search_call"
+            | "image_generation_call"
+            | "function_call_output"
+            | "custom_tool_call_output"
+            | "tool_search_output",
+        ) => true,
+        Some("message") => payload.get("role").and_then(Value::as_str) == Some("tool"),
+        _ => false,
+    }
 }
 
 fn role_for_row(
@@ -381,5 +408,48 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, ToolSessionMessageRole::User);
         assert_eq!(messages[0].content, "真实用户问题");
+    }
+
+    #[test]
+    fn codex_messages_skip_tool_calls_and_outputs_in_detail_messages() {
+        let lines = vec![
+            (
+                0,
+                r#"{"timestamp":"2026-06-22T01:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请执行一个命令"}]}}"#
+                    .to_string(),
+            ),
+            (
+                1,
+                r#"{"timestamp":"2026-06-22T01:00:01Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":"{\"cmd\":\"echo hello\"}"}}"#
+                    .to_string(),
+            ),
+            (
+                2,
+                r#"{"timestamp":"2026-06-22T01:00:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"Chunk ID: f97341\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n"}}"#
+                    .to_string(),
+            ),
+            (
+                3,
+                r#"{"timestamp":"2026-06-22T01:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"命令执行完成"}]}}"#
+                    .to_string(),
+            ),
+        ];
+
+        let messages = parse_codex_messages_newest_first("session-1", &lines);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, ToolSessionMessageRole::Assistant);
+        assert_eq!(messages[0].content, "命令执行完成");
+        assert_eq!(messages[1].role, ToolSessionMessageRole::User);
+        assert_eq!(messages[1].content, "请执行一个命令");
+        let joined = messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains("exec_command"));
+        assert!(!joined.contains("Chunk ID: f97341"));
+        assert!(!joined.contains("Wall time"));
+        assert!(!joined.contains("Original token count"));
     }
 }
