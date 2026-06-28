@@ -15,7 +15,8 @@ export function App() {
 
   useEffect(() => {
     document.title = t('app_title')
-  }, [t])
+    document.documentElement.lang = language
+  }, [language, t])
 
   // 首屏使用静态数据占位，后续任务接入真实登录态和设备 API。
   return (
