@@ -3,6 +3,7 @@ import {
   createDeviceSocketRegistry,
   type DeviceSocketRegistry
 } from './modules/devices/device-socket-registry.js'
+import { registerConnectionsRoutes } from './modules/connections/connections.routes.js'
 import { registerHealthRoutes } from './modules/health/health.routes.js'
 import { ErrorCode } from './shared/errors.js'
 import { apiFailure } from './shared/response.js'
@@ -12,6 +13,7 @@ export type AppDeps = {
   registerAuthRoutes?: (app: FastifyInstance) => Promise<void>
   registerDesktopLoginRoutes?: (app: FastifyInstance) => Promise<void>
   registerDevicesRoutes?: (app: FastifyInstance, deps: { registry: DeviceSocketRegistry }) => Promise<void>
+  registerConnectionsRoutes?: (app: FastifyInstance, deps: { registry: DeviceSocketRegistry }) => Promise<void>
   registerDeviceSocket?: (app: FastifyInstance, registry: DeviceSocketRegistry) => Promise<void>
 }
 
@@ -23,6 +25,7 @@ export function buildApp(deps: AppDeps = {}) {
   if (deps.registerAuthRoutes) void deps.registerAuthRoutes(app)
   if (deps.registerDesktopLoginRoutes) void deps.registerDesktopLoginRoutes(app)
   if (deps.registerDevicesRoutes) void deps.registerDevicesRoutes(app, { registry: deviceSocketRegistry })
+  if (deps.registerConnectionsRoutes) void deps.registerConnectionsRoutes(app, { registry: deviceSocketRegistry })
   if (deps.registerDeviceSocket) void deps.registerDeviceSocket(app, deviceSocketRegistry)
 
   app.setNotFoundHandler(async (_request, reply) => {

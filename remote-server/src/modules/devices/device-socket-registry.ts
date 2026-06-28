@@ -1,12 +1,13 @@
-export type ClosableDeviceSocket = {
+export type DeviceSocket = {
   close(code: number, reason: string): void
+  send?(data: string): void
 }
 
 export function createDeviceSocketRegistry() {
-  const sockets = new Map<string, ClosableDeviceSocket>()
+  const sockets = new Map<string, DeviceSocket>()
 
   return {
-    add(deviceId: string, socket: ClosableDeviceSocket) {
+    add(deviceId: string, socket: DeviceSocket) {
       sockets.set(deviceId, socket)
     },
     remove(deviceId: string) {
@@ -21,6 +22,13 @@ export function createDeviceSocketRegistry() {
 
       socket.close(code, reason)
       sockets.delete(deviceId)
+      return true
+    },
+    sendToDevice(deviceId: string, message: object) {
+      const socket = sockets.get(deviceId)
+      if (!socket?.send) return false
+
+      socket.send(JSON.stringify(message))
       return true
     }
   }
