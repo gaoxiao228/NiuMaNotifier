@@ -86,8 +86,10 @@ fn apply_connection_invite_relay_lifecycle(
         return;
     };
     if transport != "relay" {
-        // 任意被接受的新连接都会替换当前有效连接；WebRTC accept 也必须清理旧 relay。
-        abort_all_relays(relay_tasks);
+        // 同一连接升级出 WebRTC 时 relay 作为热备保留；不同连接仍替换旧 relay。
+        if !relay_tasks.contains_key(&invite.connection_id) {
+            abort_all_relays(relay_tasks);
+        }
         return;
     }
 
@@ -588,6 +590,38 @@ mod signaling_dispatch_tests {
 
         assert!(tasks.is_empty());
         old_rx.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn accepted_webrtc_invite_keeps_existing_relay_for_same_connection() {
+        let config = RemoteConfig::default_for_server("http://127.0.0.1:27880");
+        let invite = niuma_core::remote::signaling::ConnectionInvite {
+            connection_id: "conn_1".to_string(),
+            connection_token: Some("cnt_relay_secret".to_string()),
+            client_id: "web_1".to_string(),
+            client_label: None,
+            transport_preference: niuma_core::remote::signaling::TransportPreference::Webrtc,
+            expires_at: "2026-06-28T00:02:00.000Z".to_string(),
+        };
+        let outbound = vec![serde_json::json!({
+            "type": "connection.accept",
+            "data": { "connection_id": "conn_1", "transport": "webrtc" }
+        })];
+        let mut tasks = RelayTaskMap::default();
+        let (relay_tx, _relay_rx) = oneshot::channel();
+        tasks.insert("conn_1".to_string(), cancellable_relay_task(relay_tx));
+        tokio::task::yield_now().await;
+
+        apply_connection_invite_relay_lifecycle(
+            &mut tasks,
+            &config,
+            "dvt_secret",
+            &invite,
+            &outbound,
+            |_| panic!("WebRTC accept 不应启动 relay task"),
+        );
+
+        assert!(tasks.contains_key("conn_1"));
     }
 
     #[tokio::test]
