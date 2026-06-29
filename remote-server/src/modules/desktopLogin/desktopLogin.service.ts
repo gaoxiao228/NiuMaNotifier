@@ -32,10 +32,6 @@ export type DesktopLoginRepository = {
   findSessionByRequestId(requestId: string): Promise<DesktopLoginSession | null>
   completeSession(requestId: string, input: Partial<DesktopLoginSession>): Promise<void>
   consumeSession(requestId: string): Promise<void>
-  findActiveDeviceByFingerprint(
-    userId: string,
-    fingerprintHash: string
-  ): Promise<{ id: string; name: string } | null>
   upsertDevice(input: {
     userId: string
     name: string

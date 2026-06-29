@@ -25,19 +25,12 @@ function createRepo(): DesktopLoginRepository {
       sessions.get(requestId).status = 'consumed'
       sessions.get(requestId).consumedAt = new Date()
     },
-    async findActiveDeviceByFingerprint(userId, fingerprintHash) {
-      return (
-        [...devices.values()].find(
-          (device) =>
-            device.userId === userId &&
-            device.fingerprintHash === fingerprintHash &&
-            device.status === 'active'
-        ) ?? null
-      )
-    },
     async upsertDevice(input) {
       const existing = [...devices.values()].find(
-        (device) => device.userId === input.userId && device.fingerprintHash === input.fingerprintHash
+        (device) =>
+          device.userId === input.userId &&
+          device.fingerprintHash === input.fingerprintHash &&
+          device.status === 'active'
       )
       if (existing) {
         Object.assign(existing, input)
@@ -140,5 +133,58 @@ describe('desktop login service', () => {
       code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
       message: '桌面登录会话已被消费'
     })
+  })
+
+  it('reuses active device for the same user and fingerprint', async () => {
+    const first = await validStartInput()
+    const second = await validStartInput()
+    second.input.device_fingerprint = first.input.device_fingerprint
+    const repo = createRepo()
+    const service = createDesktopLoginService({
+      repo,
+      config: {
+        publicUrl: 'https://remote.example.com',
+        tokenPepper: 'pepper',
+        desktopLoginTtlSeconds: 600
+      }
+    })
+
+    const startOne = await service.start(first.input)
+    const startTwo = await service.start(second.input)
+    if (!startOne.ok || !startTwo.ok) throw new Error('start failed')
+
+    await service.complete({
+      requestId: startOne.data.request_id,
+      user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
+    })
+    await service.complete({
+      requestId: startTwo.data.request_id,
+      user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
+    })
+
+    const completedOne = await service.poll({
+      request_id: startOne.data.request_id,
+      poll_token: startOne.data.poll_token
+    })
+    const completedTwo = await service.poll({
+      request_id: startTwo.data.request_id,
+      poll_token: startTwo.data.poll_token
+    })
+    expect(completedOne.ok).toBe(true)
+    expect(completedTwo.ok).toBe(true)
+    if (!completedOne.ok || !completedTwo.ok) throw new Error('poll failed')
+
+    const deviceOne = JSON.parse(
+      new TextDecoder().decode(
+        (await compactDecrypt(completedOne.data.encrypted_result.jwe, first.privateKey)).plaintext
+      )
+    ).device
+    const deviceTwo = JSON.parse(
+      new TextDecoder().decode(
+        (await compactDecrypt(completedTwo.data.encrypted_result.jwe, second.privateKey)).plaintext
+      )
+    ).device
+
+    expect(deviceTwo.id).toBe(deviceOne.id)
   })
 })
