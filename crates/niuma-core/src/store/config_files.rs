@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::listener_config::ListenerConfig;
 use crate::platform::locale::LanguagePreference;
 use crate::remote::config::RemoteConfig;
+use crate::remote::device_identity::DeviceInstallId;
 use crate::remote::settings::default_remote_config;
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,12 @@ struct AppConfigFile {
     plugin_enabled_map: BTreeMap<String, bool>,
     #[serde(default = "default_remote_config")]
     remote_config: RemoteConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RemoteDeviceInstallIdFile {
+    version: u32,
+    install_id: String,
 }
 
 impl Default for AppConfigFile {
@@ -94,6 +101,29 @@ impl ConfigFileStore {
         self.write_app_config(&app_config)
     }
 
+    pub(super) fn remote_device_install_id(&self) -> Result<DeviceInstallId, String> {
+        let path = self.remote_device_install_id_path();
+        if path.exists() {
+            let file: RemoteDeviceInstallIdFile = serde_json::from_value(read_json_file(&path)?)
+                .map_err(|error| format!("解析远程设备安装 ID 文件失败：{error}"))?;
+            if file.version != 1 {
+                return Err(format!("远程设备安装 ID 文件版本不支持：{}", file.version));
+            }
+            return DeviceInstallId::from_hex(&file.install_id);
+        }
+
+        let install_id = DeviceInstallId::generate();
+        let file = RemoteDeviceInstallIdFile {
+            version: 1,
+            install_id: install_id.to_hex(),
+        };
+        let value = serde_json::to_value(file)
+            .map_err(|error| format!("序列化远程设备安装 ID 文件失败：{error}"))?;
+        // 安装 ID 独立于运行态 SQLite，用配置文件保证同一安装后续登录复用同一指纹来源。
+        write_json_file(&path, &value)?;
+        Ok(install_id)
+    }
+
     pub(super) fn plugin_config(
         &self,
         plugin_id: &str,
@@ -128,6 +158,10 @@ impl ConfigFileStore {
 
     fn app_config_path(&self) -> PathBuf {
         self.root.join("config.json")
+    }
+
+    fn remote_device_install_id_path(&self) -> PathBuf {
+        self.root.join("remote-device-install-id.json")
     }
 
     fn plugin_config_path(&self, plugin_id: &str) -> PathBuf {

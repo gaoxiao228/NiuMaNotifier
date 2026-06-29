@@ -372,6 +372,19 @@ fn new_store_with_same_path_starts_with_empty_runtime_state() {
 }
 
 #[test]
+fn remote_device_install_id_is_created_once_and_reused() {
+    let root = test_data_dir("remote_device_install_id_reuse");
+    let path = root.join("state.sqlite");
+    let store = NiumaStore::new(path.clone());
+
+    let first = store.remote_device_install_id().unwrap();
+    let second = NiumaStore::new(path).remote_device_install_id().unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first.to_hex().len(), 64);
+}
+
+#[test]
 fn schema_initializes_only_notification_records_table() {
     let path = test_sqlite_path("schema_notification_only");
     let store = NiumaStore::new(path.clone());

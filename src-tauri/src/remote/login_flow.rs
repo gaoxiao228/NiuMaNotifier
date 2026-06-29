@@ -108,8 +108,8 @@ impl RemoteLoginFlow {
 
 pub async fn start_remote_login_session(
     config: &RemoteConfig,
+    install_id: DeviceInstallId,
 ) -> Result<RemoteLoginStarted, String> {
-    let install_id = DeviceInstallId::generate();
     let device_fingerprint = derive_device_fingerprint(&config.server_url, &install_id);
     let key_pair = create_desktop_login_key_pair()?;
     let request = DesktopLoginStartRequest::new(

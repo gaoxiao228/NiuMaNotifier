@@ -197,9 +197,13 @@ pub(crate) async fn start_remote_login(
             "远程访问未启用",
         ));
     }
+    let install_id = match runtime_state.store.remote_device_install_id() {
+        Ok(install_id) => install_id,
+        Err(error) => return Ok(ApiResponse::fail(ApiErrorCode::System, error)),
+    };
 
     Ok(
-        match crate::remote::login_flow::start_remote_login_session(&config).await {
+        match crate::remote::login_flow::start_remote_login_session(&config, install_id).await {
             Ok(started) => ApiResponse::ok(serde_json::json!({
                 "started": true,
                 "server_url": config.server_url,
