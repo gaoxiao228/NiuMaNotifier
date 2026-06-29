@@ -81,4 +81,42 @@ describe('createRemoteMessageBus', () => {
 
     expect(() => bus.send({ type: 'request' })).toThrow('No remote transport is open')
   })
+
+  it('sends through a specific open transport for diagnostics', () => {
+    const relaySend = vi.fn()
+    const webrtcSend = vi.fn()
+    const bus = createRemoteMessageBus({ onInbound: vi.fn() })
+
+    bus.register({ kind: 'relay', send: relaySend, close: vi.fn() })
+    bus.register({ kind: 'webrtc', send: webrtcSend, close: vi.fn() })
+    bus.setOpen('relay', true)
+    bus.setOpen('webrtc', true)
+
+    const selected = bus.sendVia('relay', {
+      version: 1,
+      type: 'request',
+      id: 'rpc_1',
+      method: 'rpc.ping',
+      params: {},
+      transport: { kind: 'webrtc' }
+    })
+
+    expect(selected).toBe('relay')
+    expect(relaySend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'rpc.ping',
+        transport: { kind: 'relay' }
+      })
+    )
+    expect(webrtcSend).not.toHaveBeenCalled()
+  })
+
+  it('throws when the requested transport is not open', () => {
+    const bus = createRemoteMessageBus({ onInbound: vi.fn() })
+    bus.register({ kind: 'relay', send: vi.fn(), close: vi.fn() })
+
+    expect(() => bus.sendVia('relay', { transport: { kind: 'relay' } })).toThrow(
+      'Remote transport is not open: relay'
+    )
+  })
 })

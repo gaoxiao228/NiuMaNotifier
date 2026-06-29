@@ -15,6 +15,7 @@ export type RemoteMessageBus = {
   unregister(kind: RemoteTransportKind): void
   setOpen(kind: RemoteTransportKind, open: boolean): void
   send(value: unknown): RemoteTransportKind
+  sendVia(kind: RemoteTransportKind, value: unknown): RemoteTransportKind
   receive(payload: unknown, observedTransport: RemoteTransportKind): void
   close(): void
 }
@@ -52,6 +53,11 @@ export function createRemoteMessageBus(options: RemoteMessageBusOptions): Remote
     return null
   }
 
+  function findTransport(kind: RemoteTransportKind): RemoteTransport | null {
+    const slot = transports.get(kind)
+    return slot?.open ? slot.transport : null
+  }
+
   return {
     register(transport) {
       transports.set(transport.kind, { transport, open: false })
@@ -66,6 +72,12 @@ export function createRemoteMessageBus(options: RemoteMessageBusOptions): Remote
     send(value) {
       const transport = findOpenTransport()
       if (!transport) throw new Error('No remote transport is open')
+      transport.send(markPayloadTransport(value, transport.kind))
+      return transport.kind
+    },
+    sendVia(kind, value) {
+      const transport = findTransport(kind)
+      if (!transport) throw new Error(`Remote transport is not open: ${kind}`)
       transport.send(markPayloadTransport(value, transport.kind))
       return transport.kind
     },
