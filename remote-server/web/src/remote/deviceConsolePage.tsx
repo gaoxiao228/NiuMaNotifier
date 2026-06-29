@@ -21,6 +21,13 @@ import {
 } from './relayTransport.js'
 import { createRemoteLocalApiClient } from './remoteLocalApiClient.js'
 import { createRemoteMessageBus, type RemoteMessageBus } from './remoteTransport.js'
+import {
+  createWebRtcTransport,
+  type WebRtcAnswerSignal,
+  type WebRtcIceCandidateSignal,
+  type WebRtcTransport,
+  type WebRtcTransportOptions
+} from './webrtcTransport.js'
 
 type ConnectionsApi = {
   create(deviceId: string, clientId: string): Promise<ConnectionCreateResult>
@@ -62,6 +69,7 @@ type DeviceConsolePageProps = {
   connectionsApi: ConnectionsApi
   createConnection?: (options: ConnectionClientOptions) => ConnectionClient
   createRelay?: (options: RelayClientOptions) => RelayClient
+  createWebRtc?: (options: WebRtcTransportOptions) => WebRtcTransport
   autoConnect?: boolean
   t: (key: string) => string
   onBack(): void
@@ -169,11 +177,50 @@ function displaySignalMessage(value: unknown): string {
   }
 }
 
+function signalMessageType(value: unknown): string | null {
+  return isRecord(value) && typeof value.type === 'string' ? value.type : null
+}
+
+function signalMessageData(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value) || !isRecord(value.data)) return null
+  return value.data
+}
+
+function readWebRtcAnswerSignal(value: unknown, connectionId: string): WebRtcAnswerSignal | null {
+  const data = signalMessageData(value)
+  if (signalMessageType(value) !== 'signal.answer' || data?.connection_id !== connectionId || typeof data.sdp !== 'string') {
+    return null
+  }
+  return { connection_id: connectionId, sdp: data.sdp }
+}
+
+function readWebRtcIceCandidateSignal(value: unknown, connectionId: string): WebRtcIceCandidateSignal | null {
+  const data = signalMessageData(value)
+  if (
+    signalMessageType(value) === 'signal.ice_candidate' &&
+    data?.connection_id === connectionId &&
+    typeof data.candidate === 'string' &&
+    (typeof data.sdp_mid === 'undefined' || data.sdp_mid === null || typeof data.sdp_mid === 'string') &&
+    (typeof data.sdp_mline_index === 'undefined' ||
+      data.sdp_mline_index === null ||
+      typeof data.sdp_mline_index === 'number')
+  ) {
+    return {
+      connection_id: connectionId,
+      candidate: data.candidate,
+      sdp_mid: data.sdp_mid as string | null | undefined,
+      sdp_mline_index: data.sdp_mline_index as number | null | undefined
+    }
+  }
+  return null
+}
+
 export function DeviceConsolePage({
   device,
   connectionsApi,
   createConnection = createConnectionClient,
   createRelay = createRelayClient,
+  createWebRtc = createWebRtcTransport,
   autoConnect = false,
   t,
   onBack
@@ -189,11 +236,14 @@ export function DeviceConsolePage({
   const [sessionsResult, setSessionsResult] = useState<RpcResultState>({ status: 'idle', value: null })
   const socketRef = useRef<ConnectionClient | null>(null)
   const relayRef = useRef<RelayClient | null>(null)
+  const webRtcRef = useRef<WebRtcTransport | null>(null)
+  const webRtcOpenRef = useRef(false)
   const messageBusRef = useRef<RemoteMessageBus | null>(null)
   const rpcRef = useRef<PlainRpcClient | null>(null)
   const remoteLocalApiRef = useRef<ReturnType<typeof createRemoteLocalApiClient> | null>(null)
   const sessionStreamRef = useRef<{ close(): Promise<void> } | null>(null)
   const activeConnectionRef = useRef(0)
+  const nextSignalSeqRef = useRef(1)
   const mountedRef = useRef(false)
   const autoConnectStartedRef = useRef(false)
 
@@ -206,12 +256,15 @@ export function DeviceConsolePage({
       void sessionStreamRef.current?.close().catch(() => {})
       rpcRef.current?.close()
       messageBusRef.current?.close()
+      webRtcRef.current?.close()
       relayRef.current?.close()
       socketRef.current = null
       sessionStreamRef.current = null
       remoteLocalApiRef.current = null
       messageBusRef.current = null
       rpcRef.current = null
+      webRtcRef.current = null
+      webRtcOpenRef.current = false
       relayRef.current = null
     }
   }, [])
@@ -231,12 +284,37 @@ export function DeviceConsolePage({
     void sessionStreamRef.current?.close().catch(() => {})
     rpcRef.current?.close()
     messageBusRef.current?.close()
+    webRtcRef.current?.close()
     relayRef.current?.close()
     sessionStreamRef.current = null
     remoteLocalApiRef.current = null
     messageBusRef.current = null
     rpcRef.current = null
+    webRtcRef.current = null
+    webRtcOpenRef.current = false
     relayRef.current = null
+  }
+
+  function nextSignalId(prefix: string): string {
+    const seq = nextSignalSeqRef.current
+    nextSignalSeqRef.current += 1
+    return `msg_${prefix}_${seq}`
+  }
+
+  function handleWebRtcSignal(value: unknown, expectedConnectionId: string) {
+    const transport = webRtcRef.current
+    if (!transport) return
+
+    const answer = readWebRtcAnswerSignal(value, expectedConnectionId)
+    if (answer) {
+      void transport.acceptAnswer(answer).catch(() => {})
+      return
+    }
+
+    const candidate = readWebRtcIceCandidateSignal(value, expectedConnectionId)
+    if (candidate) {
+      void transport.addRemoteIceCandidate(candidate).catch(() => {})
+    }
   }
 
   function displayJson(value: unknown): string {
@@ -311,7 +389,11 @@ export function DeviceConsolePage({
     )
   }
 
-  function openRelayConsole(result: ConnectionCreateResult, activeConnectionId: number) {
+  function openRelayConsole(
+    result: ConnectionCreateResult,
+    activeConnectionId: number,
+    signalClient: ConnectionClient
+  ) {
     closeRelayConsole()
     resetRelayConsole()
     setRelayStatus('connecting')
@@ -340,6 +422,62 @@ export function DeviceConsolePage({
       }
     })
     messageBusRef.current = messageBus
+
+    if (createWebRtc !== createWebRtcTransport || typeof RTCPeerConnection !== 'undefined') {
+      const webRtcTransport = createWebRtc({
+        connectionId: result.connection_id,
+        onOffer: (offer) => {
+          signalClient.send({
+            version: 1,
+            type: 'signal.offer',
+            id: nextSignalId('offer'),
+            data: {
+              sdp: offer.sdp
+            }
+          })
+        },
+        onIceCandidate: (candidate) => {
+          signalClient.send({
+            version: 1,
+            type: 'signal.ice_candidate',
+            id: nextSignalId('ice'),
+            data: {
+              candidate: candidate.candidate,
+              sdp_mid: candidate.sdp_mid ?? null,
+              sdp_mline_index: candidate.sdp_mline_index ?? null
+            }
+          })
+        },
+        onOpen: () => {
+          if (!isActiveConnection(activeConnectionId)) return
+          webRtcOpenRef.current = true
+          messageBus.setOpen('webrtc', true)
+        },
+        onPayload: (value) => {
+          if (isActiveConnection(activeConnectionId)) messageBus.receive(value, 'webrtc')
+        },
+        onClose: () => {
+          if (!isActiveConnection(activeConnectionId)) return
+          webRtcOpenRef.current = false
+          messageBus.setOpen('webrtc', false)
+        },
+        onError: () => {
+          if (!isActiveConnection(activeConnectionId)) return
+          webRtcOpenRef.current = false
+          messageBus.setOpen('webrtc', false)
+        }
+      })
+      webRtcRef.current = webRtcTransport
+      messageBus.register(webRtcTransport)
+      // WebRTC 后台协商失败不影响 relay 首屏可用性。
+      void webRtcTransport.start().catch(() => {
+        if (isActiveConnection(activeConnectionId)) {
+          webRtcOpenRef.current = false
+          messageBus.setOpen('webrtc', false)
+        }
+      })
+    }
+
     const remoteLocalApi = createRemoteLocalApiClient({
       request: (method, params) => rpcClient.request(method, params)
     })
@@ -368,11 +506,14 @@ export function DeviceConsolePage({
       void sessionStreamRef.current?.close().catch(() => {})
       rpcClient.close()
       messageBus.close()
+      webRtcRef.current?.close()
       if (options.closeRelay) relayClient.close()
       sessionStreamRef.current = null
       if (remoteLocalApiRef.current === remoteLocalApi) remoteLocalApiRef.current = null
       if (messageBusRef.current === messageBus) messageBusRef.current = null
       if (rpcRef.current === rpcClient) rpcRef.current = null
+      if (webRtcRef.current) webRtcRef.current = null
+      webRtcOpenRef.current = false
       if (relayRef.current === relayClient) relayRef.current = null
     }
 
@@ -435,12 +576,23 @@ export function DeviceConsolePage({
       onClose: () => {
         if (!isActiveConnection(activeConnectionId)) return
         messageBus.setOpen('relay', false)
+        if (webRtcOpenRef.current) {
+          if (relayRef.current === relayClient) relayRef.current = null
+          setRelayStatus('closed')
+          return
+        }
         closeRpcForRelayEvent({ closeRelay: false })
         setRelayStatus('closed')
       },
       onError: () => {
         if (!isActiveConnection(activeConnectionId)) return
         messageBus.setOpen('relay', false)
+        if (webRtcOpenRef.current) {
+          relayClient.close()
+          if (relayRef.current === relayClient) relayRef.current = null
+          setRelayStatus('error')
+          return
+        }
         closeRpcForRelayEvent({ closeRelay: true })
         setRelayStatus('error')
       }
@@ -472,22 +624,25 @@ export function DeviceConsolePage({
         connection_token: result.connection_token
       })
       let relayStarted = false
-      socketRef.current = createConnection({
+      let signalClient: ConnectionClient | null = null
+      signalClient = createConnection({
         url: socketUrl,
         onStatus: (nextStatus) => {
           if (!isActiveConnection(activeConnectionId)) return
           setStatus(nextStatus)
-          if (nextStatus === 'accepted' && !relayStarted) {
+          if (nextStatus === 'accepted' && !relayStarted && signalClient) {
             relayStarted = true
-            openRelayConsole(result, activeConnectionId)
+            openRelayConsole(result, activeConnectionId, signalClient)
           }
         },
         onMessage: (value) => {
           if (isActiveConnection(activeConnectionId)) {
             setMessages((current) => [value, ...current].slice(0, 20))
+            handleWebRtcSignal(value, result.connection_id)
           }
         }
       })
+      socketRef.current = signalClient
     } catch (err) {
       if (!isActiveConnection(activeConnectionId)) return
       setStatus('error')

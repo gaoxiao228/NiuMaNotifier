@@ -37,6 +37,33 @@ describe('createRemoteMessageBus', () => {
     expect(relay.send).not.toHaveBeenCalled()
   })
 
+  it('marks the outgoing payload with the selected transport without mutating the original request', () => {
+    const relay = transport('relay')
+    const webrtc = transport('webrtc')
+    const bus = createRemoteMessageBus({ onInbound: vi.fn() })
+    const request = {
+      version: 1,
+      type: 'request',
+      id: 'rpc_3',
+      transport: { kind: 'relay' },
+      method: 'rpc.ping',
+      params: {}
+    }
+
+    bus.register(relay)
+    bus.register(webrtc)
+    bus.setOpen('relay', true)
+    bus.setOpen('webrtc', true)
+    bus.send(request)
+
+    expect(webrtc.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: { kind: 'webrtc' }
+      })
+    )
+    expect(request.transport.kind).toBe('relay')
+  })
+
   it('wraps incoming payloads with the observed transport', () => {
     const onInbound = vi.fn()
     const bus = createRemoteMessageBus({ onInbound })

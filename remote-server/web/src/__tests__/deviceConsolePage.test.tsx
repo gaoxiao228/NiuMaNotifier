@@ -6,6 +6,7 @@ import type { ConnectionCreateResult } from '../api/connectionsApi.js'
 import { DeviceConsolePage } from '../remote/deviceConsolePage.js'
 import type { ConnectionClientOptions, ConnectionStatus } from '../remote/connectionClient.js'
 import type { RelayClient, RelayClientOptions } from '../remote/relayTransport.js'
+import type { WebRtcTransport, WebRtcTransportOptions } from '../remote/webrtcTransport.js'
 import { createTranslator } from '../i18n/index.js'
 
 const t = createTranslator('en')
@@ -449,6 +450,174 @@ describe('DeviceConsolePage', () => {
     expect(screen.getByText('Demo session')).not.toBeNull()
     expect(screen.getByText('running')).not.toBeNull()
     expect(screen.getByText('Inspect remote sessions')).not.toBeNull()
+  })
+
+  it('starts WebRTC negotiation after relay accept and sends offer and ICE over signaling', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      signalClient.onMessage = options.onMessage
+      return signalClient
+    })
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      void options
+      return relayClient
+    })
+    const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
+      return {
+        kind: 'webrtc',
+        start: vi.fn(async () => {
+          options.onOffer({ connection_id: 'conn_123', sdp: 'offer-sdp' })
+          options.onIceCandidate({
+            connection_id: 'conn_123',
+            candidate: 'candidate:1',
+            sdp_mid: '0',
+            sdp_mline_index: 0
+          })
+        }),
+        acceptAnswer: vi.fn(),
+        addRemoteIceCandidate: vi.fn(),
+        send: vi.fn(),
+        close: vi.fn()
+      }
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        createWebRtc={createWebRtc}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      signalClient.onStatus('accepted')
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(createWebRtc).toHaveBeenCalledTimes(1))
+    expect(signalClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: 1,
+        type: 'signal.offer',
+        data: { sdp: 'offer-sdp' }
+      })
+    )
+    expect(signalClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: 1,
+        type: 'signal.ice_candidate',
+        data: {
+          candidate: 'candidate:1',
+          sdp_mid: '0',
+          sdp_mline_index: 0
+        }
+      })
+    )
+  })
+
+  it('forwards signaling answer and ICE candidate messages to the WebRTC transport', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      signalClient.onMessage = options.onMessage
+      return signalClient
+    })
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      void options
+      return relayClient
+    })
+    const webRtcTransport: WebRtcTransport = {
+      kind: 'webrtc',
+      start: vi.fn(async () => {}),
+      acceptAnswer: vi.fn(async () => {}),
+      addRemoteIceCandidate: vi.fn(async () => {}),
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createWebRtc = vi.fn(() => webRtcTransport)
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        createWebRtc={createWebRtc}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      signalClient.onStatus('accepted')
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      signalClient.onMessage({
+        version: 1,
+        type: 'signal.answer',
+        id: 'msg_answer',
+        data: { connection_id: 'conn_123', sdp: 'answer-sdp' }
+      })
+      signalClient.onMessage({
+        version: 1,
+        type: 'signal.ice_candidate',
+        id: 'msg_ice',
+        data: {
+          connection_id: 'conn_123',
+          candidate: 'candidate:2',
+          sdp_mid: null,
+          sdp_mline_index: null
+        }
+      })
+      await Promise.resolve()
+    })
+
+    expect(webRtcTransport.acceptAnswer).toHaveBeenCalledWith({
+      connection_id: 'conn_123',
+      sdp: 'answer-sdp'
+    })
+    expect(webRtcTransport.addRemoteIceCandidate).toHaveBeenCalledWith({
+      connection_id: 'conn_123',
+      candidate: 'candidate:2',
+      sdp_mid: null,
+      sdp_mline_index: null
+    })
   })
 
   it('renders an empty state when the remote session project group list is empty', async () => {
