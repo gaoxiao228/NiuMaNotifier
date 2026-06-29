@@ -16,6 +16,7 @@ import {
   createPlainRpcClient,
   createPlainRpcRequest,
   isPlainRpcResponse,
+  PlainRpcTimeoutError,
   type PlainRpcClient
 } from './plainRpcClient.js'
 import {
@@ -438,7 +439,7 @@ export function DeviceConsolePage({
     const rpcClient = createPlainRpcClient({
       timeoutMs: 10_000,
       send: (value) => {
-        messageBus.send(value)
+        return messageBus.send(value)
       },
       onNotification: ({ method, params, observedTransport, declaredTransport }) => {
         remoteLocalApiRef.current?.handleNotification(method, params, {
@@ -450,8 +451,37 @@ export function DeviceConsolePage({
     messageBusRef.current = messageBus
     let webRtcProbeId: string | null = null
 
+    function markWebRtcUnhealthyAndUseRelay() {
+      webRtcProbeId = null
+      if (webRtcOpenRef.current) {
+        // WebRTC 可写但业务 RPC 无响应时，先退回 relay，避免控制台一直卡在坏通道上。
+        webRtcOpenRef.current = false
+        messageBus.setOpen('webrtc', false)
+        setWebRtcStatus('error')
+        setActiveTransport('relay')
+        webRtcRef.current?.close()
+      }
+    }
+
+    function requestWithTransportFallback(method: string, params?: unknown): Promise<unknown> {
+      const request = rpcClient.request(method, params)
+      if (!webRtcOpenRef.current) return request
+      return request.catch((error) => {
+        if (
+          error instanceof PlainRpcTimeoutError &&
+          error.transportKind === 'webrtc' &&
+          relayOpenRef.current &&
+          isActiveConnection(activeConnectionId)
+        ) {
+          markWebRtcUnhealthyAndUseRelay()
+          return rpcClient.request(method, params)
+        }
+        throw error
+      })
+    }
+
     const remoteLocalApi = createRemoteLocalApiClient({
-      request: (method, params) => rpcClient.request(method, params)
+      request: (method, params) => requestWithTransportFallback(method, params)
     })
     remoteLocalApiRef.current = remoteLocalApi
 
@@ -576,8 +606,7 @@ export function DeviceConsolePage({
       params?: unknown
     ) {
       setResult({ status: 'loading', value: null })
-      void rpcClient
-        .request(method, params)
+      void requestWithTransportFallback(method, params)
         .then((value) => {
           if (isActiveConnection(activeConnectionId)) setResult({ status: 'ready', value })
         })

@@ -41,7 +41,7 @@ export type ObservedPlainRpcMessage = {
 export type PlainRpcClientOptions = {
   timeoutMs: number
   transportKind?: RemoteTransportKind
-  send(value: PlainRpcRequest): void
+  send(value: PlainRpcRequest): RemoteTransportKind | void
   onNotification?: (notification: {
     method: string
     params: unknown
@@ -58,8 +58,19 @@ export type PlainRpcClient = {
 
 type PendingRequest = {
   timer: ReturnType<typeof setTimeout>
+  sentTransport?: RemoteTransportKind
   resolve(value: unknown): void
   reject(error: Error): void
+}
+
+export class PlainRpcTimeoutError extends Error {
+  readonly transportKind?: RemoteTransportKind
+
+  constructor(transportKind?: RemoteTransportKind) {
+    super('Plain RPC request timed out')
+    this.name = 'PlainRpcTimeoutError'
+    this.transportKind = transportKind
+  }
 }
 
 function remoteErrorMessage(error: unknown): string {
@@ -164,11 +175,13 @@ export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcCl
 
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          rejectPending(id, new Error('Plain RPC request timed out'))
+          rejectPending(id, new PlainRpcTimeoutError(pending.get(id)?.sentTransport))
         }, options.timeoutMs)
         pending.set(id, { timer, resolve, reject })
         try {
-          options.send(createPlainRpcRequest(id, method, params, transportKind))
+          const sentTransport = options.send(createPlainRpcRequest(id, method, params, transportKind))
+          const item = pending.get(id)
+          if (item) item.sentTransport = sentTransport ?? transportKind
         } catch (err) {
           // send 失败代表请求不会离开本地，立即清理 pending，避免继续等 timeout。
           rejectPending(id, err instanceof Error ? err : new Error('Plain RPC send failed'))

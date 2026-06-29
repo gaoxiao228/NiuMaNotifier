@@ -14,7 +14,7 @@ export type RemoteMessageBus = {
   register(transport: RemoteTransport): void
   unregister(kind: RemoteTransportKind): void
   setOpen(kind: RemoteTransportKind, open: boolean): void
-  send(value: unknown): void
+  send(value: unknown): RemoteTransportKind
   receive(payload: unknown, observedTransport: RemoteTransportKind): void
   close(): void
 }
@@ -67,6 +67,7 @@ export function createRemoteMessageBus(options: RemoteMessageBusOptions): Remote
       const transport = findOpenTransport()
       if (!transport) throw new Error('No remote transport is open')
       transport.send(markPayloadTransport(value, transport.kind))
+      return transport.kind
     },
     receive(payload, observedTransport) {
       options.onInbound({ payload, observedTransport })

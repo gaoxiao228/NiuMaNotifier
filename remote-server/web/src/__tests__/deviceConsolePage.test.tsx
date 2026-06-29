@@ -109,6 +109,7 @@ async function openRelayConsoleWithSessionPayload(sessionPayload: unknown) {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -802,6 +803,111 @@ describe('DeviceConsolePage', () => {
     expect(screen.getByText('WebRTC error')).not.toBeNull()
     expect(screen.getByText('Active transport: Relay')).not.toBeNull()
     expect(webRtcClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to relay when WebRTC RPC requests time out', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      signalClient.onMessage = options.onMessage
+      return signalClient
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+    let webRtcOptions: WebRtcTransportOptions | null = null
+    const webRtcSend = vi.fn()
+    const webRtcClose = vi.fn()
+    const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
+      webRtcOptions = options
+      return {
+        kind: 'webrtc',
+        start: vi.fn(async () => {}),
+        acceptAnswer: vi.fn(),
+        addRemoteIceCandidate: vi.fn(),
+        send: webRtcSend,
+        close: webRtcClose
+      }
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        createWebRtc={createWebRtc}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      signalClient.onStatus('accepted')
+      await Promise.resolve()
+    })
+
+    act(() => {
+      webRtcOptions?.onOpen()
+    })
+    const probeRequest = webRtcSend.mock.calls[0]?.[0]
+    act(() => {
+      webRtcOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: probeRequest.id,
+        ok: true,
+        result: { pong: true },
+        transport: { kind: 'webrtc' }
+      })
+    })
+    expect(screen.getByText('Active transport: WebRTC')).not.toBeNull()
+
+    vi.useFakeTimers()
+    act(() => {
+      openReadyRelay(relayOptions)
+    })
+    expect(webRtcSend.mock.calls.map((call) => call[0]?.method)).toEqual([
+      'rpc.ping',
+      'rpc.ping',
+      'state.get',
+      'local_api.stream'
+    ])
+    expect(relayClient.send).not.toHaveBeenCalled()
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('Active transport: Relay')).not.toBeNull()
+    expect(webRtcClose).toHaveBeenCalledTimes(1)
+    const relayRequests = vi
+      .mocked(relayClient.send)
+      .mock.calls.map((call) => call[0] as { method?: string; transport?: { kind?: string } })
+    expect(relayRequests.map((request) => request.method)).toEqual([
+      'rpc.ping',
+      'state.get',
+      'local_api.stream'
+    ])
+    expect(relayRequests.every((request) => request.transport?.kind === 'relay')).toBe(true)
   })
 
   it('closes pending RPC requests when relay closes first and WebRTC closes later', async () => {
