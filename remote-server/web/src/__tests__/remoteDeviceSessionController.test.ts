@@ -266,6 +266,51 @@ describe('createRemoteDeviceSessionController', () => {
     expect(snapshot.sessionsResult.status).toBe('loading')
   })
 
+  it('keeps relay resources alive when WebRTC ping fails before relay is ready', async () => {
+    const harness = createHarness()
+    await connectAndAccept(harness)
+
+    harness.getWebRtcOptions().onOpen()
+    const probeRequest = harness.webRtcClient.send.mock.calls[0]?.[0] as { id?: string }
+    harness.getWebRtcOptions().onPayload({
+      version: 1,
+      type: 'response',
+      id: probeRequest.id,
+      ok: false,
+      error: { code: 'method_not_found', message: 'unknown RPC method: rpc.ping' },
+      transport: { kind: 'webrtc' }
+    })
+
+    openRelay(harness)
+
+    const snapshot = latest(harness)
+    expect(snapshot.relayStatus).toBe('open')
+    expect(snapshot.activeTransport).toBe('relay')
+    expect(snapshot.sessionsResult.status).toBe('loading')
+    expect(harness.relayClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'local_api.stream', transport: { kind: 'relay' } })
+    )
+  })
+
+  it('keeps relay resources alive when WebRTC ping times out before relay is ready', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness({ rpcTimeoutMs: 30_000, webRtcProbeTimeoutMs: 1_000 })
+    await connectAndAccept(harness)
+
+    harness.getWebRtcOptions().onOpen()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    openRelay(harness)
+
+    const snapshot = latest(harness)
+    expect(snapshot.relayStatus).toBe('open')
+    expect(snapshot.activeTransport).toBe('relay')
+    expect(snapshot.sessionsResult.status).toBe('loading')
+    expect(harness.relayClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'local_api.stream', transport: { kind: 'relay' } })
+    )
+  })
+
   it('ignores late callbacks after close', async () => {
     const harness = createHarness()
     await connectAndAccept(harness)

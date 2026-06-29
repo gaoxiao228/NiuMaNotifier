@@ -565,7 +565,7 @@ export function createRemoteDeviceSessionController(
               if (!isActive(generation) || !messageBus) return
               messageBus.setOpen('webrtc', false)
               markWebRtcUnhealthyAndUseRelay(generation)
-              if (!relayOpen) closeRemoteResources()
+              // WebRTC 业务探活失败不能拆掉仍在连接中的 relay 管线；relay ready 后仍要能启动首屏读取。
             }
           })
           if (!webRtcOpen) messageBus?.setOpen('webrtc', false)
