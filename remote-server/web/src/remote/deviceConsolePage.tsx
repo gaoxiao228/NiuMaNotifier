@@ -450,6 +450,7 @@ export function DeviceConsolePage({
     })
     messageBusRef.current = messageBus
     let webRtcProbeId: string | null = null
+    let remoteReadsStarted = false
 
     function markWebRtcUnhealthyAndUseRelay() {
       webRtcProbeId = null
@@ -554,6 +555,7 @@ export function DeviceConsolePage({
               messageBus.setOpen('webrtc', true)
               setWebRtcStatus('open')
               setActiveTransport('webrtc')
+              startRemoteReadsOnce()
               return
             }
             webRtcOpenRef.current = false
@@ -652,6 +654,14 @@ export function DeviceConsolePage({
         })
     }
 
+    function startRemoteReadsOnce() {
+      if (remoteReadsStarted) return
+      remoteReadsStarted = true
+      updateRpcResult('rpc.ping', setPingResult)
+      updateRpcResult('state.get', setStateResult)
+      subscribeRemoteSessions()
+    }
+
     relayClient = createRelay({
       url: relayUrl,
       connectionId: result.connection_id,
@@ -670,9 +680,7 @@ export function DeviceConsolePage({
         relayOpenRef.current = true
         setRelayStatus('open')
         if (!webRtcOpenRef.current) setActiveTransport('relay')
-        updateRpcResult('rpc.ping', setPingResult)
-        updateRpcResult('state.get', setStateResult)
-        subscribeRemoteSessions()
+        startRemoteReadsOnce()
       },
       onPayload: (value) => {
         if (isActiveConnection(activeConnectionId)) {
