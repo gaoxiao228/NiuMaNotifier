@@ -9,7 +9,8 @@
     "test": "vitest run",
     "check": "npm run build && npm test",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "devices:dedupe": "tsx scripts/dedupe-devices.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.2",
