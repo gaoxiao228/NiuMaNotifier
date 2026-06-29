@@ -3,6 +3,7 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use http::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -103,8 +104,13 @@ pub fn handle_relay_text_frame(
     text: String,
     rpc_context: &RemoteRpcContext,
 ) -> Result<Option<String>, String> {
-    let frame: RelayFrame =
+    let value: Value =
         serde_json::from_str(&text).map_err(|error| format!("relay 帧 JSON 解析失败：{error}"))?;
+    if is_relay_ready_control_message(&value) {
+        return Ok(None);
+    }
+    let frame: RelayFrame = serde_json::from_value(value)
+        .map_err(|error| format!("relay 帧 JSON 解析失败：{error}"))?;
     if frame.version != 1 || frame.frame_type != "relay.frame" {
         return Err("relay 帧格式无效".to_string());
     }
@@ -118,6 +124,13 @@ pub fn handle_relay_text_frame(
     serde_json::to_string(&response)
         .map(Some)
         .map_err(|error| format!("relay 响应帧 JSON 编码失败：{error}"))
+}
+
+fn is_relay_ready_control_message(value: &Value) -> bool {
+    // relay.ready 是服务端控制消息，只表示 client/device 两侧 relay 均已绑定。
+    value.get("version").and_then(Value::as_u64) == Some(1)
+        && value.get("type").and_then(Value::as_str) == Some("relay.ready")
+        && value.get("connection_id").and_then(Value::as_str).is_some()
 }
 
 pub async fn run_device_relay_once(
@@ -150,7 +163,12 @@ pub async fn run_device_relay_once(
                 };
                 match next {
                     Ok(Message::Text(text)) => {
-                        let frame: RelayFrame = serde_json::from_str(&text)
+                        let value: Value = serde_json::from_str(&text)
+                            .map_err(|error| format!("relay 帧 JSON 解析失败：{error}"))?;
+                        if is_relay_ready_control_message(&value) {
+                            continue;
+                        }
+                        let frame: RelayFrame = serde_json::from_value(value)
                             .map_err(|error| format!("relay 帧 JSON 解析失败：{error}"))?;
                         if frame.version != 1 || frame.frame_type != "relay.frame" {
                             return Err("relay 帧格式无效".to_string());
@@ -329,6 +347,23 @@ mod tests {
                 "connection_id": "conn_1",
                 "seq": 1,
                 "ciphertext": "eyJ0eXBlIjoidW5rbm93biJ9"
+            })
+            .to_string(),
+            &context,
+        )
+        .unwrap();
+
+        assert_eq!(response, None);
+    }
+
+    #[test]
+    fn ignores_relay_ready_control_message() {
+        let context = test_rpc_context("relay-transport-ready-control");
+        let response = handle_relay_text_frame(
+            serde_json::json!({
+                "version": 1,
+                "type": "relay.ready",
+                "connection_id": "conn_1"
             })
             .to_string(),
             &context,

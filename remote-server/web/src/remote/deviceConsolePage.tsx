@@ -628,6 +628,10 @@ export function DeviceConsolePage({
       connectionId: result.connection_id,
       onOpen: () => {
         if (!isActiveConnection(activeConnectionId)) return
+        setRelayStatus('connecting')
+      },
+      onReady: () => {
+        if (!isActiveConnection(activeConnectionId)) return
         messageBus.register({
           kind: 'relay',
           send: (value) => relayClient.send(value),

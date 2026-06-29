@@ -156,6 +156,7 @@ export async function registerRelaySocket(
       socketId,
       socket
     })
+    registry.notifyReady(bound.binding.connectionId)
     await route.setRoute({
       connectionId: bound.binding.connectionId,
       clientSocketId: bound.binding.side === 'client'

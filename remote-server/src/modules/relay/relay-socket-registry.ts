@@ -20,6 +20,14 @@ function oppositeSide(side: RelaySide): RelaySide {
   return side === 'client' ? 'device' : 'client'
 }
 
+function relayReadyMessage(connectionId: string) {
+  return JSON.stringify({
+    version: 1,
+    type: 'relay.ready',
+    connection_id: connectionId
+  })
+}
+
 export function createRelaySocketRegistry() {
   const sockets = new Map<string, RelaySocketEntry>()
   const lastSeq = new Map<string, number>()
@@ -40,6 +48,21 @@ export function createRelaySocketRegistry() {
 
     getSocketId(connectionId: string, side: RelaySide) {
       return sockets.get(sideKey(connectionId, side))?.socketId ?? null
+    },
+
+    notifyReady(connectionId: string) {
+      const client = sockets.get(sideKey(connectionId, 'client'))
+      const device = sockets.get(sideKey(connectionId, 'device'))
+      if (!client || !device) return false
+
+      const message = relayReadyMessage(connectionId)
+      try {
+        client.socket.send(message)
+        device.socket.send(message)
+        return true
+      } catch {
+        return false
+      }
     },
 
     forward(connectionId: string, fromSide: RelaySide, message: object) {

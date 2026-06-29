@@ -9,6 +9,12 @@ export type RelayFrame = {
   ciphertext: string
 }
 
+export type RelayReadyMessage = {
+  version: 1
+  type: 'relay.ready'
+  connection_id: string
+}
+
 export type RelaySocketBind = {
   connection_id: string
   connection_token: string
@@ -20,6 +26,7 @@ export type RelayClientOptions = {
   connectionId: string
   WebSocketImpl?: typeof WebSocket
   onOpen(): void
+  onReady(): void
   onPayload(value: unknown): void
   onClose(): void
   onError(error: Error): void
@@ -108,6 +115,12 @@ function isRelayFrame(value: unknown): value is RelayFrame {
   )
 }
 
+function isRelayReadyMessage(value: unknown): value is RelayReadyMessage {
+  if (value === null || typeof value !== 'object') return false
+  const item = value as Partial<RelayReadyMessage>
+  return item.version === 1 && item.type === 'relay.ready' && typeof item.connection_id === 'string'
+}
+
 function resolveOpenReadyState(WebSocketCtor: typeof WebSocket): number {
   // 注入的 WebSocket 实现可能只在构造函数或全局 WebSocket 上暴露 OPEN 常量。
   if (typeof WebSocketCtor.OPEN === 'number') return WebSocketCtor.OPEN
@@ -130,6 +143,10 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     if (!active) return
     try {
       const frame = parseRelayMessage(event.data)
+      if (isRelayReadyMessage(frame)) {
+        if (frame.connection_id === options.connectionId) options.onReady()
+        return
+      }
       if (!isRelayFrame(frame) || frame.connection_id !== options.connectionId) return
       options.onPayload(decodeRelayPayload(frame.ciphertext))
     } catch (err) {

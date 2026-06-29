@@ -37,6 +37,11 @@ function createConnectionResultWithId(connectionId: string): ConnectionCreateRes
   }
 }
 
+function openReadyRelay(options: RelayClientOptions | null) {
+  options?.onOpen()
+  options?.onReady()
+}
+
 async function openRelayConsoleWithSessionPayload(sessionPayload: unknown) {
   const create = vi.fn().mockResolvedValue(createConnectionResult())
   const signalClients: Array<{ onStatus: (status: ConnectionStatus) => void }> = []
@@ -82,7 +87,7 @@ async function openRelayConsoleWithSessionPayload(sessionPayload: unknown) {
   await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
 
   await act(async () => {
-    relayOptions?.onOpen()
+    openReadyRelay(relayOptions)
     relayOptions?.onPayload({ version: 1, type: 'response', id: 'rpc_3', ok: true, result: { stream_id: 'stream_1' } })
     await Promise.resolve()
     relayOptions?.onPayload({
@@ -353,6 +358,11 @@ describe('DeviceConsolePage', () => {
 
     act(() => {
       relayOptions?.onOpen()
+    })
+    expect(relayClient.send).not.toHaveBeenCalled()
+
+    act(() => {
+      relayOptions?.onReady()
     })
 
     expect(relayClient.send).toHaveBeenCalledTimes(3)
@@ -678,7 +688,7 @@ describe('DeviceConsolePage', () => {
     })
 
     act(() => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
     })
     expect(screen.getByText('Active transport: Relay')).not.toBeNull()
 
@@ -773,7 +783,7 @@ describe('DeviceConsolePage', () => {
     })
 
     act(() => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
       webRtcOptions?.onOpen()
     })
 
@@ -852,7 +862,7 @@ describe('DeviceConsolePage', () => {
     })
 
     act(() => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
       webRtcOptions?.onOpen()
     })
     const probeRequest = webRtcSend.mock.calls[0]?.[0]
@@ -967,7 +977,7 @@ describe('DeviceConsolePage', () => {
     await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
       relayOptions?.onPayload({
         version: 1,
         type: 'response',
@@ -1026,7 +1036,7 @@ describe('DeviceConsolePage', () => {
     await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
       relayOptions?.onPayload({
         version: 1,
         type: 'response',
@@ -1085,7 +1095,7 @@ describe('DeviceConsolePage', () => {
     await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
 
     act(() => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
     })
     expect(screen.getAllByText('Waiting for response')).toHaveLength(4)
 
@@ -1144,7 +1154,7 @@ describe('DeviceConsolePage', () => {
     await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
 
     act(() => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
     })
     await act(async () => {
       relayOptions?.onError(new Error('invalid relay payload'))
@@ -1201,7 +1211,7 @@ describe('DeviceConsolePage', () => {
     await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
 
     act(() => {
-      relayOptions?.onOpen()
+      openReadyRelay(relayOptions)
     })
 
     unmount()

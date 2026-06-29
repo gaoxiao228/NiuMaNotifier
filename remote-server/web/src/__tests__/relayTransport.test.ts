@@ -110,11 +110,13 @@ describe('createRelayClient', () => {
     const onPayload = vi.fn()
     const onClose = vi.fn()
     const onError = vi.fn()
+    const onReady = vi.fn()
     const client = createRelayClient({
       url: 'ws://relay.example.com/ws/relay',
       connectionId: 'conn_123',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
       onOpen,
+      onReady,
       onPayload,
       onClose,
       onError
@@ -123,9 +125,13 @@ describe('createRelayClient', () => {
 
     socket.readyState = FakeWebSocket.OPEN
     socket.onopen?.()
+    socket.onmessage?.({
+      data: JSON.stringify({ version: 1, type: 'relay.ready', connection_id: 'conn_123' })
+    })
     client.send({ version: 1, type: 'request', id: 'rpc_1', method: 'rpc.ping' })
 
     expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onReady).toHaveBeenCalledTimes(1)
     expect(JSON.parse(socket.sent[0]) as RelayFrame).toMatchObject({
       version: 1,
       type: 'relay.frame',
@@ -152,6 +158,7 @@ describe('createRelayClient', () => {
       connectionId: 'conn_123',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
       onOpen: vi.fn(),
+      onReady: vi.fn(),
       onPayload: vi.fn(),
       onClose: vi.fn(),
       onError: vi.fn()
@@ -171,5 +178,31 @@ describe('createRelayClient', () => {
       id: 'relay_1',
       seq: 1
     })
+  })
+
+  it('emits ready only for the current relay connection', () => {
+    FakeWebSocket.instances = []
+    const onReady = vi.fn()
+    createRelayClient({
+      url: 'ws://relay.example.com/ws/relay',
+      connectionId: 'conn_123',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      onOpen: vi.fn(),
+      onReady,
+      onPayload: vi.fn(),
+      onClose: vi.fn(),
+      onError: vi.fn()
+    })
+    const socket = FakeWebSocket.instances[0]
+
+    socket.onmessage?.({
+      data: JSON.stringify({ version: 1, type: 'relay.ready', connection_id: 'conn_other' })
+    })
+    expect(onReady).not.toHaveBeenCalled()
+
+    socket.onmessage?.({
+      data: JSON.stringify({ version: 1, type: 'relay.ready', connection_id: 'conn_123' })
+    })
+    expect(onReady).toHaveBeenCalledTimes(1)
   })
 })
