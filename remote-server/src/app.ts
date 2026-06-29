@@ -5,6 +5,7 @@ import {
 } from './modules/devices/device-socket-registry.js'
 import { registerConnectionsRoutes } from './modules/connections/connections.routes.js'
 import { registerHealthRoutes } from './modules/health/health.routes.js'
+import { registerWebConsoleRoutes } from './modules/webConsole/webConsole.routes.js'
 import { ErrorCode } from './shared/errors.js'
 import { apiFailure } from './shared/response.js'
 import { registerClientSocket } from './ws/client-socket.js'
@@ -19,6 +20,7 @@ export type AppDeps = {
   registerDeviceSocket?: (app: FastifyInstance, registry: DeviceSocketRegistry) => Promise<void>
   registerClientSocket?: (app: FastifyInstance, registry: DeviceSocketRegistry) => Promise<void>
   registerRelaySocket?: (app: FastifyInstance) => Promise<void>
+  registerWebConsoleRoutes?: (app: FastifyInstance) => Promise<void>
 }
 
 export function buildApp(deps: AppDeps = {}) {
@@ -33,6 +35,7 @@ export function buildApp(deps: AppDeps = {}) {
   if (deps.registerDeviceSocket) void deps.registerDeviceSocket(app, deviceSocketRegistry)
   if (deps.registerClientSocket) void deps.registerClientSocket(app, deviceSocketRegistry)
   if (deps.registerRelaySocket) void deps.registerRelaySocket(app)
+  void (deps.registerWebConsoleRoutes ?? registerWebConsoleRoutes)(app)
 
   app.setNotFoundHandler(async (_request, reply) => {
     return reply.status(404).send(apiFailure(ErrorCode.ROUTE_NOT_FOUND, '接口不存在'))
