@@ -8,6 +8,9 @@ describe('plain rpc client', () => {
     expect(request).toEqual({
       version: 1,
       type: 'request',
+      transport: {
+        kind: 'relay'
+      },
       id: 'req_1',
       method: 'rpc.ping',
       params: { message: 'hello' }
@@ -38,13 +41,18 @@ describe('plain rpc client', () => {
     client.handle({
       version: 1,
       type: 'notification',
+      transport: {
+        kind: 'relay'
+      },
       method: 'local_api.stream.event',
       params: { stream_id: 'stream_1' }
-    })
+    }, 'relay')
 
     expect(onNotification).toHaveBeenCalledWith({
       method: 'local_api.stream.event',
-      params: { stream_id: 'stream_1' }
+      params: { stream_id: 'stream_1' },
+      observedTransport: 'relay',
+      declaredTransport: 'relay'
     })
     expect(send).not.toHaveBeenCalled()
   })
@@ -66,6 +74,9 @@ describe('plain rpc client', () => {
     expect(send).toHaveBeenCalledWith({
       version: 1,
       type: 'request',
+      transport: {
+        kind: 'relay'
+      },
       id: 'rpc_1',
       method: 'state.get',
       params: { scope: 'runtime' }

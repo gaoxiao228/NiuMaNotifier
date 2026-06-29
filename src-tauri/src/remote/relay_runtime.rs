@@ -148,6 +148,7 @@ mod tests {
             serde_json::json!({
                 "version": 1,
                 "type": "response",
+                "transport": { "kind": "relay" },
                 "id": "req_1",
                 "ok": true,
                 "result": { "pong": true }
@@ -174,6 +175,7 @@ mod tests {
             serde_json::json!({
                 "version": 1,
                 "type": "response",
+                "transport": { "kind": "relay" },
                 "id": "req_project_groups",
                 "ok": true,
                 "result": { "list": [], "page": 1, "page_size": 20, "total": 0 }

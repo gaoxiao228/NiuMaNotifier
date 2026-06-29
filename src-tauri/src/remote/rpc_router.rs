@@ -341,6 +341,9 @@ fn success_response(id: String, result: Value) -> Value {
     json!({
         "version": 1,
         "type": "response",
+        "transport": {
+            "kind": "relay"
+        },
         "id": id,
         "ok": true,
         "result": result
@@ -351,6 +354,9 @@ fn error_response(id: String, code: &str, message: impl Into<String>) -> Value {
     json!({
         "version": 1,
         "type": "response",
+        "transport": {
+            "kind": "relay"
+        },
         "id": id,
         "ok": false,
         "error": {
@@ -388,6 +394,7 @@ mod tests {
             json!({
                 "version": 1,
                 "type": "response",
+                "transport": { "kind": "relay" },
                 "id": "req_1",
                 "ok": true,
                 "result": { "pong": true }
@@ -612,6 +619,7 @@ mod tests {
             json!({
                 "version": 1,
                 "type": "response",
+                "transport": { "kind": "relay" },
                 "id": "req_3",
                 "ok": false,
                 "error": {
@@ -638,6 +646,7 @@ mod tests {
             json!({
                 "version": 1,
                 "type": "response",
+                "transport": { "kind": "relay" },
                 "id": "req_4",
                 "ok": false,
                 "error": {

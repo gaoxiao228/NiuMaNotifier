@@ -356,6 +356,10 @@ describe('DeviceConsolePage', () => {
       expect.objectContaining({ id: 'rpc_1', method: 'rpc.ping' })
     )
     expect(relayClient.send).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ transport: { kind: 'relay' } })
+    )
+    expect(relayClient.send).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ id: 'rpc_2', method: 'state.get' })
     )
@@ -393,9 +397,13 @@ describe('DeviceConsolePage', () => {
       relayOptions?.onPayload({
         version: 1,
         type: 'notification',
+        transport: {
+          kind: 'relay'
+        },
         method: 'local_api.stream.event',
         params: {
           stream_id: 'stream_1',
+          seq: 1,
           event: 'session_project_groups',
           id: '1',
           data: {

@@ -1,3 +1,5 @@
+import type { RemoteTransportKind } from './plainRpcClient.js'
+
 type RpcLike = {
   request(method: string, params?: unknown): Promise<unknown>
 }
@@ -13,6 +15,9 @@ type StreamEvent = {
   event: string
   id: string | null
   data: unknown
+  seq?: number
+  observedTransport?: RemoteTransportKind
+  declaredTransport?: RemoteTransportKind
 }
 
 type StreamHandlers = {
@@ -26,12 +31,22 @@ type StreamHandle = {
   close(): Promise<void>
 }
 
+type NotificationMetadata = {
+  observedTransport?: RemoteTransportKind
+  declaredTransport?: RemoteTransportKind
+}
+
+type RegisteredStream = {
+  handlers: StreamHandlers
+  lastSeq: number | null
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
 export function createRemoteLocalApiClient(rpc: RpcLike) {
-  const streams = new Map<string, StreamHandlers>()
+  const streams = new Map<string, RegisteredStream>()
 
   return {
     request(input: RemoteLocalApiRequest) {
@@ -60,7 +75,7 @@ export function createRemoteLocalApiClient(rpc: RpcLike) {
       }
 
       const streamId = response.stream_id
-      streams.set(streamId, handlers)
+      streams.set(streamId, { handlers, lastSeq: null })
       return {
         streamId,
         async close() {
@@ -69,23 +84,31 @@ export function createRemoteLocalApiClient(rpc: RpcLike) {
         }
       }
     },
-    handleNotification(method: string, params: unknown) {
+    handleNotification(method: string, params: unknown, metadata: NotificationMetadata = {}) {
       if (!isRecord(params) || typeof params.stream_id !== 'string') return
-      const handlers = streams.get(params.stream_id)
-      if (!handlers) return
+      const stream = streams.get(params.stream_id)
+      if (!stream) return
 
       if (method === 'local_api.stream.event') {
-        handlers.onEvent({
+        const seq = typeof params.seq === 'number' ? params.seq : undefined
+        if (typeof seq === 'number') {
+          if (stream.lastSeq !== null && seq <= stream.lastSeq) return
+          stream.lastSeq = seq
+        }
+        stream.handlers.onEvent({
           event: typeof params.event === 'string' ? params.event : 'message',
           id: typeof params.id === 'string' ? params.id : null,
-          data: params.data
+          data: params.data,
+          seq,
+          observedTransport: metadata.observedTransport,
+          declaredTransport: metadata.declaredTransport
         })
         return
       }
 
       if (method === 'local_api.stream.closed') {
         streams.delete(params.stream_id)
-        handlers.onClosed?.(typeof params.reason === 'string' ? params.reason : 'closed')
+        stream.handlers.onClosed?.(typeof params.reason === 'string' ? params.reason : 'closed')
       }
     }
   }

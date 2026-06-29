@@ -321,8 +321,11 @@ export function DeviceConsolePage({
       send: (value) => {
         relayClient.send(value)
       },
-      onNotification: ({ method, params }) => {
-        remoteLocalApiRef.current?.handleNotification(method, params)
+      onNotification: ({ method, params, observedTransport, declaredTransport }) => {
+        remoteLocalApiRef.current?.handleNotification(method, params, {
+          observedTransport,
+          declaredTransport
+        })
       }
     })
     const remoteLocalApi = createRemoteLocalApiClient({
@@ -405,7 +408,12 @@ export function DeviceConsolePage({
         subscribeRemoteSessions()
       },
       onPayload: (value) => {
-        if (isActiveConnection(activeConnectionId)) rpcClient.handle(value)
+        if (isActiveConnection(activeConnectionId)) {
+          rpcClient.handle({
+            payload: value,
+            observedTransport: 'relay'
+          })
+        }
       },
       onClose: () => {
         if (!isActiveConnection(activeConnectionId)) return

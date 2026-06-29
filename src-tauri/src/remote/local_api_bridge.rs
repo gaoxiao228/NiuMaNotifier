@@ -35,6 +35,18 @@ pub struct ParsedSseEvent {
     pub data: Value,
 }
 
+#[derive(Debug, Default)]
+pub struct StreamNotificationSequence {
+    next: u64,
+}
+
+impl StreamNotificationSequence {
+    pub fn next_seq(&mut self) -> u64 {
+        self.next += 1;
+        self.next
+    }
+}
+
 pub trait RemoteLocalApiAccessPolicy: Send + Sync {
     fn is_allowed(&self, method: &str, path: &str) -> bool;
 }
@@ -147,13 +159,17 @@ pub fn parse_sse_event_block(block: &str) -> Result<ParsedSseEvent, String> {
     Ok(ParsedSseEvent { id, event, data })
 }
 
-pub fn stream_event_notification(stream_id: &str, event: ParsedSseEvent) -> Value {
+pub fn stream_event_notification(stream_id: &str, seq: u64, event: ParsedSseEvent) -> Value {
     serde_json::json!({
         "version": 1,
         "type": "notification",
+        "transport": {
+            "kind": "relay"
+        },
         "method": "local_api.stream.event",
         "params": {
             "stream_id": stream_id,
+            "seq": seq,
             "event": event.event,
             "id": event.id,
             "data": event.data
@@ -165,6 +181,9 @@ pub fn stream_closed_notification(stream_id: &str, reason: impl Into<String>) ->
     serde_json::json!({
         "version": 1,
         "type": "notification",
+        "transport": {
+            "kind": "relay"
+        },
         "method": "local_api.stream.closed",
         "params": {
             "stream_id": stream_id,
@@ -233,6 +252,7 @@ async fn run_local_api_stream(
         .map_err(|error| format!("本机 Local API 流请求失败：{error}"))?;
     let mut chunks = response.bytes_stream();
     let mut buffer = String::new();
+    let mut sequence = StreamNotificationSequence::default();
 
     while let Some(next) = chunks.next().await {
         let chunk = next.map_err(|error| format!("本机 Local API 流读取失败：{error}"))?;
@@ -252,7 +272,11 @@ async fn run_local_api_stream(
             match parse_sse_event_block(&block) {
                 Ok(event) => {
                     if notifications
-                        .send(stream_event_notification(&stream_id, event))
+                        .send(stream_event_notification(
+                            &stream_id,
+                            sequence.next_seq(),
+                            event,
+                        ))
                         .is_err()
                     {
                         return Ok(());
@@ -358,6 +382,7 @@ mod tests {
     fn stream_event_notification_uses_stable_shape() {
         let value = stream_event_notification(
             "stream_1",
+            1,
             ParsedSseEvent {
                 id: Some("12".to_string()),
                 event: "session_project_groups".to_string(),
@@ -366,8 +391,18 @@ mod tests {
         );
 
         assert_eq!(value["type"], "notification");
+        assert_eq!(value["transport"]["kind"], "relay");
         assert_eq!(value["method"], "local_api.stream.event");
         assert_eq!(value["params"]["stream_id"], "stream_1");
+        assert_eq!(value["params"]["seq"], 1);
         assert_eq!(value["params"]["event"], "session_project_groups");
+    }
+
+    #[test]
+    fn stream_notification_sequence_increments_per_stream() {
+        let mut sequence = StreamNotificationSequence::default();
+
+        assert_eq!(sequence.next_seq(), 1);
+        assert_eq!(sequence.next_seq(), 2);
     }
 }

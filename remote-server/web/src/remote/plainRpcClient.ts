@@ -1,6 +1,15 @@
+export type RemoteTransportKind = 'relay' | 'webrtc'
+
+export type RemoteTransportMetadata = {
+  kind: RemoteTransportKind
+  connection_id?: string
+  sent_at?: string
+}
+
 export type PlainRpcRequest = {
   version: 1
   type: 'request'
+  transport: RemoteTransportMetadata
   id: string
   method: string
   params: unknown
@@ -9,6 +18,7 @@ export type PlainRpcRequest = {
 export type PlainRpcResponse = {
   version: 1
   type: 'response'
+  transport?: RemoteTransportMetadata
   id: string
   ok: boolean
   result?: unknown
@@ -18,19 +28,31 @@ export type PlainRpcResponse = {
 export type PlainRpcNotification = {
   version: 1
   type: 'notification'
+  transport?: RemoteTransportMetadata
   method: string
   params: unknown
 }
 
+export type ObservedPlainRpcMessage = {
+  payload: unknown
+  observedTransport: RemoteTransportKind
+}
+
 export type PlainRpcClientOptions = {
   timeoutMs: number
+  transportKind?: RemoteTransportKind
   send(value: PlainRpcRequest): void
-  onNotification?: (notification: { method: string; params: unknown }) => void
+  onNotification?: (notification: {
+    method: string
+    params: unknown
+    declaredTransport?: RemoteTransportKind
+    observedTransport?: RemoteTransportKind
+  }) => void
 }
 
 export type PlainRpcClient = {
   request(method: string, params?: unknown): Promise<unknown>
-  handle(value: unknown): void
+  handle(value: unknown, observedTransport?: RemoteTransportKind): void
   close(): void
 }
 
@@ -40,10 +62,18 @@ type PendingRequest = {
   reject(error: Error): void
 }
 
-export function createPlainRpcRequest(id: string, method: string, params: unknown): PlainRpcRequest {
+export function createPlainRpcRequest(
+  id: string,
+  method: string,
+  params: unknown,
+  transportKind: RemoteTransportKind = 'relay'
+): PlainRpcRequest {
   return {
     version: 1,
     type: 'request',
+    transport: {
+      kind: transportKind
+    },
     id,
     method,
     params
@@ -74,10 +104,39 @@ export function isPlainRpcNotification(value: unknown): value is PlainRpcNotific
   return item.version === 1 && item.type === 'notification' && typeof item.method === 'string'
 }
 
+function normalizeObservedMessage(
+  value: unknown,
+  fallbackTransport: RemoteTransportKind
+): ObservedPlainRpcMessage {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'payload' in value &&
+    'observedTransport' in value
+  ) {
+    const item = value as Partial<ObservedPlainRpcMessage>
+    if (item.observedTransport === 'relay' || item.observedTransport === 'webrtc') {
+      return {
+        payload: item.payload,
+        observedTransport: item.observedTransport
+      }
+    }
+  }
+  return {
+    payload: value,
+    observedTransport: fallbackTransport
+  }
+}
+
+function declaredTransportKind(value: PlainRpcNotification | PlainRpcResponse): RemoteTransportKind | undefined {
+  return value.transport?.kind === 'relay' || value.transport?.kind === 'webrtc' ? value.transport.kind : undefined
+}
+
 export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcClient {
   let nextId = 1
   let closed = false
   const pending = new Map<string, PendingRequest>()
+  const transportKind = options.transportKind ?? 'relay'
 
   function rejectPending(id: string, error: Error) {
     const item = pending.get(id)
@@ -100,28 +159,34 @@ export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcCl
         }, options.timeoutMs)
         pending.set(id, { timer, resolve, reject })
         try {
-          options.send(createPlainRpcRequest(id, method, params))
+          options.send(createPlainRpcRequest(id, method, params, transportKind))
         } catch (err) {
           // send 失败代表请求不会离开本地，立即清理 pending，避免继续等 timeout。
           rejectPending(id, err instanceof Error ? err : new Error('Plain RPC send failed'))
         }
       })
     },
-    handle(value) {
+    handle(value, observedTransport = transportKind) {
       if (closed) return
-      if (isPlainRpcNotification(value)) {
-        options.onNotification?.({ method: value.method, params: value.params })
+      const inbound = normalizeObservedMessage(value, observedTransport)
+      if (isPlainRpcNotification(inbound.payload)) {
+        options.onNotification?.({
+          method: inbound.payload.method,
+          params: inbound.payload.params,
+          declaredTransport: declaredTransportKind(inbound.payload),
+          observedTransport: inbound.observedTransport
+        })
         return
       }
-      if (!isPlainRpcResponse(value)) return
+      if (!isPlainRpcResponse(inbound.payload)) return
 
-      const item = pending.get(value.id)
+      const item = pending.get(inbound.payload.id)
       if (!item) return
       clearTimeout(item.timer)
-      pending.delete(value.id)
+      pending.delete(inbound.payload.id)
 
-      if (value.ok) {
-        item.resolve(value.result)
+      if (inbound.payload.ok) {
+        item.resolve(inbound.payload.result)
         return
       }
 
