@@ -29,10 +29,10 @@ function createRepo(): DesktopLoginRepository {
       for (const session of sessions.values()) {
         // 新绑定完成后，旧的 pending/completed 会话不能再返回已轮换的设备 token。
         if (
-          session.userId === input.userId &&
           session.fingerprintHash === input.fingerprintHash &&
           session.requestId !== input.requestId &&
-          (session.status === 'pending' || session.status === 'completed')
+          (session.status === 'pending' ||
+            (session.status === 'completed' && session.userId === input.userId))
         ) {
           session.status = 'consumed'
           session.consumedAt = input.consumedAt
@@ -164,13 +164,14 @@ describe('desktop login service', () => {
     })
 
     const startOne = await service.start(first.input)
-    const startTwo = await service.start(second.input)
-    if (!startOne.ok || !startTwo.ok) throw new Error('start failed')
+    if (!startOne.ok) throw new Error('start failed')
 
     await service.complete({
       requestId: startOne.data.request_id,
       user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
     })
+    const startTwo = await service.start(second.input)
+    if (!startTwo.ok) throw new Error('start failed')
     await service.complete({
       requestId: startTwo.data.request_id,
       user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
@@ -200,5 +201,39 @@ describe('desktop login service', () => {
     ).device
 
     expect(deviceTwo.id).toBe('dev_1')
+  })
+
+  it('consumes older pending session for the same fingerprint when latest session completes', async () => {
+    const first = await validStartInput()
+    const second = await validStartInput()
+    second.input.device_fingerprint = first.input.device_fingerprint
+    const service = createDesktopLoginService({
+      repo: createRepo(),
+      config: {
+        publicUrl: 'https://remote.example.com',
+        tokenPepper: 'pepper',
+        desktopLoginTtlSeconds: 600
+      }
+    })
+
+    const startOne = await service.start(first.input)
+    const startTwo = await service.start(second.input)
+    if (!startOne.ok || !startTwo.ok) throw new Error('start failed')
+
+    await service.complete({
+      requestId: startTwo.data.request_id,
+      user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
+    })
+
+    const superseded = await service.poll({
+      request_id: startOne.data.request_id,
+      poll_token: startOne.data.poll_token
+    })
+
+    expect(superseded).toEqual({
+      ok: false,
+      code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
+      message: '桌面登录会话已被消费'
+    })
   })
 })

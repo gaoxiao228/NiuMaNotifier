@@ -35,10 +35,12 @@ export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
       await db.execute(sql`
         UPDATE desktop_login_sessions
         SET status = 'consumed', consumed_at = ${input.consumedAt}
-        WHERE user_id = ${input.userId}
-          AND fingerprint_hash = ${input.fingerprintHash}
+        WHERE fingerprint_hash = ${input.fingerprintHash}
           AND request_id <> ${input.requestId}
-          AND status IN ('pending', 'completed')
+          AND (
+            status = 'pending'
+            OR (status = 'completed' AND user_id = ${input.userId})
+          )
       `)
     },
     async upsertDevice(input) {
