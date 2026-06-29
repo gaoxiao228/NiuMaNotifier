@@ -30,6 +30,17 @@ export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
         .set({ status: 'consumed', consumedAt: new Date() })
         .where(eq(desktopLoginSessions.requestId, requestId))
     },
+    async consumeOtherSessionsForDevice(input) {
+      // 新 complete 会轮换设备 token，旧会话必须被消费，避免之后 poll 返回失效凭据。
+      await db.execute(sql`
+        UPDATE desktop_login_sessions
+        SET status = 'consumed', consumed_at = ${input.consumedAt}
+        WHERE user_id = ${input.userId}
+          AND fingerprint_hash = ${input.fingerprintHash}
+          AND request_id <> ${input.requestId}
+          AND status IN ('pending', 'completed')
+      `)
+    },
     async upsertDevice(input) {
       // PostgreSQL 的部分唯一索引需要用原生 ON CONFLICT 匹配 predicate，避免先查再写竞态。
       const result = await db.execute(sql`

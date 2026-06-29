@@ -32,6 +32,12 @@ export type DesktopLoginRepository = {
   findSessionByRequestId(requestId: string): Promise<DesktopLoginSession | null>
   completeSession(requestId: string, input: Partial<DesktopLoginSession>): Promise<void>
   consumeSession(requestId: string): Promise<void>
+  consumeOtherSessionsForDevice(input: {
+    userId: string
+    fingerprintHash: string
+    requestId: string
+    consumedAt: Date
+  }): Promise<void>
   upsertDevice(input: {
     userId: string
     name: string
@@ -150,6 +156,12 @@ export function createDesktopLoginService(options: {
         deviceId: device.id,
         encryptedResultJson: encryptedResult,
         completedAt: clock.now()
+      })
+      await options.repo.consumeOtherSessionsForDevice({
+        userId: input.user.id,
+        fingerprintHash: session.fingerprintHash,
+        requestId: input.requestId,
+        consumedAt: clock.now()
       })
 
       return { ok: true as const, data: {} }

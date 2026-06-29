@@ -25,6 +25,20 @@ function createRepo(): DesktopLoginRepository {
       sessions.get(requestId).status = 'consumed'
       sessions.get(requestId).consumedAt = new Date()
     },
+    async consumeOtherSessionsForDevice(input) {
+      for (const session of sessions.values()) {
+        // 新绑定完成后，旧的 pending/completed 会话不能再返回已轮换的设备 token。
+        if (
+          session.userId === input.userId &&
+          session.fingerprintHash === input.fingerprintHash &&
+          session.requestId !== input.requestId &&
+          (session.status === 'pending' || session.status === 'completed')
+        ) {
+          session.status = 'consumed'
+          session.consumedAt = input.consumedAt
+        }
+      }
+    },
     async upsertDevice(input) {
       const existing = [...devices.values()].find(
         (device) =>
@@ -162,29 +176,29 @@ describe('desktop login service', () => {
       user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
     })
 
-    const completedOne = await service.poll({
-      request_id: startOne.data.request_id,
-      poll_token: startOne.data.poll_token
-    })
     const completedTwo = await service.poll({
       request_id: startTwo.data.request_id,
       poll_token: startTwo.data.poll_token
     })
-    expect(completedOne.ok).toBe(true)
     expect(completedTwo.ok).toBe(true)
-    if (!completedOne.ok || !completedTwo.ok) throw new Error('poll failed')
+    if (!completedTwo.ok) throw new Error('poll failed')
 
-    const deviceOne = JSON.parse(
-      new TextDecoder().decode(
-        (await compactDecrypt(completedOne.data.encrypted_result.jwe, first.privateKey)).plaintext
-      )
-    ).device
+    const completedOne = await service.poll({
+      request_id: startOne.data.request_id,
+      poll_token: startOne.data.poll_token
+    })
+    expect(completedOne).toEqual({
+      ok: false,
+      code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
+      message: '桌面登录会话已被消费'
+    })
+
     const deviceTwo = JSON.parse(
       new TextDecoder().decode(
         (await compactDecrypt(completedTwo.data.encrypted_result.jwe, second.privateKey)).plaintext
       )
     ).device
 
-    expect(deviceTwo.id).toBe(deviceOne.id)
+    expect(deviceTwo.id).toBe('dev_1')
   })
 })
