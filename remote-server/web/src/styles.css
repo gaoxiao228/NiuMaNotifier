@@ -337,7 +337,8 @@ select {
 }
 
 .relay-log .panel-title {
-  justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: flex-start;
   width: 100%;
 }
 

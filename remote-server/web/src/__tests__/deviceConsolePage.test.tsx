@@ -620,6 +620,78 @@ describe('DeviceConsolePage', () => {
     })
   })
 
+  it('shows the active transport switching from relay to WebRTC and back to relay', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      signalClient.onMessage = options.onMessage
+      return signalClient
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+    let webRtcOptions: WebRtcTransportOptions | null = null
+    const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
+      webRtcOptions = options
+      return {
+        kind: 'webrtc',
+        start: vi.fn(async () => {}),
+        acceptAnswer: vi.fn(),
+        addRemoteIceCandidate: vi.fn(),
+        send: vi.fn(),
+        close: vi.fn()
+      }
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        createWebRtc={createWebRtc}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      signalClient.onStatus('accepted')
+      await Promise.resolve()
+    })
+
+    act(() => {
+      relayOptions?.onOpen()
+    })
+    expect(screen.getByText('Active transport: Relay')).not.toBeNull()
+
+    act(() => {
+      webRtcOptions?.onOpen()
+    })
+    expect(screen.getByText('Active transport: WebRTC')).not.toBeNull()
+
+    act(() => {
+      webRtcOptions?.onClose()
+    })
+    expect(screen.getByText('Active transport: Relay')).not.toBeNull()
+  })
+
   it('renders an empty state when the remote session project group list is empty', async () => {
     await openRelayConsoleWithSessionPayload({ list: [], page: 1, page_size: 20, total: 0 })
 

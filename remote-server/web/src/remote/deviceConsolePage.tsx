@@ -38,6 +38,9 @@ type RpcResultState = {
   value: unknown
 }
 
+type ActiveTransportState = 'idle' | 'relay' | 'webrtc'
+type TransportConnectionState = 'idle' | 'connecting' | 'open' | 'closed' | 'error'
+
 type RemoteSessionProjectGroupPage = {
   list: RemoteSessionProjectGroup[]
   page?: number
@@ -227,7 +230,9 @@ export function DeviceConsolePage({
 }: DeviceConsolePageProps) {
   const clientId = useMemo(() => getStableClientId(), [])
   const [status, setStatus] = useState<ConnectionStatus | 'idle'>('idle')
-  const [relayStatus, setRelayStatus] = useState<'idle' | 'connecting' | 'open' | 'closed' | 'error'>('idle')
+  const [relayStatus, setRelayStatus] = useState<TransportConnectionState>('idle')
+  const [webRtcStatus, setWebRtcStatus] = useState<TransportConnectionState>('idle')
+  const [activeTransport, setActiveTransport] = useState<ActiveTransportState>('idle')
   const [connectionId, setConnectionId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<unknown[]>([])
@@ -236,6 +241,7 @@ export function DeviceConsolePage({
   const [sessionsResult, setSessionsResult] = useState<RpcResultState>({ status: 'idle', value: null })
   const socketRef = useRef<ConnectionClient | null>(null)
   const relayRef = useRef<RelayClient | null>(null)
+  const relayOpenRef = useRef(false)
   const webRtcRef = useRef<WebRtcTransport | null>(null)
   const webRtcOpenRef = useRef(false)
   const messageBusRef = useRef<RemoteMessageBus | null>(null)
@@ -264,6 +270,7 @@ export function DeviceConsolePage({
       messageBusRef.current = null
       rpcRef.current = null
       webRtcRef.current = null
+      relayOpenRef.current = false
       webRtcOpenRef.current = false
       relayRef.current = null
     }
@@ -275,6 +282,8 @@ export function DeviceConsolePage({
 
   function resetRelayConsole() {
     setRelayStatus('idle')
+    setWebRtcStatus('idle')
+    setActiveTransport('idle')
     setPingResult({ status: 'idle', value: null })
     setStateResult({ status: 'idle', value: null })
     setSessionsResult({ status: 'idle', value: null })
@@ -291,6 +300,7 @@ export function DeviceConsolePage({
     messageBusRef.current = null
     rpcRef.current = null
     webRtcRef.current = null
+    relayOpenRef.current = false
     webRtcOpenRef.current = false
     relayRef.current = null
   }
@@ -331,6 +341,10 @@ export function DeviceConsolePage({
     if (result.status === 'idle') return t('waiting_for_relay')
     if (result.status === 'loading') return t('waiting_for_response')
     return displayJson(result.value)
+  }
+
+  function activeTransportLabel(): string {
+    return t(`active_transport_${activeTransport}`)
   }
 
   useEffect(() => {
@@ -397,6 +411,7 @@ export function DeviceConsolePage({
     closeRelayConsole()
     resetRelayConsole()
     setRelayStatus('connecting')
+    setWebRtcStatus('connecting')
 
     const relayUrl = buildRelaySocketUrl(result.relay_url || result.signaling_url || window.location.origin, {
       connection_id: result.connection_id,
@@ -452,6 +467,8 @@ export function DeviceConsolePage({
           if (!isActiveConnection(activeConnectionId)) return
           webRtcOpenRef.current = true
           messageBus.setOpen('webrtc', true)
+          setWebRtcStatus('open')
+          setActiveTransport('webrtc')
         },
         onPayload: (value) => {
           if (isActiveConnection(activeConnectionId)) messageBus.receive(value, 'webrtc')
@@ -460,11 +477,15 @@ export function DeviceConsolePage({
           if (!isActiveConnection(activeConnectionId)) return
           webRtcOpenRef.current = false
           messageBus.setOpen('webrtc', false)
+          setWebRtcStatus('closed')
+          setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
         },
         onError: () => {
           if (!isActiveConnection(activeConnectionId)) return
           webRtcOpenRef.current = false
           messageBus.setOpen('webrtc', false)
+          setWebRtcStatus('error')
+          setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
         }
       })
       webRtcRef.current = webRtcTransport
@@ -474,6 +495,8 @@ export function DeviceConsolePage({
         if (isActiveConnection(activeConnectionId)) {
           webRtcOpenRef.current = false
           messageBus.setOpen('webrtc', false)
+          setWebRtcStatus('error')
+          setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
         }
       })
     }
@@ -513,7 +536,10 @@ export function DeviceConsolePage({
       if (messageBusRef.current === messageBus) messageBusRef.current = null
       if (rpcRef.current === rpcClient) rpcRef.current = null
       if (webRtcRef.current) webRtcRef.current = null
+      relayOpenRef.current = false
       webRtcOpenRef.current = false
+      setWebRtcStatus('closed')
+      setActiveTransport('idle')
       if (relayRef.current === relayClient) relayRef.current = null
     }
 
@@ -563,7 +589,9 @@ export function DeviceConsolePage({
           close: () => relayClient.close()
         })
         messageBus.setOpen('relay', true)
+        relayOpenRef.current = true
         setRelayStatus('open')
+        if (!webRtcOpenRef.current) setActiveTransport('relay')
         updateRpcResult('rpc.ping', setPingResult)
         updateRpcResult('state.get', setStateResult)
         subscribeRemoteSessions()
@@ -576,6 +604,7 @@ export function DeviceConsolePage({
       onClose: () => {
         if (!isActiveConnection(activeConnectionId)) return
         messageBus.setOpen('relay', false)
+        relayOpenRef.current = false
         if (webRtcOpenRef.current) {
           if (relayRef.current === relayClient) relayRef.current = null
           setRelayStatus('closed')
@@ -587,6 +616,7 @@ export function DeviceConsolePage({
       onError: () => {
         if (!isActiveConnection(activeConnectionId)) return
         messageBus.setOpen('relay', false)
+        relayOpenRef.current = false
         if (webRtcOpenRef.current) {
           relayClient.close()
           if (relayRef.current === relayClient) relayRef.current = null
@@ -709,6 +739,12 @@ export function DeviceConsolePage({
           {t('remote_rpc_status')}
           <span className={`relay-status relay-status-${relayStatus}`}>
             {t(`relay_status_${relayStatus}`)}
+          </span>
+          <span className={`relay-status relay-status-${webRtcStatus}`}>
+            {t(`webrtc_status_${webRtcStatus}`)}
+          </span>
+          <span className={`relay-status transport-status-${activeTransport}`}>
+            {t('active_transport')}: {activeTransportLabel()}
           </span>
         </div>
         <div className="rpc-result-grid">
