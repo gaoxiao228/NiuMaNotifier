@@ -51,7 +51,7 @@ export const devices = pgTable(
 )
 
 export const remoteConnections = pgTable('remote_connections', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: text('id').primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id),
   deviceId: uuid('device_id').notNull().references(() => devices.id),
   clientId: text('client_id').notNull(),

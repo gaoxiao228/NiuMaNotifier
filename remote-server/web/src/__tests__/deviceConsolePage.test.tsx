@@ -36,12 +36,97 @@ function createConnectionResultWithId(connectionId: string): ConnectionCreateRes
   }
 }
 
+async function openRelayConsoleWithSessionPayload(sessionPayload: unknown) {
+  const create = vi.fn().mockResolvedValue(createConnectionResult())
+  const signalClients: Array<{ onStatus: (status: ConnectionStatus) => void }> = []
+  const createConnection = vi.fn((options: ConnectionClientOptions) => {
+    const client = {
+      socket: {} as WebSocket,
+      close: vi.fn(),
+      onStatus: options.onStatus,
+      onMessage: options.onMessage
+    }
+    signalClients.push(client)
+    return client
+  })
+  let relayOptions: RelayClientOptions | null = null
+  const relayClient: RelayClient = {
+    socket: {} as WebSocket,
+    send: vi.fn(),
+    close: vi.fn()
+  }
+  const createRelay = vi.fn((options: RelayClientOptions) => {
+    relayOptions = options
+    return relayClient
+  })
+
+  render(
+    <DeviceConsolePage
+      device={createDevice(true)}
+      connectionsApi={{ create }}
+      createConnection={createConnection}
+      createRelay={createRelay}
+      t={t}
+      onBack={() => {}}
+    />
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+  await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+  act(() => {
+    signalClients[0]?.onStatus('accepted')
+  })
+  await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+  await act(async () => {
+    relayOptions?.onOpen()
+    relayOptions?.onPayload({ version: 1, type: 'response', id: 'rpc_3', ok: true, result: { stream_id: 'stream_1' } })
+    await Promise.resolve()
+    relayOptions?.onPayload({
+      version: 1,
+      type: 'notification',
+      method: 'local_api.stream.event',
+      params: {
+        stream_id: 'stream_1',
+        event: 'session_project_groups',
+        id: '1',
+        data: sessionPayload
+      }
+    })
+    await Promise.resolve()
+  })
+
+  return { relayClient }
+}
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
 })
 
 describe('DeviceConsolePage', () => {
+  it('starts a connection automatically when requested for an online device', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const createConnection = vi.fn()
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        t={t}
+        onBack={() => {}}
+        autoConnect
+      />
+    )
+
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledWith('device-1', expect.stringMatching(/^niuma-web-client-/))
+      expect(createConnection).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('creates a relay-first connection and opens a websocket client for an online device', async () => {
     const create = vi.fn().mockResolvedValue(createConnectionResult())
     const createConnection = vi.fn()
@@ -276,10 +361,19 @@ describe('DeviceConsolePage', () => {
     )
     expect(relayClient.send).toHaveBeenNthCalledWith(
       3,
-      expect.objectContaining({ id: 'rpc_3', method: 'session.list' })
+      expect.objectContaining({
+        id: 'rpc_3',
+        method: 'local_api.stream',
+        params: {
+          method: 'GET',
+          path: '/api/v1/session_project_groups/stream?tool=codex&page=1&page_size=20',
+          headers: {},
+          body: null
+        }
+      })
     )
 
-    act(() => {
+    await act(async () => {
       relayOptions?.onPayload({ version: 1, type: 'response', id: 'rpc_1', ok: true, result: { pong: true } })
       relayOptions?.onPayload({
         version: 1,
@@ -293,14 +387,150 @@ describe('DeviceConsolePage', () => {
         type: 'response',
         id: 'rpc_3',
         ok: true,
-        result: { sessions: [{ id: 's1' }] }
+        result: { stream_id: 'stream_1' }
       })
+      await Promise.resolve()
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'notification',
+        method: 'local_api.stream.event',
+        params: {
+          stream_id: 'stream_1',
+          event: 'session_project_groups',
+          id: '1',
+          data: {
+            list: [
+              {
+                tool: 'codex',
+                project_name: 'repo',
+                project_path: '/repo',
+                sessions: [
+                  {
+                    normalized_session_id: 'session-1',
+                    primary_session_id: 's1',
+                    title: 'Demo session',
+                    runtime_status: 'running',
+                    status: 'idle',
+                    first_user_message_preview: 'Inspect remote sessions',
+                    latest_event_summary: null,
+                    subagent_count: 0
+                  }
+                ]
+              }
+            ],
+            page: 1,
+            page_size: 20,
+            total: 1
+          }
+        }
+      })
+      await Promise.resolve()
     })
 
     expect(await screen.findByText('Ping')).not.toBeNull()
     expect(screen.getByText(/"pong": true/)).not.toBeNull()
     expect(screen.getByText(/"state": "ready"/)).not.toBeNull()
-    expect(screen.getByText(/"id": "s1"/)).not.toBeNull()
+    expect(screen.getByText(/"project_name": "repo"/)).not.toBeNull()
+    expect(screen.getByText(/"title": "Demo session"/)).not.toBeNull()
+    expect(screen.getByText('repo')).not.toBeNull()
+    expect(screen.getByText('/repo')).not.toBeNull()
+    expect(screen.getByText('Demo session')).not.toBeNull()
+    expect(screen.getByText('running')).not.toBeNull()
+    expect(screen.getByText('Inspect remote sessions')).not.toBeNull()
+  })
+
+  it('renders an empty state when the remote session project group list is empty', async () => {
+    await openRelayConsoleWithSessionPayload({ list: [], page: 1, page_size: 20, total: 0 })
+
+    expect(await screen.findByText('No remote sessions to display')).not.toBeNull()
+  })
+
+  it('falls back to provider session status when runtime status is null', async () => {
+    await openRelayConsoleWithSessionPayload({
+      list: [
+        {
+          tool: 'codex',
+          project_name: 'repo',
+          project_path: '/repo',
+          sessions: [
+            {
+              normalized_session_id: 'session-2',
+              primary_session_id: 's2',
+              title: 'Historical session',
+              runtime_status: null,
+              status: 'active',
+              first_user_message_preview: 'Review old work',
+              latest_event_summary: null,
+              subagent_count: 0
+            }
+          ]
+        }
+      ],
+      page: 1,
+      page_size: 20,
+      total: 1
+    })
+
+    expect(await screen.findByText('Historical session')).not.toBeNull()
+    expect(screen.getByText('active')).not.toBeNull()
+  })
+
+  it('renders a session read error when the remote session RPC fails', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClients: Array<{ onStatus: (status: ConnectionStatus) => void }> = []
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      const client = {
+        socket: {} as WebSocket,
+        close: vi.fn(),
+        onStatus: options.onStatus,
+        onMessage: options.onMessage
+      }
+      signalClients.push(client)
+      return client
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      signalClients[0]?.onStatus('accepted')
+    })
+    await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      relayOptions?.onOpen()
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: 'rpc_3',
+        ok: false,
+        error: { code: 'REMOTE_ERROR', message: 'failed' }
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('Unable to read remote sessions')).not.toBeNull()
   })
 
   it('closes pending RPC requests immediately when relay closes', async () => {
@@ -349,7 +579,7 @@ describe('DeviceConsolePage', () => {
     act(() => {
       relayOptions?.onOpen()
     })
-    expect(screen.getAllByText('Waiting for response')).toHaveLength(3)
+    expect(screen.getAllByText('Waiting for response')).toHaveLength(4)
 
     await act(async () => {
       relayOptions?.onClose()

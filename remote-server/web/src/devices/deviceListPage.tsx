@@ -17,8 +17,11 @@ type DeviceListPageProps = {
   onUnauthorized?(): void
 }
 
+const AUTH_INVALID_CODES = new Set([200001, 200002, 200003])
+
 function isUnauthorizedError(err: unknown): boolean {
-  return (err instanceof ApiError && err.code === 200001) || (err instanceof HttpError && err.status === 401)
+  // 服务端会用不同业务码表达未登录、Token 无效和 Token 过期，这些都需要回到登录页。
+  return (err instanceof ApiError && AUTH_INVALID_CODES.has(err.code)) || (err instanceof HttpError && err.status === 401)
 }
 
 export function DeviceListPage({ devicesApi, t, onSelectDevice, onUnauthorized }: DeviceListPageProps) {

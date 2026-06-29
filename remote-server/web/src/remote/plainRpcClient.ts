@@ -15,9 +15,17 @@ export type PlainRpcResponse = {
   error?: unknown
 }
 
+export type PlainRpcNotification = {
+  version: 1
+  type: 'notification'
+  method: string
+  params: unknown
+}
+
 export type PlainRpcClientOptions = {
   timeoutMs: number
   send(value: PlainRpcRequest): void
+  onNotification?: (notification: { method: string; params: unknown }) => void
 }
 
 export type PlainRpcClient = {
@@ -57,6 +65,15 @@ export function isPlainRpcResponse(value: unknown): value is PlainRpcResponse {
   )
 }
 
+export function isPlainRpcNotification(value: unknown): value is PlainRpcNotification {
+  if (value === null || typeof value !== 'object') {
+    return false
+  }
+
+  const item = value as Partial<PlainRpcNotification>
+  return item.version === 1 && item.type === 'notification' && typeof item.method === 'string'
+}
+
 export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcClient {
   let nextId = 1
   let closed = false
@@ -91,7 +108,12 @@ export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcCl
       })
     },
     handle(value) {
-      if (closed || !isPlainRpcResponse(value)) return
+      if (closed) return
+      if (isPlainRpcNotification(value)) {
+        options.onNotification?.({ method: value.method, params: value.params })
+        return
+      }
+      if (!isPlainRpcResponse(value)) return
 
       const item = pending.get(value.id)
       if (!item) return

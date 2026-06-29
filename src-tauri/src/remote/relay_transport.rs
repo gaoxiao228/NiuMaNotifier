@@ -1,7 +1,10 @@
+use crate::remote::rpc_router::RemoteRpcContext;
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use http::Request;
+use http::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,14 +34,31 @@ pub struct RelayFrame {
     pub ciphertext: String,
 }
 
+#[derive(Debug, Clone)]
+struct RelayOutboundSeq {
+    next: u64,
+}
+
+impl RelayOutboundSeq {
+    fn new() -> Self {
+        Self { next: 1 }
+    }
+
+    fn allocate(&mut self) -> u64 {
+        let seq = self.next;
+        self.next += 1;
+        seq
+    }
+}
+
 pub fn relay_socket_url(
     server_url: &str,
     connection_id: &str,
     connection_token: &str,
     side: RelaySide,
 ) -> Result<String, String> {
-    let mut url =
-        reqwest::Url::parse(server_url).map_err(|error| format!("远程服务地址格式错误：{error}"))?;
+    let mut url = reqwest::Url::parse(server_url)
+        .map_err(|error| format!("远程服务地址格式错误：{error}"))?;
 
     let socket_scheme = match url.scheme() {
         "http" => "ws",
@@ -63,14 +83,34 @@ pub fn relay_device_authorization_header(device_token: &str) -> String {
     format!("Device {device_token}")
 }
 
-pub fn handle_relay_text_frame(text: String) -> Result<Option<String>, String> {
+pub fn build_relay_socket_upgrade_request(
+    socket_url: &str,
+    device_token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    let mut request = socket_url
+        .into_client_request()
+        .map_err(|error| format!("构造 relay WebSocket 握手请求失败：{error}"))?;
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        relay_device_authorization_header(device_token)
+            .parse()
+            .map_err(|error| format!("构造 relay 授权头失败：{error}"))?,
+    );
+    Ok(request)
+}
+
+pub fn handle_relay_text_frame(
+    text: String,
+    rpc_context: &RemoteRpcContext,
+) -> Result<Option<String>, String> {
     let frame: RelayFrame =
         serde_json::from_str(&text).map_err(|error| format!("relay 帧 JSON 解析失败：{error}"))?;
     if frame.version != 1 || frame.frame_type != "relay.frame" {
         return Err("relay 帧格式无效".to_string());
     }
 
-    let Some(ciphertext) = crate::remote::relay_runtime::handle_relay_ciphertext(&frame.ciphertext)?
+    let Some(ciphertext) =
+        crate::remote::relay_runtime::handle_relay_ciphertext(&frame.ciphertext, rpc_context)?
     else {
         return Ok(None);
     };
@@ -80,12 +120,12 @@ pub fn handle_relay_text_frame(text: String) -> Result<Option<String>, String> {
         .map_err(|error| format!("relay 响应帧 JSON 编码失败：{error}"))
 }
 
-#[allow(dead_code)]
 pub async fn run_device_relay_once(
     server_url: &str,
     connection_id: &str,
     connection_token: &str,
     device_token: &str,
+    rpc_context: RemoteRpcContext,
 ) -> Result<(), String> {
     let socket_url = relay_socket_url(
         server_url,
@@ -93,47 +133,85 @@ pub async fn run_device_relay_once(
         connection_token,
         RelaySide::Device,
     )?;
-    let request = Request::builder()
-        .uri(&socket_url)
-        .header(
-            "Authorization",
-            relay_device_authorization_header(device_token),
-        )
-        .body(())
-        .map_err(|error| format!("构造 relay 连接请求失败：{error}"))?;
+    let request = build_relay_socket_upgrade_request(&socket_url, device_token)?;
     let (stream, _) = connect_async(request)
         .await
         .map_err(|error| format!("relay 设备连接失败：{error}"))?;
     let (mut writer, mut reader) = stream.split();
+    let (notification_tx, mut notification_rx) = tokio::sync::mpsc::unbounded_channel();
+    let rpc_context = rpc_context.with_notification_sender(notification_tx);
+    let mut outbound_seq = RelayOutboundSeq::new();
 
-    while let Some(next) = reader.next().await {
-        match next {
-            Ok(Message::Text(text)) => {
-                if let Some(response) = handle_relay_text_frame(text.to_string())? {
-                    writer
-                        .send(Message::Text(response))
-                        .await
-                        .map_err(|error| format!("发送 relay 响应失败：{error}"))?;
+    loop {
+        tokio::select! {
+            next = reader.next() => {
+                let Some(next) = next else {
+                    return Ok(());
+                };
+                match next {
+                    Ok(Message::Text(text)) => {
+                        let frame: RelayFrame = serde_json::from_str(&text)
+                            .map_err(|error| format!("relay 帧 JSON 解析失败：{error}"))?;
+                        if frame.version != 1 || frame.frame_type != "relay.frame" {
+                            return Err("relay 帧格式无效".to_string());
+                        }
+                        if let Some(ciphertext) = crate::remote::relay_runtime::handle_relay_ciphertext_async(
+                            &frame.ciphertext,
+                            &rpc_context,
+                        ).await? {
+                            // 设备侧 response 和 stream notification 必须共用同一条单调递增序列。
+                            let response = crate::remote::relay_runtime::build_relay_response_frame_with_seq(
+                                &frame,
+                                outbound_seq.allocate(),
+                                ciphertext,
+                            );
+                            let response_text = serde_json::to_string(&response)
+                                .map_err(|error| format!("relay 响应帧 JSON 编码失败：{error}"))?;
+                            writer
+                                .send(Message::Text(response_text))
+                                .await
+                                .map_err(|error| format!("发送 relay 响应失败：{error}"))?;
+                        }
+                    }
+                    Ok(Message::Ping(payload)) => {
+                        writer
+                            .send(Message::Pong(payload))
+                            .await
+                            .map_err(|error| format!("回复 relay ping 失败：{error}"))?;
+                    }
+                    Ok(Message::Close(_)) => return Ok(()),
+                    Ok(_) => {}
+                    Err(error) => return Err(format!("读取 relay 连接失败：{error}")),
                 }
             }
-            Ok(Message::Ping(payload)) => {
+            notification = notification_rx.recv() => {
+                let Some(notification) = notification else {
+                    continue;
+                };
+                let bytes = serde_json::to_vec(&notification)
+                    .map_err(|error| format!("relay 通知 JSON 编码失败：{error}"))?;
+                let ciphertext = base64::engine::general_purpose::STANDARD.encode(bytes);
+                let frame = crate::remote::relay_runtime::build_relay_notification_frame(
+                    connection_id,
+                    outbound_seq.allocate(),
+                    ciphertext,
+                );
+                let text = serde_json::to_string(&frame)
+                    .map_err(|error| format!("relay 通知帧 JSON 编码失败：{error}"))?;
                 writer
-                    .send(Message::Pong(payload))
+                    .send(Message::Text(text))
                     .await
-                    .map_err(|error| format!("回复 relay ping 失败：{error}"))?;
+                    .map_err(|error| format!("发送 relay 通知失败：{error}"))?;
             }
-            Ok(Message::Close(_)) => return Ok(()),
-            Ok(_) => {}
-            Err(error) => return Err(format!("读取 relay 连接失败：{error}")),
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use niuma_api::tool_sessions::ToolSessionRegistry;
+    use niuma_core::store::NiumaStore;
 
     #[test]
     fn builds_ws_url_from_http_server() {
@@ -218,6 +296,7 @@ mod tests {
 
     #[test]
     fn dispatches_ping_text_frame_to_response_text_frame() {
+        let context = test_rpc_context("relay-transport-ping-frame");
         let response = handle_relay_text_frame(
             serde_json::json!({
                 "version": 1,
@@ -228,6 +307,7 @@ mod tests {
                 "ciphertext": "eyJ0eXBlIjoicGluZyJ9"
             })
             .to_string(),
+            &context,
         )
         .unwrap()
         .unwrap();
@@ -240,6 +320,7 @@ mod tests {
 
     #[test]
     fn ignores_unknown_runtime_payloads() {
+        let context = test_rpc_context("relay-transport-unknown");
         let response = handle_relay_text_frame(
             serde_json::json!({
                 "version": 1,
@@ -250,6 +331,7 @@ mod tests {
                 "ciphertext": "eyJ0eXBlIjoidW5rbm93biJ9"
             })
             .to_string(),
+            &context,
         )
         .unwrap();
 
@@ -262,5 +344,36 @@ mod tests {
             relay_device_authorization_header("dvt_secret"),
             "Device dvt_secret"
         );
+    }
+
+    #[test]
+    fn builds_relay_upgrade_request_with_websocket_headers() {
+        let request = build_relay_socket_upgrade_request(
+            "ws://127.0.0.1:27880/ws/relay?connection_id=conn_1&connection_token=cnt_secret&side=device",
+            "dvt_secret",
+        )
+        .unwrap();
+
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Device dvt_secret"
+        );
+        assert!(request.headers().contains_key("sec-websocket-key"));
+        assert_eq!(request.headers().get("upgrade").unwrap(), "websocket");
+    }
+
+    #[test]
+    fn outbound_sequence_is_monotonic_for_responses_and_notifications() {
+        let mut seq = RelayOutboundSeq::new();
+
+        assert_eq!(seq.allocate(), 1);
+        assert_eq!(seq.allocate(), 2);
+        assert_eq!(seq.allocate(), 3);
+    }
+
+    fn test_rpc_context(name: &str) -> RemoteRpcContext {
+        let path = std::env::temp_dir().join(format!("{name}-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        RemoteRpcContext::new(NiumaStore::new(path), ToolSessionRegistry::new())
     }
 }

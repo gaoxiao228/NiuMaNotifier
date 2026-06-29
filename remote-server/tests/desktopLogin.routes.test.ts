@@ -27,6 +27,8 @@ describe('desktop login routes', () => {
     expect(response.headers['content-type']).toContain('text/html')
     expect(response.body).toContain('desktop-login-form')
     expect(response.body).toContain('dlr_123')
+    expect(response.body).toContain("localStorage.setItem('niuma.remote.access_token'")
+    expect(response.body).toContain("window.location.assign('/')")
   })
 
   it('validates start request', async () => {

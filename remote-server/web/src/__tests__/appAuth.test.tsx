@@ -34,14 +34,18 @@ afterEach(() => {
 })
 
 describe('App auth state', () => {
-  it('clears an invalid persisted token and returns to login', async () => {
+  it.each([
+    { code: 200001, message: '未登录' },
+    { code: 200002, message: 'Token 无效' },
+    { code: 200003, message: 'Token 已过期' }
+  ])('clears persisted token and returns to login when API returns auth code $code', async ({ code, message }) => {
     const storage = createStorage('expired-token')
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: storage
     })
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ code: 200001, message: '未登录', data: null }), {
+      new Response(JSON.stringify({ code, message, data: null }), {
         headers: { 'Content-Type': 'application/json' }
       })
     )

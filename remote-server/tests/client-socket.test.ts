@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { createConnectionTokenService } from '../src/modules/connections/connection-token.service.js'
 import { clientSignalMessageSchema } from '../src/modules/connections/connections.schemas.js'
 import { createDeviceSocketRegistry } from '../src/modules/devices/device-socket-registry.js'
-import { bindClientConnection, forwardClientSignal } from '../src/ws/client-socket.js'
+import {
+  bindClientConnection,
+  createClientCancelMessage,
+  forwardClientSignal,
+  inviteDeviceForBoundClient
+} from '../src/ws/client-socket.js'
 
 describe('client signaling prerequisites', () => {
   it('sends messages to registered device socket', () => {
@@ -104,6 +109,7 @@ describe('/ws/client signaling', () => {
             device_id: 'dev_1',
             client_id: 'web_1',
             token_hash: issued.tokenHash,
+            transport_preference: 'relay_first',
             status: 'signaling',
             created_at: '2026-06-28T00:00:00.000Z',
             expires_at: '2099-01-01T00:00:00.000Z'
@@ -118,7 +124,61 @@ describe('/ws/client signaling', () => {
         connectionId: 'conn_1',
         userId: 'usr_1',
         deviceId: 'dev_1',
-        clientId: 'web_1'
+        clientId: 'web_1',
+        connectionToken: issued.token,
+        transportPreference: 'relay_first',
+        expiresAt: '2099-01-01T00:00:00.000Z'
+      }
+    })
+  })
+
+  it('sends device invite after client websocket is bound', () => {
+    const sent: object[] = []
+    const invited = inviteDeviceForBoundClient({
+      connection: {
+        connectionId: 'conn_1',
+        userId: 'usr_1',
+        deviceId: 'dev_1',
+        clientId: 'web_1',
+        connectionToken: 'cnt_relay_secret',
+        transportPreference: 'relay_first',
+        expiresAt: '2026-06-28T00:02:00.000Z'
+      },
+      registry: {
+        sendToDevice(deviceId: string, message: object) {
+          sent.push({ deviceId, message })
+          return true
+        }
+      }
+    })
+
+    expect(invited).toBe(true)
+    expect(sent).toEqual([
+      {
+        deviceId: 'dev_1',
+        message: {
+          version: 1,
+          type: 'connection.invite',
+          id: 'msg_conn_1',
+          data: {
+            connection_id: 'conn_1',
+            connection_token: 'cnt_relay_secret',
+            client_id: 'web_1',
+            transport_preference: 'relay',
+            expires_at: '2026-06-28T00:02:00.000Z'
+          }
+        }
+      }
+    ])
+  })
+
+  it('builds a cancel message for device session cleanup when client websocket closes', () => {
+    expect(createClientCancelMessage('conn_1')).toMatchObject({
+      version: 1,
+      type: 'signal.cancel',
+      data: {
+        connection_id: 'conn_1',
+        reason: 'client_closed'
       }
     })
   })
@@ -132,6 +192,7 @@ describe('/ws/client signaling', () => {
       device_id: 'dev_1',
       client_id: 'web_1',
       token_hash: issued.tokenHash,
+      transport_preference: 'relay_first',
       status: 'signaling' as const,
       created_at: '2026-06-28T00:00:00.000Z',
       expires_at: '2099-01-01T00:00:00.000Z'

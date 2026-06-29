@@ -15,6 +15,13 @@
       "when": 1782702259123,
       "tag": "0001_devices_active_fingerprint_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782736800000,
+      "tag": "0002_remote_connections_text_id",
+      "breakpoints": true
     }
   ]
 }

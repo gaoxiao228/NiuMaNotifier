@@ -49,6 +49,7 @@ describe('connection create device notification', () => {
   it('uses a RemoteAgent compatible invitation message shape', () => {
     const message = createConnectionInviteMessage({
       connectionId: 'conn_1',
+      connectionToken: 'cnt_relay_secret',
       clientId: 'web_1',
       transportPreference: 'webrtc_first',
       expiresAt: '2026-06-28T00:02:00.000Z'
@@ -60,6 +61,7 @@ describe('connection create device notification', () => {
       id: 'msg_conn_1',
       data: {
         connection_id: 'conn_1',
+        connection_token: 'cnt_relay_secret',
         client_id: 'web_1',
         transport_preference: 'auto',
         expires_at: '2026-06-28T00:02:00.000Z'
@@ -71,18 +73,21 @@ describe('connection create device notification', () => {
   it('maps server transport preferences to RemoteAgent transport preferences', () => {
     expect(createConnectionInviteMessage({
       connectionId: 'conn_1',
+      connectionToken: 'cnt_relay_secret_1',
       clientId: 'web_1',
       transportPreference: 'webrtc_first',
       expiresAt: '2026-06-28T00:02:00.000Z'
     }).data.transport_preference).toBe('auto')
     expect(createConnectionInviteMessage({
       connectionId: 'conn_2',
+      connectionToken: 'cnt_relay_secret_2',
       clientId: 'web_1',
       transportPreference: 'relay_first',
       expiresAt: '2026-06-28T00:02:00.000Z'
     }).data.transport_preference).toBe('relay')
     expect(createConnectionInviteMessage({
       connectionId: 'conn_3',
+      connectionToken: 'cnt_relay_secret_3',
       clientId: 'web_1',
       transportPreference: 'relay_only',
       expiresAt: '2026-06-28T00:02:00.000Z'

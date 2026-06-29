@@ -4,6 +4,7 @@ export type ConnectionState = {
   device_id: string
   client_id: string
   token_hash: string
+  transport_preference?: 'webrtc_first' | 'relay_first' | 'relay_only'
   status: 'pending' | 'signaling' | 'connected' | 'closed' | 'expired' | 'failed'
   created_at: string
   expires_at: string
@@ -15,6 +16,7 @@ export type SetConnectionStateInput = {
   deviceId: string
   clientId: string
   tokenHash: string
+  transportPreference: 'webrtc_first' | 'relay_first' | 'relay_only'
   status: ConnectionState['status']
   createdAt: string
   expiresAt: string
@@ -42,6 +44,7 @@ export function createConnectionStateService(options: {
         device_id: input.deviceId,
         client_id: input.clientId,
         token_hash: input.tokenHash,
+        transport_preference: input.transportPreference,
         status: input.status,
         created_at: input.createdAt,
         expires_at: input.expiresAt

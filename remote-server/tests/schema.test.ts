@@ -15,4 +15,8 @@ describe('drizzle schema', () => {
     expect(remoteConnections).toBeDefined()
     expect(desktopLoginSessions).toBeDefined()
   })
+
+  it('stores remote connection public ids as text', () => {
+    expect(remoteConnections.id.columnType).toBe('PgText')
+  })
 })

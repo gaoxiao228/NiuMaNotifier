@@ -31,14 +31,21 @@ impl RemoteSignalingManager {
         }
     }
 
-    pub fn handle_message(&self, config: &RemoteConfig, message: DeviceSignalMessage) -> Vec<Value> {
+    pub fn handle_message(
+        &self,
+        config: &RemoteConfig,
+        message: DeviceSignalMessage,
+    ) -> Vec<Value> {
         match message {
             DeviceSignalMessage::ConnectionInvite { data, .. } => self.handle_invite(config, data),
             DeviceSignalMessage::SignalOffer { data, .. } => self.handle_offer(data),
             DeviceSignalMessage::SignalIceCandidate { data, .. } => self.handle_ice_candidate(data),
             DeviceSignalMessage::SignalCancel { data, .. } => self.handle_cancel(data),
             DeviceSignalMessage::SignalAnswer { data, .. } => {
-                vec![signal_cancel_message(&data.connection_id, "unexpected_answer")]
+                vec![signal_cancel_message(
+                    &data.connection_id,
+                    "unexpected_answer",
+                )]
             }
         }
     }
@@ -63,10 +70,18 @@ impl RemoteSignalingManager {
         };
         if let Ok(mut sessions) = self.sessions.lock() {
             if !sessions.is_empty() && !sessions.contains_key(&invite.connection_id) {
-                return vec![connection_reject_message(
-                    &invite.connection_id,
-                    ConnectionRejectReason::Busy,
-                )];
+                let same_client = sessions
+                    .values()
+                    .all(|session| session.client_id == invite.client_id);
+                if same_client {
+                    // 浏览器刷新、超时或重连可能让旧连接没有及时收到 cancel；同一 client 的新邀请可替换旧会话。
+                    sessions.clear();
+                } else {
+                    return vec![connection_reject_message(
+                        &invite.connection_id,
+                        ConnectionRejectReason::Busy,
+                    )];
+                }
             }
             sessions.insert(
                 invite.connection_id.clone(),
@@ -79,6 +94,9 @@ impl RemoteSignalingManager {
         }
         if let Some(status) = &self.status {
             status.set_active_connection(Some(invite.connection_id.clone()));
+            if transport == TransportPreference::Relay {
+                status.set_selected_transport(Some(RemoteTransportKind::Relay));
+            }
         }
         vec![connection_accept_message(&invite.connection_id, transport)]
     }
@@ -88,6 +106,25 @@ impl RemoteSignalingManager {
             .lock()
             .map(|sessions| sessions.contains_key(connection_id))
             .unwrap_or(false)
+    }
+
+    pub fn clear_session(&self, connection_id: &str) {
+        let removed = self
+            .sessions
+            .lock()
+            .map(|mut sessions| sessions.remove(connection_id).is_some())
+            .unwrap_or(false);
+        if !removed {
+            return;
+        }
+
+        if let Some(status) = &self.status {
+            let snapshot = status.snapshot();
+            if snapshot.active_connection_id.as_deref() == Some(connection_id) {
+                status.set_active_connection(None);
+                status.set_selected_transport(None);
+            }
+        }
     }
 
     pub async fn handle_offer_async(
@@ -201,9 +238,58 @@ mod tests {
         assert!(manager.has_session("conn_1"));
     }
 
+    #[test]
+    fn replaces_stale_session_from_same_client() {
+        let manager = RemoteSignalingManager::default();
+        let config = RemoteConfig::default_for_server("https://remote.example.com");
+        let mut next_invite = sample_invite();
+        next_invite.connection_id = "conn_2".to_string();
+
+        manager.handle_invite(&config, sample_invite());
+        let outbound = manager.handle_invite(&config, next_invite);
+
+        assert_eq!(outbound[0]["type"], "connection.accept");
+        assert!(!manager.has_session("conn_1"));
+        assert!(manager.has_session("conn_2"));
+    }
+
+    #[test]
+    fn rejects_parallel_invite_from_different_client() {
+        let manager = RemoteSignalingManager::default();
+        let config = RemoteConfig::default_for_server("https://remote.example.com");
+        let mut next_invite = sample_invite();
+        next_invite.connection_id = "conn_2".to_string();
+        next_invite.client_id = "other_web".to_string();
+
+        manager.handle_invite(&config, sample_invite());
+        let outbound = manager.handle_invite(&config, next_invite);
+
+        assert_eq!(outbound[0]["type"], "connection.reject");
+        assert_eq!(outbound[0]["data"]["reason"], "busy");
+        assert!(manager.has_session("conn_1"));
+    }
+
+    #[test]
+    fn clears_session_when_transport_ends() {
+        let manager = RemoteSignalingManager::default();
+        let config = RemoteConfig::default_for_server("https://remote.example.com");
+        let mut next_invite = sample_invite();
+        next_invite.connection_id = "conn_2".to_string();
+        next_invite.client_id = "other_web".to_string();
+
+        manager.handle_invite(&config, sample_invite());
+        manager.clear_session("conn_1");
+        let outbound = manager.handle_invite(&config, next_invite);
+
+        assert_eq!(outbound[0]["type"], "connection.accept");
+        assert!(!manager.has_session("conn_1"));
+        assert!(manager.has_session("conn_2"));
+    }
+
     fn sample_invite() -> ConnectionInvite {
         ConnectionInvite {
             connection_id: "conn_1".to_string(),
+            connection_token: Some("cnt_relay_secret".to_string()),
             client_id: "web_1".to_string(),
             client_label: Some("Chrome".to_string()),
             transport_preference: TransportPreference::Webrtc,

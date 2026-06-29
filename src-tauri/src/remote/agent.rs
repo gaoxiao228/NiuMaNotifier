@@ -2,6 +2,7 @@ use crate::remote::device_socket::{
     run_device_socket_once, DeviceSocketConnectRequest, DeviceSocketRunResult,
 };
 use crate::remote::status::RemoteAgentStatusHandle;
+use niuma_api::tool_sessions::ToolSessionRegistry;
 use niuma_core::remote::agent_state::RemoteAgentState;
 use niuma_core::remote::config::RemoteConfig;
 use niuma_core::remote::connection_policy::{DeviceSocketCloseReason, ReconnectBackoff};
@@ -46,6 +47,8 @@ impl RemoteAgent {
 pub fn build_connect_request(
     config: &RemoteConfig,
     credential: &RemoteCredentialPayload,
+    store: NiumaStore,
+    tool_sessions: ToolSessionRegistry,
 ) -> Result<DeviceSocketConnectRequest, String> {
     let Some(device) = config.device.as_ref() else {
         return Err("远程设备未绑定".to_string());
@@ -56,6 +59,8 @@ pub fn build_connect_request(
         device_token: credential.device_token.clone(),
         heartbeat_interval_seconds: DEVICE_HEARTBEAT_INTERVAL_SECONDS,
         remote_config: config.clone(),
+        store,
+        tool_sessions,
     })
 }
 
@@ -92,6 +97,8 @@ pub async fn run_agent_loop(
     credential_store: impl RemoteCredentialStore,
     status: RemoteAgentStatusHandle,
     wake: RemoteAgentWake,
+    store: NiumaStore,
+    tool_sessions: ToolSessionRegistry,
 ) {
     let backoff = ReconnectBackoff::default();
     let signaling_manager =
@@ -120,15 +127,17 @@ pub async fn run_agent_loop(
                 continue;
             }
         };
-        let request = match build_connect_request(&config, &credential) {
-            Ok(value) => value,
-            Err(error) => {
-                status.set_state(RemoteAgentState::NotConfigured, Some(error.clone()));
-                eprintln!("NiumaNotifier remote connect request not ready: {error}");
-                sleep_or_wake(&wake, Duration::from_secs(30)).await;
-                continue;
-            }
-        };
+        let request =
+            match build_connect_request(&config, &credential, store.clone(), tool_sessions.clone())
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    status.set_state(RemoteAgentState::NotConfigured, Some(error.clone()));
+                    eprintln!("NiumaNotifier remote connect request not ready: {error}");
+                    sleep_or_wake(&wake, Duration::from_secs(30)).await;
+                    continue;
+                }
+            };
 
         status.set_state(RemoteAgentState::Connecting, None);
         let webrtc_config = crate::remote::webrtc_transport::WebRtcTransportConfig::default();
@@ -160,6 +169,7 @@ pub async fn run_agent_loop(
 
 pub fn spawn_remote_agent_runtime(
     store: NiumaStore,
+    tool_sessions: ToolSessionRegistry,
     status: RemoteAgentStatusHandle,
     wake: RemoteAgentWake,
 ) {
@@ -183,11 +193,14 @@ pub fn spawn_remote_agent_runtime(
                     return;
                 }
             };
+            let config_store = store.clone();
             runtime.block_on(run_agent_loop(
-                move || store.remote_config(),
+                move || config_store.remote_config(),
                 credential_store,
                 status,
                 wake,
+                store,
+                tool_sessions,
             ));
         })
     {
@@ -236,7 +249,13 @@ mod connection_tests {
         });
         let credential = test_credential("dvt_secret");
 
-        let request = build_connect_request(&config, &credential).unwrap();
+        let request = build_connect_request(
+            &config,
+            &credential,
+            test_store("agent-connect-request"),
+            ToolSessionRegistry::new(),
+        )
+        .unwrap();
 
         assert_eq!(request.device_id, "dev_1");
         assert_eq!(request.device_token, "dvt_secret");
@@ -257,5 +276,11 @@ mod connection_tests {
             device_token: token.to_string(),
             device_identity_private_key: "identity-private-key".to_string(),
         }
+    }
+
+    fn test_store(name: &str) -> NiumaStore {
+        let path = std::env::temp_dir().join(format!("{name}-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        NiumaStore::new(path)
     }
 }

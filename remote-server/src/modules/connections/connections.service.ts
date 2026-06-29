@@ -35,6 +35,7 @@ export type ConnectionStateWriter = {
     deviceId: string
     clientId: string
     tokenHash: string
+    transportPreference: 'webrtc_first' | 'relay_first' | 'relay_only'
     status: 'pending' | 'signaling'
     createdAt: string
     expiresAt: string
@@ -106,6 +107,7 @@ export function createConnectionsService(options: {
         deviceId: input.deviceId,
         clientId: input.clientId,
         tokenHash: issued.tokenHash,
+        transportPreference: input.transportPreference,
         status: 'signaling',
         createdAt: now.toISOString(),
         expiresAt: expiresAt.toISOString()

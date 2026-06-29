@@ -26,6 +26,29 @@ describe('plain rpc client', () => {
     ).toBe(true)
   })
 
+  it('dispatches notification messages without resolving a request', () => {
+    const send = vi.fn()
+    const onNotification = vi.fn()
+    const client = createPlainRpcClient({
+      timeoutMs: 1000,
+      send,
+      onNotification
+    })
+
+    client.handle({
+      version: 1,
+      type: 'notification',
+      method: 'local_api.stream.event',
+      params: { stream_id: 'stream_1' }
+    })
+
+    expect(onNotification).toHaveBeenCalledWith({
+      method: 'local_api.stream.event',
+      params: { stream_id: 'stream_1' }
+    })
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('rejects invalid response envelope shapes', () => {
     expect(isPlainRpcResponse(null)).toBe(false)
     expect(isPlainRpcResponse({ version: 2, type: 'response', id: 'req_1', ok: true })).toBe(false)

@@ -121,6 +121,7 @@ export function App() {
           <DeviceConsolePage
             device={selectedDevice}
             connectionsApi={connectionsApi}
+            autoConnect
             t={t}
             onBack={() => setSelectedDevice(null)}
           />

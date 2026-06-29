@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { buildClientSocketUrl, createConnectionClient } from '../remote/connectionClient.js'
 
@@ -6,6 +6,10 @@ const bind = {
   connection_id: 'conn_123',
   connection_token: 'short_token'
 }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('buildClientSocketUrl', () => {
   it('converts an http origin to a client websocket URL', () => {
@@ -112,5 +116,34 @@ describe('createConnectionClient', () => {
     expect(socket.close).toHaveBeenCalledTimes(1)
     expect(statuses).toEqual(['connecting'])
     expect(messages).toEqual([])
+  })
+
+  it('times out when no signaling response is received', () => {
+    vi.useFakeTimers()
+    const statuses: string[] = []
+
+    class FakeWebSocket {
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      onclose: (() => void) | null = null
+      onerror: (() => void) | null = null
+
+      constructor(public url: string) {}
+
+      close = vi.fn()
+    }
+
+    const client = createConnectionClient({
+      url: 'ws://127.0.0.1/ws/client',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      signalTimeoutMs: 1000,
+      onStatus: (status) => statuses.push(status),
+      onMessage: () => {}
+    })
+    const socket = client.socket as unknown as FakeWebSocket
+
+    vi.advanceTimersByTime(1000)
+
+    expect(statuses).toEqual(['connecting', 'error'])
+    expect(socket.close).toHaveBeenCalledTimes(1)
   })
 })

@@ -99,7 +99,9 @@ export function renderDesktopLoginPage(requestId: string) {
       if (mode === 'register') await postJson('/api/v1/auth/register', { email, password });
       const session = await postJson('/api/v1/auth/login', { email, password });
       await postJson('/api/v1/desktop-login/complete', { request_id: requestId }, session.access_token);
-      result.textContent = t.done;
+      // 与远程控制台复用同一个登录态 key，绑定完成后直接进入设备控制台。
+      localStorage.setItem('niuma.remote.access_token', session.access_token);
+      window.location.assign('/');
     }
     form.addEventListener('submit', async (event) => {
       event.preventDefault();

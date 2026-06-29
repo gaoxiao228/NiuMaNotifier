@@ -19,6 +19,7 @@ import {
   type RelayClient,
   type RelayClientOptions
 } from './relayTransport.js'
+import { createRemoteLocalApiClient } from './remoteLocalApiClient.js'
 
 type ConnectionsApi = {
   create(deviceId: string, clientId: string): Promise<ConnectionCreateResult>
@@ -29,17 +30,96 @@ type RpcResultState = {
   value: unknown
 }
 
+type RemoteSessionProjectGroupPage = {
+  list: RemoteSessionProjectGroup[]
+  page?: number
+  page_size?: number
+  total?: number
+}
+
+type RemoteSessionProjectGroup = {
+  tool?: string
+  project_name?: string
+  project_path?: string
+  sessions: RemoteSessionSummary[]
+}
+
+type RemoteSessionSummary = {
+  normalized_session_id?: string
+  primary_session_id?: string
+  title?: string
+  status?: string
+  runtime_status?: string | null
+  updated_at?: string
+  first_user_message_preview?: string
+  latest_event_summary?: string | null
+  subagent_count?: number
+}
+
 type DeviceConsolePageProps = {
   device: RemoteDevice
   connectionsApi: ConnectionsApi
   createConnection?: (options: ConnectionClientOptions) => ConnectionClient
   createRelay?: (options: RelayClientOptions) => RelayClient
+  autoConnect?: boolean
   t: (key: string) => string
   onBack(): void
 }
 
 const CLIENT_ID_KEY = 'niuma.remote.client_id'
 let memoryClientId: string | null = null
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isRemoteSessionSummary(value: unknown): value is RemoteSessionSummary {
+  return (
+    isRecord(value) &&
+    (typeof value.normalized_session_id === 'undefined' || typeof value.normalized_session_id === 'string') &&
+    (typeof value.primary_session_id === 'undefined' || typeof value.primary_session_id === 'string') &&
+    (typeof value.title === 'undefined' || typeof value.title === 'string') &&
+    (typeof value.status === 'undefined' || typeof value.status === 'string') &&
+    (typeof value.runtime_status === 'undefined' ||
+      value.runtime_status === null ||
+      typeof value.runtime_status === 'string') &&
+    (typeof value.updated_at === 'undefined' || typeof value.updated_at === 'string') &&
+    (typeof value.first_user_message_preview === 'undefined' || typeof value.first_user_message_preview === 'string') &&
+    (typeof value.latest_event_summary === 'undefined' ||
+      value.latest_event_summary === null ||
+      typeof value.latest_event_summary === 'string') &&
+    (typeof value.subagent_count === 'undefined' || typeof value.subagent_count === 'number')
+  )
+}
+
+function isProjectGroupPage(value: unknown): value is RemoteSessionProjectGroupPage {
+  // RPC result 是 unknown；这里只收窄列表渲染必须依赖的字段。
+  return (
+    isRecord(value) &&
+    Array.isArray(value.list) &&
+    value.list.every(
+      (group) =>
+        isRecord(group) &&
+        (typeof group.tool === 'undefined' || typeof group.tool === 'string') &&
+        (typeof group.project_name === 'undefined' || typeof group.project_name === 'string') &&
+        (typeof group.project_path === 'undefined' || typeof group.project_path === 'string') &&
+        Array.isArray(group.sessions) &&
+        group.sessions.every(isRemoteSessionSummary)
+    )
+  )
+}
+
+function sessionDisplayStatus(session: RemoteSessionSummary): string | null {
+  return session.runtime_status || session.status || null
+}
+
+function sessionTitle(session: RemoteSessionSummary): string {
+  return session.title || session.primary_session_id || session.normalized_session_id || ''
+}
+
+function sessionDescription(session: RemoteSessionSummary): string | null {
+  return session.first_user_message_preview || session.latest_event_summary || session.primary_session_id || null
+}
 
 function randomClientId(): string {
   const randomPart =
@@ -93,6 +173,7 @@ export function DeviceConsolePage({
   connectionsApi,
   createConnection = createConnectionClient,
   createRelay = createRelayClient,
+  autoConnect = false,
   t,
   onBack
 }: DeviceConsolePageProps) {
@@ -108,8 +189,11 @@ export function DeviceConsolePage({
   const socketRef = useRef<ConnectionClient | null>(null)
   const relayRef = useRef<RelayClient | null>(null)
   const rpcRef = useRef<PlainRpcClient | null>(null)
+  const remoteLocalApiRef = useRef<ReturnType<typeof createRemoteLocalApiClient> | null>(null)
+  const sessionStreamRef = useRef<{ close(): Promise<void> } | null>(null)
   const activeConnectionRef = useRef(0)
   const mountedRef = useRef(false)
+  const autoConnectStartedRef = useRef(false)
 
   useEffect(() => {
     mountedRef.current = true
@@ -117,9 +201,12 @@ export function DeviceConsolePage({
       mountedRef.current = false
       activeConnectionRef.current += 1
       socketRef.current?.close()
+      void sessionStreamRef.current?.close().catch(() => {})
       rpcRef.current?.close()
       relayRef.current?.close()
       socketRef.current = null
+      sessionStreamRef.current = null
+      remoteLocalApiRef.current = null
       rpcRef.current = null
       relayRef.current = null
     }
@@ -137,8 +224,11 @@ export function DeviceConsolePage({
   }
 
   function closeRelayConsole() {
+    void sessionStreamRef.current?.close().catch(() => {})
     rpcRef.current?.close()
     relayRef.current?.close()
+    sessionStreamRef.current = null
+    remoteLocalApiRef.current = null
     rpcRef.current = null
     relayRef.current = null
   }
@@ -159,6 +249,62 @@ export function DeviceConsolePage({
     return displayJson(result.value)
   }
 
+  useEffect(() => {
+    if (!autoConnect || autoConnectStartedRef.current || !device.online) return
+    autoConnectStartedRef.current = true
+    // 从设备列表点击“连接”进入控制台时，自动发起一次真实连接。
+    void handleConnect()
+  }, [autoConnect, device.online])
+
+  function renderSessionGroups() {
+    if (sessionsResult.status === 'idle') return <p className="state-message">{t('waiting_for_relay')}</p>
+    if (sessionsResult.status === 'loading') return <p className="state-message">{t('waiting_for_response')}</p>
+    if (sessionsResult.status === 'error' || !isProjectGroupPage(sessionsResult.value)) {
+      return (
+        <p className="state-message state-message-error" role="alert">
+          {t('remote_sessions_failed')}
+        </p>
+      )
+    }
+
+    const groups = sessionsResult.value.list
+    if (groups.length === 0 || groups.every((group) => group.sessions.length === 0)) {
+      return <p className="state-message">{t('remote_sessions_empty')}</p>
+    }
+
+    return (
+      <div className="remote-session-groups">
+        {groups.map((group, groupIndex) => (
+          <div className="remote-session-group" key={`${group.project_path ?? group.project_name ?? groupIndex}`}>
+            <div className="remote-session-group-heading">
+              {group.project_name ? <strong>{group.project_name}</strong> : null}
+              {group.project_path ? <span>{group.project_path}</span> : null}
+              {group.tool ? <span>{group.tool}</span> : null}
+            </div>
+            <div className="remote-session-list">
+              {group.sessions.map((session, sessionIndex) => {
+                const displayStatus = sessionDisplayStatus(session)
+                const description = sessionDescription(session)
+                return (
+                  <div
+                    className="remote-session-row"
+                    key={session.normalized_session_id ?? session.primary_session_id ?? `${groupIndex}-${sessionIndex}`}
+                  >
+                    <div className="remote-session-main">
+                      <strong>{sessionTitle(session)}</strong>
+                      {description ? <span>{description}</span> : null}
+                    </div>
+                    {displayStatus ? <span className="remote-session-status">{displayStatus}</span> : null}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   function openRelayConsole(result: ConnectionCreateResult, activeConnectionId: number) {
     closeRelayConsole()
     resetRelayConsole()
@@ -174,16 +320,24 @@ export function DeviceConsolePage({
       timeoutMs: 10_000,
       send: (value) => {
         relayClient.send(value)
+      },
+      onNotification: ({ method, params }) => {
+        remoteLocalApiRef.current?.handleNotification(method, params)
       }
     })
+    const remoteLocalApi = createRemoteLocalApiClient({
+      request: (method, params) => rpcClient.request(method, params)
+    })
+    remoteLocalApiRef.current = remoteLocalApi
 
     function updateRpcResult(
       method: string,
-      setResult: Dispatch<SetStateAction<RpcResultState>>
+      setResult: Dispatch<SetStateAction<RpcResultState>>,
+      params?: unknown
     ) {
       setResult({ status: 'loading', value: null })
       void rpcClient
-        .request(method)
+        .request(method, params)
         .then((value) => {
           if (isActiveConnection(activeConnectionId)) setResult({ status: 'ready', value })
         })
@@ -196,10 +350,48 @@ export function DeviceConsolePage({
 
     function closeRpcForRelayEvent(options: { closeRelay: boolean }) {
       // relay 断开后本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
+      void sessionStreamRef.current?.close().catch(() => {})
       rpcClient.close()
       if (options.closeRelay) relayClient.close()
+      sessionStreamRef.current = null
+      if (remoteLocalApiRef.current === remoteLocalApi) remoteLocalApiRef.current = null
       if (rpcRef.current === rpcClient) rpcRef.current = null
       if (relayRef.current === relayClient) relayRef.current = null
+    }
+
+    function subscribeRemoteSessions() {
+      setSessionsResult({ status: 'loading', value: null })
+      void remoteLocalApi
+        .stream('/api/v1/session_project_groups/stream?tool=codex&page=1&page_size=20', {
+          onEvent(event) {
+            if (event.event !== 'session_project_groups') return
+            if (isActiveConnection(activeConnectionId)) {
+              setSessionsResult({ status: 'ready', value: event.data })
+            }
+          },
+          onClosed() {
+            if (isActiveConnection(activeConnectionId)) {
+              setSessionsResult({ status: 'error', value: t('remote_rpc_failed') })
+            }
+          },
+          onError() {
+            if (isActiveConnection(activeConnectionId)) {
+              setSessionsResult({ status: 'error', value: t('remote_rpc_failed') })
+            }
+          }
+        })
+        .then((stream) => {
+          if (isActiveConnection(activeConnectionId)) {
+            sessionStreamRef.current = stream
+          } else {
+            void stream.close().catch(() => {})
+          }
+        })
+        .catch(() => {
+          if (isActiveConnection(activeConnectionId)) {
+            setSessionsResult({ status: 'error', value: t('remote_rpc_failed') })
+          }
+        })
     }
 
     relayClient = createRelay({
@@ -210,7 +402,7 @@ export function DeviceConsolePage({
         setRelayStatus('open')
         updateRpcResult('rpc.ping', setPingResult)
         updateRpcResult('state.get', setStateResult)
-        updateRpcResult('session.list', setSessionsResult)
+        subscribeRemoteSessions()
       },
       onPayload: (value) => {
         if (isActiveConnection(activeConnectionId)) rpcClient.handle(value)
@@ -325,6 +517,11 @@ export function DeviceConsolePage({
         </button>
       </div>
 
+      <section className="remote-sessions" aria-label={t('remote_sessions')}>
+        <div className="panel-title">{t('remote_sessions')}</div>
+        {renderSessionGroups()}
+      </section>
+
       <section className="relay-log" aria-label={t('remote_rpc_status')}>
         <div className="panel-title">
           {t('remote_rpc_status')}
@@ -342,7 +539,7 @@ export function DeviceConsolePage({
             <pre className="json-preview">{displayRpcResult(stateResult)}</pre>
           </div>
           <div className="rpc-result">
-            <div className="summary-label">{t('remote_sessions')}</div>
+            <div className="summary-label">{t('remote_sessions_debug')}</div>
             <pre className="json-preview">{displayRpcResult(sessionsResult)}</pre>
           </div>
         </div>

@@ -41,6 +41,7 @@ pub fn spawn_background_services(
             spawn_stale_sweep_runtime(store.clone(), runtime_events.clone());
             remote::agent::spawn_remote_agent_runtime(
                 store.clone(),
+                tool_sessions.clone(),
                 remote_agent_status.clone(),
                 remote_agent_wake.clone(),
             );

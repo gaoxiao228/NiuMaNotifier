@@ -13,6 +13,7 @@ pub struct DeviceSignalEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConnectionInvite {
     pub connection_id: String,
+    pub connection_token: Option<String>,
     pub client_id: String,
     pub client_label: Option<String>,
     pub transport_preference: TransportPreference,
@@ -55,11 +56,26 @@ pub struct SignalCancel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceSignalMessage {
-    ConnectionInvite { id: String, data: ConnectionInvite },
-    SignalOffer { id: String, data: SignalOffer },
-    SignalAnswer { id: String, data: SignalAnswer },
-    SignalIceCandidate { id: String, data: SignalIceCandidate },
-    SignalCancel { id: String, data: SignalCancel },
+    ConnectionInvite {
+        id: String,
+        data: ConnectionInvite,
+    },
+    SignalOffer {
+        id: String,
+        data: SignalOffer,
+    },
+    SignalAnswer {
+        id: String,
+        data: SignalAnswer,
+    },
+    SignalIceCandidate {
+        id: String,
+        data: SignalIceCandidate,
+    },
+    SignalCancel {
+        id: String,
+        data: SignalCancel,
+    },
 }
 
 impl DeviceSignalMessage {
@@ -230,6 +246,7 @@ mod tests {
             "id": "msg_1",
             "data": {
                 "connection_id": "conn_1",
+                "connection_token": "cnt_relay_secret",
                 "client_id": "web_1",
                 "client_label": "Chrome",
                 "transport_preference": "webrtc",
@@ -240,6 +257,11 @@ mod tests {
 
         assert_eq!(message.id(), "msg_1");
         assert_eq!(message.connection_id(), "conn_1");
+        if let DeviceSignalMessage::ConnectionInvite { data, .. } = message {
+            assert_eq!(data.connection_token.as_deref(), Some("cnt_relay_secret"));
+        } else {
+            panic!("expected invite");
+        }
     }
 
     #[test]

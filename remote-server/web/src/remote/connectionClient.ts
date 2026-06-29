@@ -8,6 +8,7 @@ export type ConnectionStatus = 'connecting' | 'accepted' | 'rejected' | 'closed'
 export type ConnectionClientOptions = {
   url: string
   WebSocketImpl?: typeof WebSocket
+  signalTimeoutMs?: number
   onStatus(status: ConnectionStatus): void
   onMessage(value: unknown): void
 }
@@ -65,8 +66,22 @@ function signalType(value: unknown): string | null {
 export function createConnectionClient(options: ConnectionClientOptions): ConnectionClient {
   const WebSocketCtor = options.WebSocketImpl ?? WebSocket
   const socket = new WebSocketCtor(options.url)
+  const signalTimeoutMs = options.signalTimeoutMs ?? 15_000
   let active = true
   let closedByClient = false
+  let settled = false
+
+  const timeout = setTimeout(() => {
+    if (!active || settled) return
+    active = false
+    closedByClient = true
+    options.onStatus('error')
+    socket.close()
+  }, signalTimeoutMs)
+
+  function clearSignalTimeout() {
+    clearTimeout(timeout)
+  }
 
   options.onStatus('connecting')
 
@@ -76,16 +91,26 @@ export function createConnectionClient(options: ConnectionClientOptions): Connec
     options.onMessage(value)
 
     const type = signalType(value)
-    if (type === 'connection.accept') options.onStatus('accepted')
-    if (type === 'connection.reject') options.onStatus('rejected')
+    if (type === 'connection.accept') {
+      settled = true
+      clearSignalTimeout()
+      options.onStatus('accepted')
+    }
+    if (type === 'connection.reject') {
+      settled = true
+      clearSignalTimeout()
+      options.onStatus('rejected')
+    }
   }
   socket.onerror = () => {
     if (!active) return
+    clearSignalTimeout()
     options.onStatus('error')
   }
   socket.onclose = () => {
     if (!active) return
     active = false
+    clearSignalTimeout()
     if (!closedByClient) options.onStatus('closed')
   }
 
@@ -95,6 +120,7 @@ export function createConnectionClient(options: ConnectionClientOptions): Connec
       if (!active && closedByClient) return
       closedByClient = true
       active = false
+      clearSignalTimeout()
       socket.close()
     }
   }

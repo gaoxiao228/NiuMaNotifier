@@ -255,6 +255,87 @@ select {
   min-width: 0;
 }
 
+.remote-sessions {
+  min-width: 0;
+}
+
+.remote-session-groups {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.remote-session-group {
+  min-width: 0;
+  border-top: 1px solid #d7dde5;
+  padding-top: 10px;
+}
+
+.remote-session-group-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote-session-group-heading strong,
+.remote-session-group-heading span,
+.remote-session-main strong,
+.remote-session-main span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.remote-session-group-heading strong {
+  font-size: 14px;
+}
+
+.remote-session-group-heading span,
+.remote-session-main span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.remote-session-list {
+  display: grid;
+  gap: 0;
+  margin-top: 8px;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.remote-session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.remote-session-row:first-child {
+  border-top: 0;
+}
+
+.remote-session-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.remote-session-status {
+  max-width: 140px;
+  overflow-wrap: anywhere;
+  border: 1px solid #99d3ca;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .relay-log .panel-title {
   justify-content: space-between;
   width: 100%;
@@ -359,5 +440,14 @@ button:disabled,
 
   .rpc-result-grid {
     grid-template-columns: 1fr;
+  }
+
+  .remote-session-row {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-session-status {
+    justify-self: start;
+    max-width: 100%;
   }
 }

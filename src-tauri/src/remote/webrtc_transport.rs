@@ -1,7 +1,7 @@
-use niuma_core::remote::transport::RemoteTransportFrame;
 use niuma_core::remote::signaling::{
     signal_answer_message, signal_ice_candidate_message, SignalIceCandidate, SignalOffer,
 };
+use niuma_core::remote::transport::RemoteTransportFrame;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -116,7 +116,9 @@ pub async fn add_remote_ice_candidate(
     peer.add_ice_candidate(RTCIceCandidateInit {
         candidate: candidate.candidate,
         sdp_mid: candidate.sdp_mid,
-        sdp_mline_index: candidate.sdp_mline_index.and_then(|value| value.try_into().ok()),
+        sdp_mline_index: candidate
+            .sdp_mline_index
+            .and_then(|value| value.try_into().ok()),
         username_fragment: None,
     })
     .await
