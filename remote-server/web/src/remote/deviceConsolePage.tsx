@@ -12,7 +12,12 @@ import {
   type ConnectionClientOptions,
   type ConnectionStatus
 } from './connectionClient.js'
-import { createPlainRpcClient, type PlainRpcClient } from './plainRpcClient.js'
+import {
+  createPlainRpcClient,
+  createPlainRpcRequest,
+  isPlainRpcResponse,
+  type PlainRpcClient
+} from './plainRpcClient.js'
 import {
   buildRelaySocketUrl,
   createRelayClient,
@@ -343,6 +348,12 @@ export function DeviceConsolePage({
     return displayJson(result.value)
   }
 
+  function rpcErrorText(error: unknown): string {
+    // 本地清理 pending 请求属于连接生命周期收敛，不把内部实现文案直接暴露给用户。
+    if (error instanceof Error && error.message === 'Plain RPC client closed') return t('remote_rpc_failed')
+    return error instanceof Error && error.message ? error.message : t('remote_rpc_failed')
+  }
+
   function activeTransportLabel(): string {
     return t(`active_transport_${activeTransport}`)
   }
@@ -437,6 +448,7 @@ export function DeviceConsolePage({
       }
     })
     messageBusRef.current = messageBus
+    let webRtcProbeId: string | null = null
 
     const remoteLocalApi = createRemoteLocalApiClient({
       request: (method, params) => rpcClient.request(method, params)
@@ -445,6 +457,7 @@ export function DeviceConsolePage({
 
     function closeRemoteRpcConsole(options: { closeRelay: boolean; closeWebRtc: boolean }) {
       // 所有传输通道都不可用后，本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
+      webRtcProbeId = null
       void sessionStreamRef.current?.close().catch(() => {})
       rpcClient.close()
       messageBus.close()
@@ -489,16 +502,43 @@ export function DeviceConsolePage({
         },
         onOpen: () => {
           if (!isActiveConnection(activeConnectionId)) return
-          webRtcOpenRef.current = true
-          messageBus.setOpen('webrtc', true)
-          setWebRtcStatus('open')
-          setActiveTransport('webrtc')
+          webRtcOpenRef.current = false
+          messageBus.setOpen('webrtc', false)
+          setWebRtcStatus('connecting')
+          webRtcProbeId = `rpc_webrtc_probe_${activeConnectionId}`
+          try {
+            // DataChannel open 只代表传输层可写；先用 plain RPC 探活，成功后才提升为主通道。
+            webRtcTransport.send(createPlainRpcRequest(webRtcProbeId, 'rpc.ping', {}, 'webrtc'))
+          } catch {
+            webRtcProbeId = null
+            setWebRtcStatus('error')
+            setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
+          }
         },
         onPayload: (value) => {
-          if (isActiveConnection(activeConnectionId)) messageBus.receive(value, 'webrtc')
+          if (!isActiveConnection(activeConnectionId)) return
+          if (webRtcProbeId && isPlainRpcResponse(value) && value.id === webRtcProbeId) {
+            webRtcProbeId = null
+            if (value.ok) {
+              webRtcOpenRef.current = true
+              messageBus.setOpen('webrtc', true)
+              setWebRtcStatus('open')
+              setActiveTransport('webrtc')
+              return
+            }
+            webRtcOpenRef.current = false
+            messageBus.setOpen('webrtc', false)
+            setWebRtcStatus('error')
+            setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
+            webRtcTransport.close()
+            if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
+            return
+          }
+          if (webRtcOpenRef.current) messageBus.receive(value, 'webrtc')
         },
         onClose: () => {
           if (!isActiveConnection(activeConnectionId)) return
+          webRtcProbeId = null
           webRtcOpenRef.current = false
           messageBus.setOpen('webrtc', false)
           setWebRtcStatus('closed')
@@ -507,6 +547,7 @@ export function DeviceConsolePage({
         },
         onError: () => {
           if (!isActiveConnection(activeConnectionId)) return
+          webRtcProbeId = null
           webRtcOpenRef.current = false
           messageBus.setOpen('webrtc', false)
           setWebRtcStatus('error')
@@ -519,6 +560,7 @@ export function DeviceConsolePage({
       // WebRTC 后台协商失败不影响 relay 首屏可用性。
       void webRtcTransport.start().catch(() => {
         if (isActiveConnection(activeConnectionId)) {
+          webRtcProbeId = null
           webRtcOpenRef.current = false
           messageBus.setOpen('webrtc', false)
           setWebRtcStatus('error')
@@ -539,9 +581,9 @@ export function DeviceConsolePage({
         .then((value) => {
           if (isActiveConnection(activeConnectionId)) setResult({ status: 'ready', value })
         })
-        .catch(() => {
+        .catch((error) => {
           if (isActiveConnection(activeConnectionId)) {
-            setResult({ status: 'error', value: t('remote_rpc_failed') })
+            setResult({ status: 'error', value: rpcErrorText(error) })
           }
         })
     }
@@ -574,9 +616,9 @@ export function DeviceConsolePage({
             void stream.close().catch(() => {})
           }
         })
-        .catch(() => {
+        .catch((error) => {
           if (isActiveConnection(activeConnectionId)) {
-            setSessionsResult({ status: 'error', value: t('remote_rpc_failed') })
+            setSessionsResult({ status: 'error', value: rpcErrorText(error) })
           }
         })
     }

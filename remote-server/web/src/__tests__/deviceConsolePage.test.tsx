@@ -645,6 +645,7 @@ describe('DeviceConsolePage', () => {
       return relayClient
     })
     let webRtcOptions: WebRtcTransportOptions | null = null
+    const webRtcSend = vi.fn()
     const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
       webRtcOptions = options
       return {
@@ -652,7 +653,7 @@ describe('DeviceConsolePage', () => {
         start: vi.fn(async () => {}),
         acceptAnswer: vi.fn(),
         addRemoteIceCandidate: vi.fn(),
-        send: vi.fn(),
+        send: webRtcSend,
         close: vi.fn()
       }
     })
@@ -684,12 +685,113 @@ describe('DeviceConsolePage', () => {
     act(() => {
       webRtcOptions?.onOpen()
     })
+    expect(screen.getByText('Active transport: Relay')).not.toBeNull()
+
+    const probeRequest = webRtcSend.mock.calls[0]?.[0]
+    expect(probeRequest).toEqual(
+      expect.objectContaining({
+        type: 'request',
+        method: 'rpc.ping',
+        transport: { kind: 'webrtc' }
+      })
+    )
+
+    act(() => {
+      webRtcOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: probeRequest.id,
+        ok: true,
+        result: { pong: true },
+        transport: { kind: 'webrtc' }
+      })
+    })
     expect(screen.getByText('Active transport: WebRTC')).not.toBeNull()
 
     act(() => {
       webRtcOptions?.onClose()
     })
     expect(screen.getByText('Active transport: Relay')).not.toBeNull()
+  })
+
+  it('keeps relay active when WebRTC RPC probe fails', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {},
+      onMessage: (_value: unknown) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      signalClient.onMessage = options.onMessage
+      return signalClient
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+    let webRtcOptions: WebRtcTransportOptions | null = null
+    const webRtcSend = vi.fn()
+    const webRtcClose = vi.fn()
+    const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
+      webRtcOptions = options
+      return {
+        kind: 'webrtc',
+        start: vi.fn(async () => {}),
+        acceptAnswer: vi.fn(),
+        addRemoteIceCandidate: vi.fn(),
+        send: webRtcSend,
+        close: webRtcClose
+      }
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        createWebRtc={createWebRtc}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      signalClient.onStatus('accepted')
+      await Promise.resolve()
+    })
+
+    act(() => {
+      relayOptions?.onOpen()
+      webRtcOptions?.onOpen()
+    })
+
+    const probeRequest = webRtcSend.mock.calls[0]?.[0]
+    act(() => {
+      webRtcOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: probeRequest.id,
+        ok: false,
+        error: { code: 'method_not_found', message: 'unknown RPC method: rpc.ping' },
+        transport: { kind: 'webrtc' }
+      })
+    })
+
+    expect(screen.getByText('WebRTC error')).not.toBeNull()
+    expect(screen.getByText('Active transport: Relay')).not.toBeNull()
+    expect(webRtcClose).toHaveBeenCalledTimes(1)
   })
 
   it('closes pending RPC requests when relay closes first and WebRTC closes later', async () => {
@@ -717,6 +819,7 @@ describe('DeviceConsolePage', () => {
       return relayClient
     })
     let webRtcOptions: WebRtcTransportOptions | null = null
+    const webRtcSend = vi.fn()
     const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
       webRtcOptions = options
       return {
@@ -724,7 +827,7 @@ describe('DeviceConsolePage', () => {
         start: vi.fn(async () => {}),
         acceptAnswer: vi.fn(),
         addRemoteIceCandidate: vi.fn(),
-        send: vi.fn(),
+        send: webRtcSend,
         close: vi.fn()
       }
     })
@@ -751,6 +854,17 @@ describe('DeviceConsolePage', () => {
     act(() => {
       relayOptions?.onOpen()
       webRtcOptions?.onOpen()
+    })
+    const probeRequest = webRtcSend.mock.calls[0]?.[0]
+    act(() => {
+      webRtcOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: probeRequest.id,
+        ok: true,
+        result: { pong: true },
+        transport: { kind: 'webrtc' }
+      })
     })
     expect(screen.getByText('Active transport: WebRTC')).not.toBeNull()
 
@@ -865,6 +979,65 @@ describe('DeviceConsolePage', () => {
     })
 
     expect(await screen.findByText('Unable to read remote sessions')).not.toBeNull()
+  })
+
+  it('renders remote RPC error details in result cards', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClients: Array<{ onStatus: (status: ConnectionStatus) => void }> = []
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      const client = {
+        socket: {} as WebSocket,
+        send: vi.fn(),
+        close: vi.fn(),
+        onStatus: options.onStatus,
+        onMessage: options.onMessage
+      }
+      signalClients.push(client)
+      return client
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      signalClients[0]?.onStatus('accepted')
+    })
+    await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      relayOptions?.onOpen()
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: 'rpc_1',
+        ok: false,
+        error: { code: 'method_not_found', message: 'unknown RPC method: rpc.ping' }
+      })
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('method_not_found: unknown RPC method: rpc.ping')).not.toBeNull()
   })
 
   it('closes pending RPC requests immediately when relay closes', async () => {

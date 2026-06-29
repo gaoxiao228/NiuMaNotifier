@@ -62,6 +62,15 @@ type PendingRequest = {
   reject(error: Error): void
 }
 
+function remoteErrorMessage(error: unknown): string {
+  if (error === null || typeof error !== 'object') return 'Plain RPC request failed'
+  const item = error as { code?: unknown; message?: unknown }
+  const code = typeof item.code === 'string' ? item.code.trim() : ''
+  const message = typeof item.message === 'string' ? item.message.trim() : ''
+  if (code && message) return `${code}: ${message}`
+  return message || code || 'Plain RPC request failed'
+}
+
 export function createPlainRpcRequest(
   id: string,
   method: string,
@@ -190,7 +199,8 @@ export function createPlainRpcClient(options: PlainRpcClientOptions): PlainRpcCl
         return
       }
 
-      item.reject(new Error('Plain RPC request failed'))
+      // 保留设备端返回的错误码和消息，方便控制台直接定位远程 RPC 失败原因。
+      item.reject(new Error(remoteErrorMessage(inbound.payload.error)))
     },
     close() {
       if (closed) return

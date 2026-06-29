@@ -106,7 +106,24 @@ describe('plain rpc client', () => {
     })
 
     await expect(resultPromise).rejects.toMatchObject({
-      message: 'Plain RPC request failed'
+      message: 'REMOTE_ERROR: failed'
+    })
+  })
+
+  it('keeps remote error details when rejecting an error response', async () => {
+    const client = createPlainRpcClient({ timeoutMs: 1000, send: vi.fn() })
+
+    const resultPromise = client.request('rpc.ping')
+    client.handle({
+      version: 1,
+      type: 'response',
+      id: 'rpc_1',
+      ok: false,
+      error: { code: 'method_not_found', message: 'unknown RPC method: demo.missing' }
+    })
+
+    await expect(resultPromise).rejects.toMatchObject({
+      message: 'method_not_found: unknown RPC method: demo.missing'
     })
   })
 
