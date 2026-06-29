@@ -259,6 +259,14 @@ select {
   min-width: 0;
 }
 
+.device-list-remote-sessions {
+  margin-top: 16px;
+}
+
+.remote-session-summary {
+  margin-top: 10px;
+}
+
 .remote-session-groups {
   display: grid;
   gap: 12px;
@@ -372,6 +380,16 @@ select {
 
 .rpc-result {
   min-width: 0;
+}
+
+.rpc-result strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.diagnostic-result-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .status {

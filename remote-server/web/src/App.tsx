@@ -128,6 +128,7 @@ export function App() {
         ) : (
           <DeviceListPage
             devicesApi={devicesApi}
+            connectionsApi={connectionsApi}
             t={t}
             onSelectDevice={setSelectedDevice}
             onUnauthorized={clearSession}
