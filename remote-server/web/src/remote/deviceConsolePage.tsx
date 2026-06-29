@@ -438,6 +438,30 @@ export function DeviceConsolePage({
     })
     messageBusRef.current = messageBus
 
+    const remoteLocalApi = createRemoteLocalApiClient({
+      request: (method, params) => rpcClient.request(method, params)
+    })
+    remoteLocalApiRef.current = remoteLocalApi
+
+    function closeRemoteRpcConsole(options: { closeRelay: boolean; closeWebRtc: boolean }) {
+      // 所有传输通道都不可用后，本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
+      void sessionStreamRef.current?.close().catch(() => {})
+      rpcClient.close()
+      messageBus.close()
+      if (options.closeWebRtc) webRtcRef.current?.close()
+      if (options.closeRelay) relayClient.close()
+      sessionStreamRef.current = null
+      if (remoteLocalApiRef.current === remoteLocalApi) remoteLocalApiRef.current = null
+      if (messageBusRef.current === messageBus) messageBusRef.current = null
+      if (rpcRef.current === rpcClient) rpcRef.current = null
+      if (webRtcRef.current) webRtcRef.current = null
+      relayOpenRef.current = false
+      webRtcOpenRef.current = false
+      setWebRtcStatus('closed')
+      setActiveTransport('idle')
+      if (relayRef.current === relayClient) relayRef.current = null
+    }
+
     if (createWebRtc !== createWebRtcTransport || typeof RTCPeerConnection !== 'undefined') {
       const webRtcTransport = createWebRtc({
         connectionId: result.connection_id,
@@ -479,6 +503,7 @@ export function DeviceConsolePage({
           messageBus.setOpen('webrtc', false)
           setWebRtcStatus('closed')
           setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
+          if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
         },
         onError: () => {
           if (!isActiveConnection(activeConnectionId)) return
@@ -486,6 +511,7 @@ export function DeviceConsolePage({
           messageBus.setOpen('webrtc', false)
           setWebRtcStatus('error')
           setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
+          if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
         }
       })
       webRtcRef.current = webRtcTransport
@@ -497,14 +523,10 @@ export function DeviceConsolePage({
           messageBus.setOpen('webrtc', false)
           setWebRtcStatus('error')
           setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
+          if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
         }
       })
     }
-
-    const remoteLocalApi = createRemoteLocalApiClient({
-      request: (method, params) => rpcClient.request(method, params)
-    })
-    remoteLocalApiRef.current = remoteLocalApi
 
     function updateRpcResult(
       method: string,
@@ -522,25 +544,6 @@ export function DeviceConsolePage({
             setResult({ status: 'error', value: t('remote_rpc_failed') })
           }
         })
-    }
-
-    function closeRpcForRelayEvent(options: { closeRelay: boolean }) {
-      // relay 断开后本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
-      void sessionStreamRef.current?.close().catch(() => {})
-      rpcClient.close()
-      messageBus.close()
-      webRtcRef.current?.close()
-      if (options.closeRelay) relayClient.close()
-      sessionStreamRef.current = null
-      if (remoteLocalApiRef.current === remoteLocalApi) remoteLocalApiRef.current = null
-      if (messageBusRef.current === messageBus) messageBusRef.current = null
-      if (rpcRef.current === rpcClient) rpcRef.current = null
-      if (webRtcRef.current) webRtcRef.current = null
-      relayOpenRef.current = false
-      webRtcOpenRef.current = false
-      setWebRtcStatus('closed')
-      setActiveTransport('idle')
-      if (relayRef.current === relayClient) relayRef.current = null
     }
 
     function subscribeRemoteSessions() {
@@ -610,7 +613,7 @@ export function DeviceConsolePage({
           setRelayStatus('closed')
           return
         }
-        closeRpcForRelayEvent({ closeRelay: false })
+        closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: true })
         setRelayStatus('closed')
       },
       onError: () => {
@@ -623,7 +626,7 @@ export function DeviceConsolePage({
           setRelayStatus('error')
           return
         }
-        closeRpcForRelayEvent({ closeRelay: true })
+        closeRemoteRpcConsole({ closeRelay: true, closeWebRtc: true })
         setRelayStatus('error')
       }
     })
