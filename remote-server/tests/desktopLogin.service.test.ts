@@ -8,6 +8,10 @@ import { ErrorCode } from '../src/shared/errors.js'
 
 function createRepo(options?: {
   beforeDeviceBindingTransaction?: (repo: DesktopLoginRepository) => Promise<void> | void
+  beforeCompleteSession?: (
+    repo: DesktopLoginRepository,
+    requestId: string
+  ) => Promise<void> | void
 }): DesktopLoginRepository {
   const sessions = new Map<string, any>()
   const devices = new Map<string, any>()
@@ -21,8 +25,11 @@ function createRepo(options?: {
       return sessions.get(requestId) ?? null
     },
     async completeSession(requestId, input) {
+      await options?.beforeCompleteSession?.(repo, requestId)
       const session = sessions.get(requestId)
-      if (session?.status === 'pending') Object.assign(session, input)
+      if (session?.status !== 'pending') return false
+      Object.assign(session, input)
+      return true
     },
     async consumeSession(requestId) {
       sessions.get(requestId).status = 'consumed'
@@ -34,7 +41,7 @@ function createRepo(options?: {
         if (
           session.fingerprintHash === input.fingerprintHash &&
           session.requestId !== input.requestId &&
-          (session.status === 'pending' ||
+          ((session.status === 'pending' && session.createdAt < input.createdBefore) ||
             (session.status === 'completed' && session.userId === input.userId))
         ) {
           session.status = 'consumed'
@@ -90,6 +97,16 @@ const validStartInput = async () => {
         supports_relay: true,
         supports_remote_control: true
       }
+    }
+  }
+}
+
+function createMutableClock(start = new Date('2026-06-29T00:00:00.000Z')) {
+  let current = start
+  return {
+    now: () => current,
+    advance(milliseconds: number) {
+      current = new Date(current.getTime() + milliseconds)
     }
   }
 }
@@ -217,16 +234,19 @@ describe('desktop login service', () => {
     const first = await validStartInput()
     const second = await validStartInput()
     second.input.device_fingerprint = first.input.device_fingerprint
+    const clock = createMutableClock()
     const service = createDesktopLoginService({
       repo: createRepo(),
       config: {
         publicUrl: 'https://remote.example.com',
         tokenPepper: 'pepper',
         desktopLoginTtlSeconds: 600
-      }
+      },
+      clock
     })
 
     const startOne = await service.start(first.input)
+    clock.advance(1000)
     const startTwo = await service.start(second.input)
     if (!startOne.ok || !startTwo.ok) throw new Error('start failed')
 
@@ -241,6 +261,73 @@ describe('desktop login service', () => {
     })
 
     expect(superseded).toEqual({
+      ok: false,
+      code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
+      message: '桌面登录会话已被消费'
+    })
+  })
+
+  it('keeps newer pending session when an older same-fingerprint session completes', async () => {
+    const first = await validStartInput()
+    const second = await validStartInput()
+    second.input.device_fingerprint = first.input.device_fingerprint
+    const clock = createMutableClock()
+    const service = createDesktopLoginService({
+      repo: createRepo(),
+      config: {
+        publicUrl: 'https://remote.example.com',
+        tokenPepper: 'pepper',
+        desktopLoginTtlSeconds: 600
+      },
+      clock
+    })
+
+    const startOne = await service.start(first.input)
+    clock.advance(1000)
+    const startTwo = await service.start(second.input)
+    if (!startOne.ok || !startTwo.ok) throw new Error('start failed')
+
+    await service.complete({
+      requestId: startOne.data.request_id,
+      user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
+    })
+
+    const newerStillPending = await service.poll({
+      request_id: startTwo.data.request_id,
+      poll_token: startTwo.data.poll_token
+    })
+
+    expect(newerStillPending).toMatchObject({
+      ok: false,
+      code: ErrorCode.DESKTOP_LOGIN_PENDING
+    })
+  })
+
+  it('returns consumed when pending completion write is skipped by a race', async () => {
+    const { input } = await validStartInput()
+    const repo = createRepo({
+      beforeCompleteSession: async (transactionRepo, requestId) => {
+        await transactionRepo.consumeSession(requestId)
+      }
+    })
+    const service = createDesktopLoginService({
+      repo,
+      config: {
+        publicUrl: 'https://remote.example.com',
+        tokenPepper: 'pepper',
+        desktopLoginTtlSeconds: 600
+      }
+    })
+
+    const start = await service.start(input)
+    if (!start.ok) throw new Error('start failed')
+
+    const result = await service.complete({
+      requestId: start.data.request_id,
+      user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
+    })
+
+    expect(result).toEqual({
       ok: false,
       code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
       message: '桌面登录会话已被消费'

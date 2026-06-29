@@ -30,12 +30,13 @@ export type DesktopLoginSession = {
 export type DesktopLoginRepository = {
   createSession(input: Omit<DesktopLoginSession, 'id'>): Promise<DesktopLoginSession>
   findSessionByRequestId(requestId: string): Promise<DesktopLoginSession | null>
-  completeSession(requestId: string, input: Partial<DesktopLoginSession>): Promise<void>
+  completeSession(requestId: string, input: Partial<DesktopLoginSession>): Promise<boolean>
   consumeSession(requestId: string): Promise<void>
   consumeOtherSessionsForDevice(input: {
     userId: string
     fingerprintHash: string
     requestId: string
+    createdBefore: Date
     consumedAt: Date
   }): Promise<void>
   upsertDevice(input: {
@@ -166,17 +167,22 @@ export function createDesktopLoginService(options: {
           device_token: deviceToken
         })
 
-        await repo.completeSession(input.requestId, {
+        const completed = await repo.completeSession(input.requestId, {
           status: 'completed',
           userId: input.user.id,
           deviceId: device.id,
           encryptedResultJson: encryptedResult,
           completedAt: clock.now()
         })
+        if (!completed) {
+          return failure(ErrorCode.DESKTOP_LOGIN_CONSUMED, '桌面登录会话已被消费')
+        }
+
         await repo.consumeOtherSessionsForDevice({
           userId: input.user.id,
           fingerprintHash: currentSession.fingerprintHash,
           requestId: input.requestId,
+          createdBefore: currentSession.createdAt,
           consumedAt: clock.now()
         })
 

@@ -26,7 +26,7 @@ export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
       return (row as DesktopLoginSession | undefined) ?? null
     },
     async completeSession(requestId, input) {
-      await db
+      const rows = await db
         .update(desktopLoginSessions)
         .set(input)
         .where(
@@ -35,6 +35,8 @@ export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
             eq(desktopLoginSessions.status, 'pending')
           )
         )
+        .returning({ requestId: desktopLoginSessions.requestId })
+      return rows.length > 0
     },
     async consumeSession(requestId) {
       await db
@@ -50,7 +52,7 @@ export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
         WHERE fingerprint_hash = ${input.fingerprintHash}
           AND request_id <> ${input.requestId}
           AND (
-            status = 'pending'
+            (status = 'pending' AND created_at < ${input.createdBefore})
             OR (status = 'completed' AND user_id = ${input.userId})
           )
       `)
