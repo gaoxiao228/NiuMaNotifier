@@ -17,6 +17,14 @@ function createFakeRedis(): PresenceRedis {
     async del(key) {
       values.delete(key)
       return 1
+    },
+    async eval(_script, _numKeys, key, socketId) {
+      const value = typeof key === 'string' ? values.get(key) : null
+      if (!value || typeof socketId !== 'string') return 0
+      const record = JSON.parse(value) as { socket_id?: string }
+      if (record.socket_id !== socketId) return 0
+      values.delete(key)
+      return 1
     }
   }
 }
@@ -44,6 +52,37 @@ describe('presence service', () => {
     })
 
     await service.markOffline('dev_1')
+    await expect(service.getPresence('dev_1')).resolves.toBeNull()
+  })
+
+  it('does not let a stale socket close remove a newer presence record', async () => {
+    const service = createPresenceService({
+      redis: createFakeRedis(),
+      ttlSeconds: 90
+    })
+
+    await service.markOnline({
+      userId: 'usr_1',
+      deviceId: 'dev_1',
+      socketId: 'sock_old',
+      serverInstanceId: 'srv_1',
+      lastSeenAt: '2026-06-28T00:00:00.000Z',
+      capabilities: { supports_webrtc: true }
+    })
+    await service.markOnline({
+      userId: 'usr_1',
+      deviceId: 'dev_1',
+      socketId: 'sock_new',
+      serverInstanceId: 'srv_1',
+      lastSeenAt: '2026-06-28T00:00:10.000Z'
+    })
+
+    await service.markOffline('dev_1', 'sock_old')
+    await expect(service.getPresence('dev_1')).resolves.toMatchObject({
+      socket_id: 'sock_new'
+    })
+
+    await service.markOffline('dev_1', 'sock_new')
     await expect(service.getPresence('dev_1')).resolves.toBeNull()
   })
 
