@@ -9,8 +9,8 @@
     "test": "vitest run",
     "check": "npm run build && npm test",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "devices:dedupe": "tsx scripts/dedupe-devices.ts"
+    "db:migrate": "sh -c 'if [ -f dist/db/migrate.js ]; then node dist/db/migrate.js; else tsx src/db/migrate.ts; fi'",
+    "devices:dedupe": "node scripts/dedupe-devices.mjs"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.2",

@@ -25,5 +25,6 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=web-build /app/web/dist ./web/dist
 COPY migrations ./migrations
+COPY scripts ./scripts
 EXPOSE 27880
 CMD ["sh", "-c", "node dist/db/migrate.js && node dist/server.js"]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planDeviceDedupe } from '../scripts/dedupe-devices.js'
+import { planDeviceDedupe } from '../scripts/dedupe-devices.mjs'
 
 describe('devices dedupe script', () => {
   it('keeps latest active device per name', () => {
