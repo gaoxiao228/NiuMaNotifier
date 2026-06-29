@@ -8,6 +8,13 @@
       "when": 1782648737858,
       "tag": "0000_complex_omega_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782702259123,
+      "tag": "0001_devices_active_fingerprint_unique",
+      "breakpoints": true
     }
   ]
 }
