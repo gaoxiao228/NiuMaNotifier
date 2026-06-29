@@ -117,6 +117,62 @@ RemoteMessageBus
 
 `PlainRpcClient` 和 `RemoteLocalApiClient` 继续复用，只依赖统一的发送入口和统一的接收入口，不直接知道 payload 来自 Relay 还是 WebRTC。
 
+### 所有远程消息标记通道
+
+所有通过远程数据面传递的消息都必须标记通道，覆盖：
+
+- RPC request。
+- RPC response。
+- RPC notification。
+- `local_api.stream.event`。
+- `local_api.stream.closed`。
+- 错误响应。
+
+消息体内增加传输元信息：
+
+```json
+{
+  "version": 1,
+  "type": "notification",
+  "transport": {
+    "kind": "webrtc",
+    "connection_id": "conn_123",
+    "sent_at": "2026-06-29T12:00:00.000Z"
+  },
+  "method": "local_api.stream.event",
+  "params": {}
+}
+```
+
+`transport.kind` 只允许：
+
+- `relay`
+- `webrtc`
+
+接收端还必须记录实际收到消息的通道，称为 `observed_transport`。原因是 payload 里的 `transport.kind` 属于发送方声明，不能替代接收端对物理通道的判断。
+
+```ts
+type RemoteInboundMessage = {
+  payload: unknown
+  observedTransport: 'relay' | 'webrtc'
+}
+```
+
+如果 `payload.transport.kind` 与 `observedTransport` 不一致：
+
+- 接收端以 `observedTransport` 为准。
+- 调试日志记录 mismatch。
+- 第一版不直接断开连接，避免因为旧客户端或灰度版本导致连接不可用。
+
+UI 调试区和开发日志应能看到：
+
+- 消息方向：上行 / 下行。
+- 声明通道：`payload.transport.kind`。
+- 实际通道：`observedTransport`。
+- `connection_id`。
+- RPC id 或 stream id。
+- stream seq。
+
 ### 业务 stream 与 transport 解耦
 
 远程 SSE 订阅不应该等同于某一条 transport 连接。以 session group SSE 为例，理想模型是：
@@ -282,6 +338,11 @@ closed
 {
   "version": 1,
   "type": "notification",
+  "transport": {
+    "kind": "webrtc",
+    "connection_id": "conn_123",
+    "sent_at": "2026-06-29T12:00:00.000Z"
+  },
   "method": "local_api.stream.event",
   "params": {
     "stream_id": "stream_1",
@@ -302,6 +363,8 @@ seq > lastSeqByStream[stream_id]：接受并更新 UI
 因为 session group event 是完整快照，丢弃旧 seq 不会破坏 UI。
 
 当 WebRTC 从 closed 变 open，或 Relay 从 closed 变 open，本机可以用新的 seq 主动重发 `last_event`，让新通道尽快同步当前快照。
+
+`seq` 的去重只处理业务顺序；通道标记处理可观测性和路由验证。两者都必须保留。
 
 ## Relay fallback
 
@@ -325,6 +388,7 @@ fallback 规则：
 - Relay open 后可以立即承载业务 RPC 和 stream event。
 - WebRTC open 后，新请求优先走 WebRTC。
 - 下行 stream event 由本机 `TransportRouter` 选择当前最佳通道发送。
+- `TransportRouter` 发送前必须写入 `transport.kind`，Web 和本机接收时必须附加 `observed_transport`。
 - 同一个 stream event 只从一个通道发送；切换边界用 `seq` 防止迟到旧消息覆盖新消息。
 - WebRTC 失败后不需要重建本地 SSE，后续 event 自动回到 Relay。
 
@@ -356,10 +420,12 @@ fallback 规则：
 6. Web 控制台明确显示当前主通道和备用通道。
 7. WebRTC 失败或断开时，远程会话列表继续通过 Relay 更新。
 8. Web 侧按 `stream_id + seq` 丢弃迟到事件，旧通道消息不能覆盖新快照。
-9. 服务端日志可以区分信令消息和 Relay frame；WebRTC 成功后该连接的 stream event 不应继续稳定走 Relay。
-10. 本机退出、页面关闭或连接重试时，WebRTC、Relay 和 RemoteStreamSession 资源都能被清理。
-11. Web 侧测试覆盖 Relay 先可用、WebRTC 后接管、迟到 seq 被丢弃、WebRTC 断开回到 Relay。
-12. Rust 侧测试覆盖 stream event 路由选择、seq 单调递增、last_event 重发、未知连接拒绝、资源清理。
+9. 所有 RPC request / response / notification 都包含 `transport.kind`，接收端都记录 `observed_transport`。
+10. UI 调试区能展示消息实际通道，便于确认当前数据是否走 WebRTC。
+11. 服务端日志可以区分信令消息和 Relay frame；WebRTC 成功后该连接的 stream event 不应继续稳定走 Relay。
+12. 本机退出、页面关闭或连接重试时，WebRTC、Relay 和 RemoteStreamSession 资源都能被清理。
+13. Web 侧测试覆盖 Relay 先可用、WebRTC 后接管、迟到 seq 被丢弃、WebRTC 断开回到 Relay、通道标记 mismatch 日志。
+14. Rust 侧测试覆盖 stream event 路由选择、seq 单调递增、last_event 重发、通道标记写入、未知连接拒绝、资源清理。
 
 ## 实现顺序
 
@@ -371,11 +437,12 @@ fallback 规则：
 6. 本机 RemoteAgent 接入 `signal.offer`，创建 answer 和 DataChannel。
 7. 本机 DataChannel payload 接入现有 RPC runtime。
 8. 本机增加 `TransportRouter`，统一选择 Relay / WebRTC 下行通道。
-9. 本机将 `local_api.stream` 改为业务级 `RemoteStreamSession`，为事件增加 `seq` 和 `last_event`。
-10. Web 端按 `stream_id + seq` 处理 stream event，丢弃迟到事件。
-11. Web 控制台实现 Relay 快速可用、WebRTC 后台协商、直连可用后优先使用的状态机。
-12. 控制台展示当前主通道和备用通道，并补齐 i18n。
-13. 做端到端手动验收：Relay 先显示、WebRTC 后接管、WebRTC 断开回到 Relay。
+9. 为所有远程 RPC payload 增加 `transport.kind`，接收端附加 `observed_transport`。
+10. 本机将 `local_api.stream` 改为业务级 `RemoteStreamSession`，为事件增加 `seq` 和 `last_event`。
+11. Web 端按 `stream_id + seq` 处理 stream event，丢弃迟到事件。
+12. Web 控制台实现 Relay 快速可用、WebRTC 后台协商、直连可用后优先使用的状态机。
+13. 控制台展示当前主通道、备用通道和消息实际通道，并补齐 i18n。
+14. 做端到端手动验收：Relay 先显示、WebRTC 后接管、WebRTC 断开回到 Relay。
 
 ## 风险
 
