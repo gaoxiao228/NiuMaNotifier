@@ -1,5 +1,7 @@
 import type { RemoteTransport } from './remoteTransport.js'
 
+export const WEBRTC_DATA_CHANNEL_LABEL = 'niuma-e2ee'
+
 export type WebRtcOfferSignal = {
   connection_id: string
   sdp: string
@@ -44,7 +46,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   const peer = new PeerConnection({
     iceServers: options.iceServers ?? []
   })
-  const channel = peer.createDataChannel('niuma-remote')
+  const channel = peer.createDataChannel(WEBRTC_DATA_CHANNEL_LABEL)
   let open = false
   let closed = false
 

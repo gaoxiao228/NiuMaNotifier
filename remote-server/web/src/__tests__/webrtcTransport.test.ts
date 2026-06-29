@@ -37,7 +37,7 @@ class FakePeerConnection {
   }
 
   createDataChannel(label: string) {
-    expect(label).toBe('niuma-remote')
+    expect(label).toBe('niuma-e2ee')
     return this.dataChannel as unknown as RTCDataChannel
   }
 
