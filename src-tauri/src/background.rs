@@ -17,6 +17,7 @@ pub fn spawn_background_services(
     runtime_events: RuntimeEventBus,
     tool_sessions: niuma_api::tool_sessions::ToolSessionRegistry,
     remote_agent_status: RemoteAgentStatusHandle,
+    remote_agent_wake: remote::agent::RemoteAgentWake,
 ) {
     let spawn_result = thread::Builder::new()
         .name("niuma-background-services-startup".to_string())
@@ -38,7 +39,11 @@ pub fn spawn_background_services(
                 }
             }
             spawn_stale_sweep_runtime(store.clone(), runtime_events.clone());
-            remote::agent::spawn_remote_agent_runtime(store.clone(), remote_agent_status.clone());
+            remote::agent::spawn_remote_agent_runtime(
+                store.clone(),
+                remote_agent_status.clone(),
+                remote_agent_wake.clone(),
+            );
 
             // Codex session 扫描放到首屏之后，避免文件系统监听和活跃文件轮询抢首屏资源。
             thread::sleep(WATCHER_START_DELAY);

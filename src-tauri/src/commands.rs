@@ -36,6 +36,7 @@ pub(crate) struct AppRuntimeState {
     pub(crate) mutation_service: StateMutationService,
     pub(crate) runtime_events: RuntimeEventBus,
     pub(crate) remote_agent_status: crate::remote::status::RemoteAgentStatusHandle,
+    pub(crate) remote_agent_wake: crate::remote::agent::RemoteAgentWake,
 }
 
 #[tauri::command]
@@ -252,13 +253,17 @@ pub(crate) async fn poll_remote_login(
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(std::env::temp_dir),
         );
-        return Ok(crate::remote::commands::apply_remote_binding_result(
+        let response = crate::remote::commands::apply_remote_binding_result(
             &runtime_state.store,
             &credential_store,
             &config.server_url,
             poll_result.device_identity_private_key,
             binding,
-        ));
+        );
+        if response.code == 0 {
+            runtime_state.remote_agent_wake.request();
+        }
+        return Ok(response);
     }
 
     Ok(ApiResponse::ok(serde_json::json!({

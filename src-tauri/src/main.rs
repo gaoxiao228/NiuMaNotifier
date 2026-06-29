@@ -21,6 +21,7 @@ fn main() {
     let tool_sessions = niuma_api::tool_sessions::ToolSessionRegistry::new();
     let mutation_service = StateMutationService::new(store.clone(), runtime_events.clone());
     let remote_agent_status = remote::status::RemoteAgentStatusHandle::default();
+    let remote_agent_wake = remote::agent::RemoteAgentWake::default();
 
     let app = tauri::Builder::default()
         .manage(commands::AppRuntimeState {
@@ -28,6 +29,7 @@ fn main() {
             mutation_service,
             runtime_events: runtime_events.clone(),
             remote_agent_status: remote_agent_status.clone(),
+            remote_agent_wake: remote_agent_wake.clone(),
         })
         .enable_macos_default_menu(tray::enable_macos_default_menu())
         .setup({
@@ -55,6 +57,7 @@ fn main() {
                     runtime_events.clone(),
                     tool_sessions.clone(),
                     remote_agent_status.clone(),
+                    remote_agent_wake.clone(),
                 );
                 Ok(())
             }

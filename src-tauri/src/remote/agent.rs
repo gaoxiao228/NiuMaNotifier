@@ -9,6 +9,8 @@ use niuma_core::remote::credentials::{
     RemoteCredentialPayload, RemoteCredentialStore, RestrictedFileCredentialStore,
 };
 use niuma_core::store::NiumaStore;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::time;
@@ -16,6 +18,21 @@ use tokio::time;
 pub const DEVICE_HEARTBEAT_INTERVAL_SECONDS: u64 = 20;
 
 pub struct RemoteAgent;
+
+#[derive(Clone, Default)]
+pub struct RemoteAgentWake {
+    requested: Arc<AtomicBool>,
+}
+
+impl RemoteAgentWake {
+    pub fn request(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+    }
+
+    pub fn take_requested(&self) -> bool {
+        self.requested.swap(false, Ordering::SeqCst)
+    }
+}
 
 impl RemoteAgent {
     pub fn startup_state(
@@ -56,13 +73,29 @@ pub fn state_after_socket_result(result: DeviceSocketRunResult) -> RemoteAgentSt
     }
 }
 
+async fn sleep_or_wake(wake: &RemoteAgentWake, duration: Duration) {
+    let step = Duration::from_millis(250);
+    let mut elapsed = Duration::ZERO;
+    while elapsed < duration {
+        if wake.take_requested() {
+            return;
+        }
+        let remaining = duration.saturating_sub(elapsed);
+        let sleep_for = remaining.min(step);
+        time::sleep(sleep_for).await;
+        elapsed += sleep_for;
+    }
+}
+
 pub async fn run_agent_loop(
     mut load_config: impl FnMut() -> Result<RemoteConfig, String>,
     credential_store: impl RemoteCredentialStore,
     status: RemoteAgentStatusHandle,
+    wake: RemoteAgentWake,
 ) {
     let backoff = ReconnectBackoff::default();
-    let signaling_manager = crate::remote::signaling::RemoteSignalingManager::with_status(status.clone());
+    let signaling_manager =
+        crate::remote::signaling::RemoteSignalingManager::with_status(status.clone());
     let mut attempt = 0u32;
     loop {
         let config = match load_config() {
@@ -70,20 +103,20 @@ pub async fn run_agent_loop(
             Err(error) => {
                 status.set_state(RemoteAgentState::Error, Some(error.clone()));
                 eprintln!("NiumaNotifier remote config load failed: {error}");
-                time::sleep(Duration::from_secs(30)).await;
+                sleep_or_wake(&wake, Duration::from_secs(30)).await;
                 continue;
             }
         };
         if !config.remote_access_enabled {
             status.set_state(RemoteAgentState::Disabled, None);
-            time::sleep(Duration::from_secs(30)).await;
+            sleep_or_wake(&wake, Duration::from_secs(30)).await;
             continue;
         }
         let credential = match credential_store.load(&config.server_url) {
             Ok(value) => value,
             Err(_) => {
                 status.set_state(RemoteAgentState::NotConfigured, None);
-                time::sleep(Duration::from_secs(30)).await;
+                sleep_or_wake(&wake, Duration::from_secs(30)).await;
                 continue;
             }
         };
@@ -92,7 +125,7 @@ pub async fn run_agent_loop(
             Err(error) => {
                 status.set_state(RemoteAgentState::NotConfigured, Some(error.clone()));
                 eprintln!("NiumaNotifier remote connect request not ready: {error}");
-                time::sleep(Duration::from_secs(30)).await;
+                sleep_or_wake(&wake, Duration::from_secs(30)).await;
                 continue;
             }
         };
@@ -113,10 +146,10 @@ pub async fn run_agent_loop(
             RemoteAgentState::Reconnecting => {
                 let delay = backoff.delay_for_attempt(attempt);
                 attempt = attempt.saturating_add(1);
-                time::sleep(delay).await;
+                sleep_or_wake(&wake, delay).await;
             }
             RemoteAgentState::Error => {
-                time::sleep(Duration::from_secs(60)).await;
+                sleep_or_wake(&wake, Duration::from_secs(60)).await;
             }
             _ => {
                 attempt = 0;
@@ -125,7 +158,11 @@ pub async fn run_agent_loop(
     }
 }
 
-pub fn spawn_remote_agent_runtime(store: NiumaStore, status: RemoteAgentStatusHandle) {
+pub fn spawn_remote_agent_runtime(
+    store: NiumaStore,
+    status: RemoteAgentStatusHandle,
+    wake: RemoteAgentWake,
+) {
     if let Err(error) = thread::Builder::new()
         .name("remote-agent-runtime".to_string())
         .spawn(move || {
@@ -150,6 +187,7 @@ pub fn spawn_remote_agent_runtime(store: NiumaStore, status: RemoteAgentStatusHa
                 move || store.remote_config(),
                 credential_store,
                 status,
+                wake,
             ));
         })
     {
@@ -168,6 +206,16 @@ mod tests {
             RemoteAgent::startup_state(&config, None),
             RemoteAgentState::NotConfigured
         );
+    }
+
+    #[test]
+    fn remote_agent_wake_signal_can_be_requested() {
+        let wake = RemoteAgentWake::default();
+
+        assert!(!wake.take_requested());
+        wake.request();
+        assert!(wake.take_requested());
+        assert!(!wake.take_requested());
     }
 }
 
