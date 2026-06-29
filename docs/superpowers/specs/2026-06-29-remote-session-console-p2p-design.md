@@ -1,4 +1,4 @@
-# 远程控制台 WebRTC-first 设计
+# 远程控制台直连优先传输设计
 
 ## 背景
 
@@ -12,12 +12,13 @@
 }
 ```
 
-这个闭环证明账号、设备绑定、连接邀请、Relay、RPC、SSE 转发和 Web 控制台展示都可用。下一阶段要回到原先优先方案：数据面优先走 WebRTC DataChannel 直连，服务端只做控制面和信令；Relay 保留为 fallback。
+这个闭环证明账号、设备绑定、连接邀请、Relay、RPC、SSE 转发和 Web 控制台展示都可用。下一阶段要回到原先优先方案：当 Relay 和 WebRTC DataChannel 都可用时，业务数据优先走 WebRTC 直连；但连接启动阶段不应死等 WebRTC，Relay 可以先快速承载首屏数据，WebRTC 在后台协商成功后接管后续数据面。
 
 ## 目标
 
-- 外部 Web 客户端优先通过 WebRTC DataChannel 直连本机 NiuMaNotifier。
-- WebRTC 失败、超时或不可用时，自动降级到现有 Relay。
+- 外部 Web 客户端连接后，Relay 可以先快速可用，保证首屏会话列表尽快出现。
+- WebRTC DataChannel 后台协商；当 Relay 和 WebRTC 都可用时，优先通过 WebRTC 直连本机 NiuMaNotifier。
+- WebRTC 不可用、断开或发送失败时，自动继续使用现有 Relay。
 - 现有 `PlainRpcClient`、`RemoteLocalApiClient` 和本机 `LocalApiBridge` 不重写业务逻辑。
 - 控制台明确展示当前传输方式，方便确认是否真的绕过服务端 Relay。
 - 第一版只保证现有远程会话列表实时更新继续可用。
@@ -51,9 +52,9 @@
 - 解析本机 Local API 请求体。
 - 存储 session 列表、项目路径、会话正文或授权正文。
 
-### 数据面 WebRTC 优先
+### 数据面直连优先
 
-优先路径：
+最终优先路径：
 
 ```text
 外部 Web 控制台
@@ -70,6 +71,15 @@
 ```
 
 RPC 层只看到有序 payload，不关心底层是 WebRTC 还是 Relay。
+
+启动策略不是“WebRTC 成功前不工作”，而是：
+
+```text
+Relay 先可用则先承载业务数据
+WebRTC 后台协商
+WebRTC 可用后成为首选下行/上行通道
+Relay 保留为热备
+```
 
 ### 传输层抽象先行
 
@@ -94,7 +104,32 @@ type RemoteTransport = {
 - `RelayTransport`：封装当前 Relay WebSocket。
 - `WebRtcTransport`：封装 `RTCPeerConnection` 和 DataChannel。
 
-`PlainRpcClient` 和 `RemoteLocalApiClient` 继续复用，只依赖 `RemoteTransport.send(...)`。
+Web 侧还需要一个 `RemoteMessageBus`：
+
+```text
+RelayTransport.onPayload
+  -> RemoteMessageBus
+WebRtcTransport.onPayload
+  -> RemoteMessageBus
+RemoteMessageBus
+  -> PlainRpcClient / RemoteLocalApiClient
+```
+
+`PlainRpcClient` 和 `RemoteLocalApiClient` 继续复用，只依赖统一的发送入口和统一的接收入口，不直接知道 payload 来自 Relay 还是 WebRTC。
+
+### 业务 stream 与 transport 解耦
+
+远程 SSE 订阅不应该等同于某一条 transport 连接。以 session group SSE 为例，理想模型是：
+
+```text
+本机 Local Group SSE
+  -> RemoteStreamSession(stream_id)
+  -> TransportRouter
+      -> WebRTC DataChannel，open 时优先
+      -> Relay，WebRTC 不可用时兜底
+```
+
+本机只订阅一次本地 SSE。WebRTC 从不可用变成可用时，不重新订阅本地 SSE；下一条 stream event 自动通过 WebRTC 发送。WebRTC 断开时，也不重建本地 SSE；下一条 event 自动回到 Relay。
 
 ## 连接流程
 
@@ -102,14 +137,15 @@ type RemoteTransport = {
 2. Web 调用服务端创建连接，请求 `transport_preference = "auto"`。
 3. 服务端创建 `connection_id`、`connection_token`，通知目标设备。
 4. 本机 RemoteAgent 接受连接邀请。
-5. Web 创建 `RTCPeerConnection` 和 DataChannel。
-6. Web 生成 offer，通过服务端信令发给设备。
-7. 本机收到 offer，创建 answer，通过服务端信令回给 Web。
-8. 双方通过服务端交换 ICE candidate。
-9. DataChannel open 后，Web 控制台将当前 transport 标记为 `webrtc`。
-10. 现有 RPC 和远程 Local API stream 通过 DataChannel 发送。
-11. 如果 WebRTC 在超时时间内未 open，或 ICE / DataChannel 进入失败状态，Web 自动启动 Relay fallback。
-12. Relay fallback 成功后，当前 transport 标记为 `relay`，业务功能继续可用。
+5. Web 立即启动 Relay 连接，Relay open 后可以先发起远程 Local API stream。
+6. Web 同时创建 `RTCPeerConnection` 和 DataChannel。
+7. Web 生成 offer，通过服务端信令发给设备。
+8. 本机收到 offer，创建 answer，通过服务端信令回给 Web。
+9. 双方通过服务端交换 ICE candidate。
+10. DataChannel open 后，Web 和本机都将 WebRTC 标记为可用。
+11. 新的普通 RPC 请求优先通过 WebRTC 发送。
+12. 已存在的业务 stream 不重新订阅本机 SSE；本机 `TransportRouter` 后续优先通过 WebRTC 推送 stream event。
+13. WebRTC 失败或断开时，Relay 继续承载后续请求和 stream event。
 
 ## 信令协议
 
@@ -170,18 +206,38 @@ ICE candidate：
 数据传输面：
 
 - `idle`
+- `trying_relay`
 - `trying_webrtc`
 - `webrtc_open`
 - `webrtc_failed`
-- `trying_relay`
 - `relay_open`
 - `relay_failed`
 
+Web 侧应单独维护每个 transport 的状态，而不是只有一个全局 transport 状态：
+
+```ts
+type TransportAvailability = {
+  relay: 'idle' | 'connecting' | 'open' | 'failed' | 'closed'
+  webrtc: 'idle' | 'connecting' | 'open' | 'failed' | 'closed'
+}
+```
+
+选择规则：
+
+```text
+如果 WebRTC open，新请求优先走 WebRTC
+否则如果 Relay open，新请求走 Relay
+否则等待连接或展示错误
+```
+
 用户界面文案：
 
+- 当前通道：直连
+- 当前通道：Relay
+- 备用通道：Relay 已连接
 - 正在尝试直连
 - 已直连
-- 直连失败，正在切换 Relay
+- 直连失败，继续使用 Relay
 - Relay 已连接
 - 连接失败
 
@@ -197,6 +253,7 @@ ICE candidate：
 - 将 DataChannel payload 送入现有 `RelayRuntime` / RPC router 等价处理路径。
 - 本机生成 ICE candidate 时通过设备 WebSocket 发回服务端。
 - 连接结束或失败时清理该 connection 的 WebRTC 资源。
+- 为每个 connection 维护 `TransportRouter`，统一选择下行响应和 stream event 的发送通道。
 
 本机 RPC 处理仍复用：
 
@@ -206,9 +263,51 @@ ICE candidate：
 - `local_api.stream`
 - `local_api.stream.close`
 
+### RemoteStreamSession
+
+本机收到 `local_api.stream` 后创建业务 stream session，而不是创建“属于 Relay”或“属于 WebRTC”的 stream：
+
+```text
+stream_id
+local_api_path
+local_sse_subscription
+last_event
+next_seq
+closed
+```
+
+本机本地 SSE 每产生一条事件，写入：
+
+```json
+{
+  "version": 1,
+  "type": "notification",
+  "method": "local_api.stream.event",
+  "params": {
+    "stream_id": "stream_1",
+    "seq": 12,
+    "event": "session_project_groups",
+    "data": {}
+  }
+}
+```
+
+`seq` 是每个 stream 内单调递增的序号。Web 端按 `stream_id + seq` 去重和防乱序：
+
+```text
+seq <= lastSeqByStream[stream_id]：丢弃
+seq > lastSeqByStream[stream_id]：接受并更新 UI
+```
+
+因为 session group event 是完整快照，丢弃旧 seq 不会破坏 UI。
+
+当 WebRTC 从 closed 变 open，或 Relay 从 closed 变 open，本机可以用新的 seq 主动重发 `last_event`，让新通道尽快同步当前快照。
+
 ## Relay fallback
 
-fallback 触发条件：
+Relay 不只是失败后的冷 fallback，也可以作为连接启动阶段的快速通道和 WebRTC 可用后的热备通道。
+
+WebRTC 降级触发条件：
 
 - WebRTC 初始化失败。
 - offer / answer 信令超时。
@@ -223,10 +322,11 @@ fallback 触发条件：
 
 fallback 规则：
 
-- WebRTC 未成功前，不向业务 RPC 层暴露 open。
-- WebRTC 失败后启动 Relay。
-- Relay 成功后复用同一个 `PlainRpcClient` 创建新请求。
-- 旧 WebRTC 资源必须关闭，避免双通道同时回包。
+- Relay open 后可以立即承载业务 RPC 和 stream event。
+- WebRTC open 后，新请求优先走 WebRTC。
+- 下行 stream event 由本机 `TransportRouter` 选择当前最佳通道发送。
+- 同一个 stream event 只从一个通道发送；切换边界用 `seq` 防止迟到旧消息覆盖新消息。
+- WebRTC 失败后不需要重建本地 SSE，后续 event 自动回到 Relay。
 
 ## STUN / TURN 策略
 
@@ -234,7 +334,7 @@ fallback 规则：
 
 原因：
 
-- STUN 足够验证 WebRTC-first 架构。
+- STUN 足够验证直连优先架构。
 - TURN 部署、鉴权和成本更复杂。
 - TURN 本身也是中继，和 Relay 的产品目标需要清楚区分。
 
@@ -249,37 +349,43 @@ fallback 规则：
 ## 验收标准
 
 1. Relay 现有远程会话列表功能不回退。
-2. Web 控制台优先尝试 WebRTC。
-3. WebRTC 成功时，远程会话列表实时更新可用。
-4. Web 控制台明确显示当前 transport 为 WebRTC。
-5. WebRTC 失败时自动切换 Relay。
-6. Relay fallback 成功时，远程会话列表仍可用。
-7. 服务端日志可以区分信令消息和 Relay frame；WebRTC 成功后不应持续出现该连接的 Relay frame。
-8. 本机退出、页面关闭或连接重试时，WebRTC 和 Relay 资源都能被清理。
-9. Web 侧测试覆盖 WebRTC 成功、WebRTC 失败 fallback、Relay 失败错误态。
-10. Rust 侧测试覆盖 offer 校验、answer 生成、未知连接拒绝、资源清理。
+2. Relay 先 open 时，Web 控制台可以先显示远程会话列表。
+3. Web 控制台后台尝试 WebRTC。
+4. WebRTC 成功时，新请求优先走 WebRTC。
+5. WebRTC 成功后，本机不重新订阅本地 group SSE，后续 stream event 自动优先通过 WebRTC 下发。
+6. Web 控制台明确显示当前主通道和备用通道。
+7. WebRTC 失败或断开时，远程会话列表继续通过 Relay 更新。
+8. Web 侧按 `stream_id + seq` 丢弃迟到事件，旧通道消息不能覆盖新快照。
+9. 服务端日志可以区分信令消息和 Relay frame；WebRTC 成功后该连接的 stream event 不应继续稳定走 Relay。
+10. 本机退出、页面关闭或连接重试时，WebRTC、Relay 和 RemoteStreamSession 资源都能被清理。
+11. Web 侧测试覆盖 Relay 先可用、WebRTC 后接管、迟到 seq 被丢弃、WebRTC 断开回到 Relay。
+12. Rust 侧测试覆盖 stream event 路由选择、seq 单调递增、last_event 重发、未知连接拒绝、资源清理。
 
 ## 实现顺序
 
-1. Web 端抽出 `RemoteTransport` 接口，将现有 Relay 封装成 `RelayTransport`。
+1. Web 端抽出 `RemoteTransport` 和 `RemoteMessageBus`，将现有 Relay 封装成 `RelayTransport`。
 2. 保持 Relay 路径测试全绿，确认抽象没有改变现有行为。
 3. 服务端连接创建响应增加 ICE server 配置字段。
 4. Web 端新增 `WebRtcTransport`，实现 offer、candidate、DataChannel 收发。
 5. 服务端 `/ws/client` 和设备 WebSocket 补齐 `signal.offer`、`signal.answer`、`signal.ice_candidate` 转发测试。
 6. 本机 RemoteAgent 接入 `signal.offer`，创建 answer 和 DataChannel。
 7. 本机 DataChannel payload 接入现有 RPC runtime。
-8. Web 控制台实现 WebRTC-first 状态机和 Relay fallback。
-9. 控制台展示当前 transport，并补齐 i18n。
-10. 做端到端手动验收：WebRTC 成功路径、强制失败 fallback 路径。
+8. 本机增加 `TransportRouter`，统一选择 Relay / WebRTC 下行通道。
+9. 本机将 `local_api.stream` 改为业务级 `RemoteStreamSession`，为事件增加 `seq` 和 `last_event`。
+10. Web 端按 `stream_id + seq` 处理 stream event，丢弃迟到事件。
+11. Web 控制台实现 Relay 快速可用、WebRTC 后台协商、直连可用后优先使用的状态机。
+12. 控制台展示当前主通道和备用通道，并补齐 i18n。
+13. 做端到端手动验收：Relay 先显示、WebRTC 后接管、WebRTC 断开回到 Relay。
 
 ## 风险
 
 - 浏览器和 Rust WebRTC 库的 DataChannel 行为可能存在兼容差异。
 - NAT 环境下不配置 TURN 时，直连成功率不稳定。
-- 如果状态机没有清理旧资源，可能出现 WebRTC 和 Relay 双通道同时响应。
+- 如果没有 `stream seq`，WebRTC / Relay 切换边界可能出现迟到事件覆盖新快照。
+- 如果状态机没有清理旧资源，可能出现 WebRTC 和 Relay 双通道同时响应普通 RPC。
 - 多标签页同时连接同一设备时，仍要遵守当前 busy / replace 规则。
 - Safari 或部分浏览器 WebRTC 行为可能不同，第一版优先保证 Chrome。
 
 ## 与现有实现的关系
 
-已经完成的 Relay 闭环不是废弃代码，而是 WebRTC-first 的 fallback 基座。下一阶段的核心不是新增另一套业务通信协议，而是把已经跑通的 RPC payload 放到更合适的传输层上。
+已经完成的 Relay 闭环不是废弃代码，而是快速首屏和热备通道。下一阶段的核心不是新增另一套业务通信协议，而是把已经跑通的 RPC payload 放到统一 transport 层上：Relay 先可用时先服务用户，WebRTC 可用后成为首选通道。
