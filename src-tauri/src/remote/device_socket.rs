@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use http::Request;
+use http::header::AUTHORIZATION;
 use niuma_core::remote::config::RemoteConfig;
 use niuma_core::remote::connection_policy::{
     classify_device_socket_close, device_socket_url, DeviceSocketCloseReason,
@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
@@ -37,6 +38,22 @@ pub fn device_authorization_header(device_token: &str) -> String {
     format!("Device {device_token}")
 }
 
+pub fn build_device_socket_upgrade_request(
+    socket_url: &str,
+    device_token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    let mut request = socket_url
+        .into_client_request()
+        .map_err(|error| format!("构造远程 WebSocket 握手请求失败：{error}"))?;
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        device_authorization_header(device_token)
+            .parse()
+            .map_err(|error| format!("构造远程授权头失败：{error}"))?,
+    );
+    Ok(request)
+}
+
 pub async fn run_device_socket_once(
     request: DeviceSocketConnectRequest,
     signaling_manager: crate::remote::signaling::RemoteSignalingManager,
@@ -46,19 +63,13 @@ pub async fn run_device_socket_once(
         Ok(value) => value,
         Err(error) => return DeviceSocketRunResult::Failed(error),
     };
-    let upgrade_request = match Request::builder()
-        .uri(&socket_url)
-        .header(
-            "Authorization",
-            device_authorization_header(&request.device_token),
-        )
-        .body(())
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return DeviceSocketRunResult::Failed(format!("构造远程连接请求失败：{error}"));
-        }
-    };
+    let upgrade_request =
+        match build_device_socket_upgrade_request(&socket_url, &request.device_token) {
+            Ok(value) => value,
+            Err(error) => {
+                return DeviceSocketRunResult::Failed(format!("构造远程连接请求失败：{error}"));
+            }
+        };
     let (stream, _) = match connect_async(upgrade_request).await {
         Ok(value) => value,
         Err(error) => return DeviceSocketRunResult::Failed(format!("远程设备连接失败：{error}")),
@@ -132,8 +143,8 @@ pub async fn run_device_socket_once(
 }
 
 pub fn parse_device_text_message(text: String) -> Result<Option<DeviceSignalMessage>, String> {
-    let value: Value =
-        serde_json::from_str(&text).map_err(|error| format!("远程设备消息 JSON 解析失败：{error}"))?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("远程设备消息 JSON 解析失败：{error}"))?;
     match parse_device_signal_message(value) {
         Ok(message) => Ok(Some(message)),
         Err(error) => {
@@ -217,6 +228,20 @@ mod connection_tests {
             device_authorization_header("dvt_secret"),
             "Device dvt_secret"
         );
+    }
+
+    #[test]
+    fn builds_websocket_upgrade_request_with_required_headers() {
+        let request =
+            build_device_socket_upgrade_request("ws://127.0.0.1:27880/ws/device", "dvt_secret")
+                .unwrap();
+
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Device dvt_secret"
+        );
+        assert!(request.headers().contains_key("sec-websocket-key"));
+        assert_eq!(request.headers().get("upgrade").unwrap(), "websocket");
     }
 
     #[test]

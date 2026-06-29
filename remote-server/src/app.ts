@@ -11,6 +11,7 @@ import { apiFailure } from './shared/response.js'
 import { registerClientSocket } from './ws/client-socket.js'
 import { registerDeviceSocket } from './ws/device-socket.js'
 import { registerRelaySocket } from './ws/relay-socket.js'
+import { ensureWebsocketRegistered } from './ws/websocket-plugin.js'
 
 export type AppDeps = {
   registerAuthRoutes?: (app: FastifyInstance) => Promise<void>
@@ -27,21 +28,29 @@ export function buildApp(deps: AppDeps = {}) {
   const app = Fastify({ logger: false })
   const deviceSocketRegistry = createDeviceSocketRegistry()
 
-  void registerHealthRoutes(app)
-  if (deps.registerAuthRoutes) void deps.registerAuthRoutes(app)
-  if (deps.registerDesktopLoginRoutes) void deps.registerDesktopLoginRoutes(app)
-  if (deps.registerDevicesRoutes) void deps.registerDevicesRoutes(app, { registry: deviceSocketRegistry })
-  if (deps.registerConnectionsRoutes) void deps.registerConnectionsRoutes(app, { registry: deviceSocketRegistry })
-  if (deps.registerDeviceSocket) void deps.registerDeviceSocket(app, deviceSocketRegistry)
-  if (deps.registerClientSocket) void deps.registerClientSocket(app, deviceSocketRegistry)
-  if (deps.registerRelaySocket) void deps.registerRelaySocket(app)
-  void (deps.registerWebConsoleRoutes ?? registerWebConsoleRoutes)(app)
+  void app.register(async (instance) => {
+    if (deps.registerDeviceSocket || deps.registerClientSocket || deps.registerRelaySocket) {
+      await ensureWebsocketRegistered(instance)
+    }
+
+    await registerHealthRoutes(instance)
+    if (deps.registerAuthRoutes) await deps.registerAuthRoutes(instance)
+    if (deps.registerDesktopLoginRoutes) await deps.registerDesktopLoginRoutes(instance)
+    if (deps.registerDevicesRoutes) await deps.registerDevicesRoutes(instance, { registry: deviceSocketRegistry })
+    if (deps.registerConnectionsRoutes) await deps.registerConnectionsRoutes(instance, { registry: deviceSocketRegistry })
+    if (deps.registerDeviceSocket) await deps.registerDeviceSocket(instance, deviceSocketRegistry)
+    if (deps.registerClientSocket) await deps.registerClientSocket(instance, deviceSocketRegistry)
+    if (deps.registerRelaySocket) await deps.registerRelaySocket(instance)
+    await (deps.registerWebConsoleRoutes ?? registerWebConsoleRoutes)(instance)
+  })
 
   app.setNotFoundHandler(async (_request, reply) => {
     return reply.status(404).send(apiFailure(ErrorCode.ROUTE_NOT_FOUND, '接口不存在'))
   })
 
-  app.setErrorHandler(async (_error, _request, reply) => {
+  app.setErrorHandler(async (error, _request, reply) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`NiuMaNotifier request error: ${message}`)
     return reply.status(500).send(apiFailure(ErrorCode.SYSTEM_ERROR, '系统异常'))
   })
 

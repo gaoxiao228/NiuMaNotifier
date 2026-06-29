@@ -46,4 +46,32 @@ describe('presence service', () => {
     await service.markOffline('dev_1')
     await expect(service.getPresence('dev_1')).resolves.toBeNull()
   })
+
+  it('preserves capabilities when refreshing existing presence without capabilities', async () => {
+    const service = createPresenceService({
+      redis: createFakeRedis(),
+      ttlSeconds: 90
+    })
+
+    await service.markOnline({
+      userId: 'usr_1',
+      deviceId: 'dev_1',
+      socketId: 'sock_1',
+      serverInstanceId: 'srv_1',
+      lastSeenAt: '2026-06-28T00:00:00.000Z',
+      capabilities: { supports_webrtc: true }
+    })
+    await service.markOnline({
+      userId: 'usr_1',
+      deviceId: 'dev_1',
+      socketId: 'sock_2',
+      serverInstanceId: 'srv_1',
+      lastSeenAt: '2026-06-28T00:00:20.000Z'
+    })
+
+    await expect(service.getPresence('dev_1')).resolves.toMatchObject({
+      socket_id: 'sock_2',
+      capabilities: { supports_webrtc: true }
+    })
+  })
 })

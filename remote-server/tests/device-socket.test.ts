@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDeviceSocketRegistry } from '../src/modules/devices/device-socket-registry.js'
-import { handleDeviceMessage } from '../src/ws/device-socket.js'
+import { createSocketMessageBuffer, handleDeviceMessage } from '../src/ws/device-socket.js'
 import { deviceSocketMessageSchema } from '../src/ws/ws-message.schemas.js'
 
 describe('device websocket schema and registry', () => {
@@ -125,6 +125,18 @@ describe('device websocket schema and registry', () => {
 })
 
 describe('device websocket lifecycle', () => {
+  it('buffers messages received before async authentication completes', async () => {
+    const processed: string[] = []
+    const buffer = createSocketMessageBuffer<string>()
+
+    buffer.push('early_hello')
+    await buffer.flush(async (message) => {
+      processed.push(message)
+    })
+
+    expect(processed).toEqual(['early_hello'])
+  })
+
   it('marks device online on hello and heartbeat', async () => {
     const calls: string[] = []
     const service = {

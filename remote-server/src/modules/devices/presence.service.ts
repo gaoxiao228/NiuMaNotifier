@@ -13,7 +13,7 @@ export type MarkOnlineInput = {
   socketId: string
   serverInstanceId: string
   lastSeenAt: string
-  capabilities: unknown
+  capabilities?: unknown
 }
 
 export type PresenceRedis = {
@@ -29,13 +29,14 @@ function presenceKey(deviceId: string) {
 export function createPresenceService(options: { redis: PresenceRedis; ttlSeconds: number }) {
   return {
     async markOnline(input: MarkOnlineInput) {
+      const existing = input.capabilities === undefined ? await this.getPresence(input.deviceId) : null
       const value: PresenceRecord = {
         user_id: input.userId,
         device_id: input.deviceId,
         socket_id: input.socketId,
         server_instance_id: input.serverInstanceId,
         last_seen_at: input.lastSeenAt,
-        capabilities: input.capabilities
+        capabilities: input.capabilities ?? existing?.capabilities ?? {}
       }
 
       await options.redis.set(presenceKey(input.deviceId), JSON.stringify(value), 'EX', options.ttlSeconds)

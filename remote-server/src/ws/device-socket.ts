@@ -28,7 +28,7 @@ export type DeviceMessageDeps = {
       socketId: string
       serverInstanceId: string
       lastSeenAt: string
-      capabilities: unknown
+      capabilities?: unknown
     }): Promise<void>
   }
   devices: {
@@ -39,6 +39,29 @@ export type DeviceMessageDeps = {
 export type DeviceMessageResult =
   | void
   | { kind: 'forward_to_client'; connectionId: string; message: object }
+
+export function createSocketMessageBuffer<T>() {
+  const buffered: T[] = []
+  let handler: ((message: T) => Promise<void> | void) | null = null
+
+  return {
+    push(message: T) {
+      if (handler) {
+        void handler(message)
+        return
+      }
+
+      buffered.push(message)
+    },
+    async flush(nextHandler: (message: T) => Promise<void> | void) {
+      handler = nextHandler
+      const pending = buffered.splice(0, buffered.length)
+      for (const message of pending) {
+        await nextHandler(message)
+      }
+    }
+  }
+}
 
 export async function handleDeviceMessage(deps: DeviceMessageDeps): Promise<DeviceMessageResult> {
   const message = deviceSocketMessageSchema.parse(JSON.parse(deps.raw))
@@ -67,8 +90,7 @@ export async function handleDeviceMessage(deps: DeviceMessageDeps): Promise<Devi
     deviceId: deps.authenticatedDevice.id,
     socketId: deps.socketId,
     serverInstanceId: deps.serverInstanceId,
-    lastSeenAt: now.toISOString(),
-    capabilities: {}
+    lastSeenAt: now.toISOString()
   })
   await deps.devices.updateLastSeen(deps.authenticatedDevice.id, now, {})
 
@@ -102,6 +124,11 @@ export async function registerDeviceSocket(
   const serverInstanceId = `srv_${process.pid}`
 
   app.get('/ws/device', { websocket: true }, async (socket, request) => {
+    const messageBuffer = createSocketMessageBuffer<{ toString(): string }>()
+    socket.on('message', (raw: { toString(): string }) => {
+      messageBuffer.push(raw)
+    })
+
     const auth = await deviceTokenService.authenticate(request.headers.authorization)
     if (!auth.ok) {
       socket.close(4001, JSON.stringify({ code: auth.code, message: auth.message }))
@@ -111,7 +138,7 @@ export async function registerDeviceSocket(
     const socketId = createPublicId('sock')
     registry.add(auth.device.id, socket)
 
-    socket.on('message', async (raw: { toString(): string }) => {
+    const processMessage = async (raw: { toString(): string }) => {
       try {
         const result = await handleDeviceMessage({
           raw: raw.toString(),
@@ -128,7 +155,8 @@ export async function registerDeviceSocket(
       } catch {
         socket.close(4002, 'invalid_device_message')
       }
-    })
+    }
+    await messageBuffer.flush(processMessage)
 
     socket.on('close', async () => {
       if (registry.remove(auth.device.id, socket)) {
