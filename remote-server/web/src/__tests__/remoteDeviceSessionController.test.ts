@@ -153,6 +153,24 @@ function respondRelay(harness: Harness, method: string, result: unknown) {
   })
 }
 
+async function openRelayAndEmitSessionGroups(harness: Harness, value: unknown) {
+  openRelay(harness)
+  respondRelay(harness, 'local_api.stream', { stream_id: 'stream_1' })
+  await Promise.resolve()
+  harness.getRelayOptions().onPayload({
+    version: 1,
+    type: 'notification',
+    method: 'local_api.stream.event',
+    params: {
+      stream_id: 'stream_1',
+      event: 'session_project_groups',
+      id: '1',
+      data: value
+    }
+  })
+  await Promise.resolve()
+}
+
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -309,6 +327,92 @@ describe('createRemoteDeviceSessionController', () => {
     expect(harness.relayClient.send).toHaveBeenCalledWith(
       expect.objectContaining({ method: 'local_api.stream', transport: { kind: 'relay' } })
     )
+  })
+
+  it('keeps relay resources alive when WebRTC errors before relay is ready', async () => {
+    const harness = createHarness()
+    await connectAndAccept(harness)
+
+    harness.getWebRtcOptions().onError(new Error('webrtc failed'))
+    openRelay(harness)
+
+    const snapshot = latest(harness)
+    expect(snapshot.webRtcStatus).toBe('error')
+    expect(snapshot.relayStatus).toBe('open')
+    expect(snapshot.activeTransport).toBe('relay')
+    expect(snapshot.sessionsResult.status).toBe('loading')
+    expect(harness.relayClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'local_api.stream', transport: { kind: 'relay' } })
+    )
+  })
+
+  it('keeps relay resources alive when WebRTC closes before relay is ready', async () => {
+    const harness = createHarness()
+    await connectAndAccept(harness)
+
+    harness.getWebRtcOptions().onClose()
+    openRelay(harness)
+
+    const snapshot = latest(harness)
+    expect(snapshot.webRtcStatus).toBe('closed')
+    expect(snapshot.relayStatus).toBe('open')
+    expect(snapshot.activeTransport).toBe('relay')
+    expect(snapshot.sessionsResult.status).toBe('loading')
+    expect(harness.relayClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'local_api.stream', transport: { kind: 'relay' } })
+    )
+  })
+
+  it('keeps relay resources alive when WebRTC start rejects before relay is ready', async () => {
+    let webRtcOptions: WebRtcTransportOptions | null = null
+    const harness = createHarness({
+      createWebRtc: (options) => {
+        webRtcOptions = options
+        return {
+          kind: 'webrtc',
+          start: vi.fn(async () => {
+            throw new Error('start failed')
+          }),
+          acceptAnswer: vi.fn(async () => {}),
+          addRemoteIceCandidate: vi.fn(async () => {}),
+          send: vi.fn<(value: unknown) => void>(),
+          close: vi.fn<() => void>()
+        }
+      }
+    })
+    await connectAndAccept(harness)
+    expect(webRtcOptions).not.toBeNull()
+    await Promise.resolve()
+
+    openRelay(harness)
+
+    const snapshot = latest(harness)
+    expect(snapshot.webRtcStatus).toBe('error')
+    expect(snapshot.relayStatus).toBe('open')
+    expect(snapshot.activeTransport).toBe('relay')
+    expect(snapshot.sessionsResult.status).toBe('loading')
+    expect(harness.relayClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'local_api.stream', transport: { kind: 'relay' } })
+    )
+  })
+
+  it('protects controller snapshots from consumer mutation', async () => {
+    const harness = createHarness()
+    await connectAndAccept(harness)
+    await openRelayAndEmitSessionGroups(harness, {
+      list: [{ project_name: 'repo' }],
+      page: 1,
+      page_size: 20,
+      total: 1
+    })
+
+    const emitted = latest(harness).sessionsResult.value as { list: Array<{ project_name: string }> }
+    emitted.list[0].project_name = 'mutated'
+    respondRelay(harness, 'state.get', { state: 'ready' })
+    await Promise.resolve()
+
+    const nextValue = latest(harness).sessionsResult.value as { list: Array<{ project_name: string }> }
+    expect(nextValue.list[0].project_name).toBe('repo')
   })
 
   it('ignores late callbacks after close', async () => {

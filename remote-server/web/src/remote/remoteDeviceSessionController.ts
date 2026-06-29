@@ -127,7 +127,7 @@ function initialSnapshot(): RemoteDeviceSessionSnapshot {
 }
 
 function cloneResult(result: RpcResultState): RpcResultState {
-  return { status: result.status, value: result.value }
+  return { status: result.status, value: cloneSnapshotValue(result.value) }
 }
 
 function cloneSnapshot(snapshot: RemoteDeviceSessionSnapshot): RemoteDeviceSessionSnapshot {
@@ -145,6 +145,22 @@ function cloneSnapshot(snapshot: RemoteDeviceSessionSnapshot): RemoteDeviceSessi
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function cloneSnapshotValue(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value
+
+  try {
+    if (typeof structuredClone === 'function') return structuredClone(value)
+  } catch {
+    // structuredClone 可能无法处理部分宿主对象，继续走 JSON fallback。
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown
+  } catch {
+    return value
+  }
 }
 
 function signalMessageType(value: unknown): string | null {
@@ -216,6 +232,7 @@ export function createRemoteDeviceSessionController(
   let remoteLocalApi: ReturnType<typeof createRemoteLocalApiClient> | null = null
   let sessionStream: StreamHandle | null = null
   let relayOpen = false
+  let relayTerminated = false
   let webRtcOpen = false
   let remoteReadsStarted = false
   let retryRemoteReadsOnRelayReady = false
@@ -279,6 +296,7 @@ export function createRemoteDeviceSessionController(
     relayClient?.close()
     relayClient = null
     relayOpen = false
+    relayTerminated = true
     webRtcOpen = false
     remoteReadsStarted = false
     retryRemoteReadsOnRelayReady = false
@@ -327,6 +345,32 @@ export function createRemoteDeviceSessionController(
       activeTransport: relayOpen ? 'relay' : 'idle'
     })
     webRtcTransport?.close()
+  }
+
+  function closeRemoteResourcesUnlessRelayPending() {
+    if (relayOpen) return
+    if (relayClient && !relayTerminated) return
+    closeRemoteResources()
+  }
+
+  function markWebRtcUnavailable(
+    generation: number,
+    status: Extract<RemoteDeviceTransportStatus, 'closed' | 'error'>,
+    closeTransport: boolean
+  ) {
+    clearDiagnostic('webrtc')
+    webRtcOpen = false
+    messageBus?.setOpen('webrtc', false)
+    patchSnapshot(generation, {
+      webRtcStatus: status,
+      activeTransport: relayOpen ? 'relay' : 'idle'
+    })
+    if (closeTransport) {
+      const transport = webRtcTransport
+      webRtcTransport = null
+      transport?.close()
+    }
+    closeRemoteResourcesUnlessRelayPending()
   }
 
   function requestWithTransportFallback(generation: number, method: string, params?: unknown): Promise<unknown> {
@@ -480,6 +524,7 @@ export function createRemoteDeviceSessionController(
 
   function openRemoteSession(result: ConnectionCreateResult, generation: number, signalClient: ConnectionClient) {
     closeRemoteResources()
+    relayTerminated = false
     patchSnapshot(generation, {
       relayStatus: 'connecting',
       webRtcStatus: 'connecting',
@@ -563,9 +608,9 @@ export function createRemoteDeviceSessionController(
             },
             onError: () => {
               if (!isActive(generation) || !messageBus) return
-              messageBus.setOpen('webrtc', false)
               markWebRtcUnhealthyAndUseRelay(generation)
               // WebRTC 业务探活失败不能拆掉仍在连接中的 relay 管线；relay ready 后仍要能启动首屏读取。
+              closeRemoteResourcesUnlessRelayPending()
             }
           })
           if (!webRtcOpen) messageBus?.setOpen('webrtc', false)
@@ -576,38 +621,18 @@ export function createRemoteDeviceSessionController(
         },
         onClose: () => {
           if (!isActive(generation)) return
-          clearDiagnostic('webrtc')
-          webRtcOpen = false
-          messageBus?.setOpen('webrtc', false)
-          patchSnapshot(generation, {
-            webRtcStatus: 'closed',
-            activeTransport: relayOpen ? 'relay' : 'idle'
-          })
-          if (!relayOpen) closeRemoteResources()
+          markWebRtcUnavailable(generation, 'closed', false)
         },
         onError: () => {
           if (!isActive(generation)) return
-          clearDiagnostic('webrtc')
-          webRtcOpen = false
-          messageBus?.setOpen('webrtc', false)
-          patchSnapshot(generation, {
-            webRtcStatus: 'error',
-            activeTransport: relayOpen ? 'relay' : 'idle'
-          })
-          if (!relayOpen) closeRemoteResources()
+          markWebRtcUnavailable(generation, 'error', true)
         }
       })
       webRtcTransport = transport
       messageBus.register(transport)
       void transport.start().catch(() => {
         if (!isActive(generation)) return
-        webRtcOpen = false
-        messageBus?.setOpen('webrtc', false)
-        patchSnapshot(generation, {
-          webRtcStatus: 'error',
-          activeTransport: relayOpen ? 'relay' : 'idle'
-        })
-        if (!relayOpen) closeRemoteResources()
+        markWebRtcUnavailable(generation, 'error', true)
       })
     }
 
@@ -619,6 +644,7 @@ export function createRemoteDeviceSessionController(
       },
       onReady: () => {
         if (!isActive(generation) || !messageBus || !relayClient) return
+        relayTerminated = false
         messageBus.register({
           kind: 'relay',
           send: (value) => relayClient?.send(value),
@@ -644,6 +670,7 @@ export function createRemoteDeviceSessionController(
         if (!isActive(generation)) return
         clearDiagnostic('relay')
         relayOpen = false
+        relayTerminated = true
         messageBus?.setOpen('relay', false)
         if (webRtcOpen) {
           patchSnapshot(generation, { relayStatus: 'closed' })
@@ -660,6 +687,7 @@ export function createRemoteDeviceSessionController(
         if (!isActive(generation)) return
         clearDiagnostic('relay')
         relayOpen = false
+        relayTerminated = true
         messageBus?.setOpen('relay', false)
         if (webRtcOpen) {
           relayClient?.close()
