@@ -337,6 +337,7 @@ export function createRemoteDeviceSessionController(
   }
 
   function markWebRtcUnhealthyAndUseRelay(generation: number) {
+    const alreadyMarkedUnavailable = !webRtcOpen && snapshot.webRtcStatus === 'error'
     clearDiagnostic('webrtc')
     webRtcOpen = false
     messageBus?.setOpen('webrtc', false)
@@ -344,7 +345,8 @@ export function createRemoteDeviceSessionController(
       webRtcStatus: 'error',
       activeTransport: relayOpen ? 'relay' : 'idle'
     })
-    webRtcTransport?.close()
+    // 多个并发 RPC 可能同时从 WebRTC 超时；降级只需要关闭一次底层 transport。
+    if (!alreadyMarkedUnavailable) webRtcTransport?.close()
   }
 
   function closeRemoteResourcesUnlessRelayPending() {

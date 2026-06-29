@@ -1,54 +1,24 @@
 import { ArrowLeft, PlugZap, TerminalSquare } from 'lucide-react'
-import type { Dispatch, SetStateAction } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ConnectionCreateResult } from '../api/connectionsApi.js'
 import type { RemoteDevice } from '../api/devicesApi.js'
-import { toDisplayErrorMessage } from '../shared/errorMessage.js'
 import { getStableClientId } from './clientId.js'
-import {
-  buildClientSocketUrl,
-  createConnectionClient,
-  type ConnectionClient,
-  type ConnectionClientOptions,
-  type ConnectionStatus
-} from './connectionClient.js'
-import {
-  createPlainRpcClient,
-  createPlainRpcRequest,
-  isPlainRpcResponse,
-  PlainRpcTimeoutError,
-  type PlainRpcClient
-} from './plainRpcClient.js'
-import {
-  buildRelaySocketUrl,
-  createRelayClient,
-  type RelayClient,
-  type RelayClientOptions
-} from './relayTransport.js'
-import { createRemoteLocalApiClient } from './remoteLocalApiClient.js'
-import { createRemoteMessageBus, type RemoteMessageBus } from './remoteTransport.js'
+import type { ConnectionClient, ConnectionClientOptions } from './connectionClient.js'
+import type { RelayClient, RelayClientOptions } from './relayTransport.js'
 import { RemoteSessionGroupsView } from './RemoteSessionGroupsView.js'
-import { isProjectGroupPage } from './remoteSessionTypes.js'
 import {
-  createWebRtcTransport,
-  type WebRtcAnswerSignal,
-  type WebRtcIceCandidateSignal,
-  type WebRtcTransport,
-  type WebRtcTransportOptions
-} from './webrtcTransport.js'
+  createRemoteDeviceSessionController,
+  type RemoteDeviceSessionController,
+  type RemoteDeviceSessionSnapshot,
+  type RpcResultState
+} from './remoteDeviceSessionController.js'
+import { isProjectGroupPage } from './remoteSessionTypes.js'
+import type { WebRtcTransport, WebRtcTransportOptions } from './webrtcTransport.js'
 
 type ConnectionsApi = {
   create(deviceId: string, clientId: string): Promise<ConnectionCreateResult>
 }
-
-type RpcResultState = {
-  status: 'idle' | 'loading' | 'ready' | 'error'
-  value: unknown
-}
-
-type ActiveTransportState = 'idle' | 'relay' | 'webrtc'
-type TransportConnectionState = 'idle' | 'connecting' | 'open' | 'closed' | 'error'
 
 type DeviceConsolePageProps = {
   device: RemoteDevice
@@ -61,8 +31,26 @@ type DeviceConsolePageProps = {
   onBack(): void
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+function emptyRpcResult(): RpcResultState {
+  return { status: 'idle', value: null }
+}
+
+function createIdleSnapshot(): RemoteDeviceSessionSnapshot {
+  return {
+    connectionStatus: 'idle',
+    relayStatus: 'idle',
+    webRtcStatus: 'idle',
+    activeTransport: 'idle',
+    connectionId: null,
+    error: null,
+    pingResult: emptyRpcResult(),
+    stateResult: emptyRpcResult(),
+    sessionsResult: emptyRpcResult(),
+    diagnostics: {
+      relay: emptyRpcResult(),
+      webrtc: emptyRpcResult()
+    }
+  }
 }
 
 function displaySignalMessage(value: unknown): string {
@@ -74,571 +62,97 @@ function displaySignalMessage(value: unknown): string {
   }
 }
 
-function signalMessageType(value: unknown): string | null {
-  return isRecord(value) && typeof value.type === 'string' ? value.type : null
-}
-
-function signalMessageData(value: unknown): Record<string, unknown> | null {
-  if (!isRecord(value) || !isRecord(value.data)) return null
-  return value.data
-}
-
-function readWebRtcAnswerSignal(value: unknown, connectionId: string): WebRtcAnswerSignal | null {
-  const data = signalMessageData(value)
-  if (signalMessageType(value) !== 'signal.answer' || data?.connection_id !== connectionId || typeof data.sdp !== 'string') {
-    return null
+function displayJson(t: (key: string) => string, value: unknown): string {
+  if (value === null) return t('waiting_for_relay')
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
   }
-  return { connection_id: connectionId, sdp: data.sdp }
 }
 
-function readWebRtcIceCandidateSignal(value: unknown, connectionId: string): WebRtcIceCandidateSignal | null {
-  const data = signalMessageData(value)
-  if (
-    signalMessageType(value) === 'signal.ice_candidate' &&
-    data?.connection_id === connectionId &&
-    typeof data.candidate === 'string' &&
-    (typeof data.sdp_mid === 'undefined' || data.sdp_mid === null || typeof data.sdp_mid === 'string') &&
-    (typeof data.sdp_mline_index === 'undefined' ||
-      data.sdp_mline_index === null ||
-      typeof data.sdp_mline_index === 'number')
-  ) {
-    return {
-      connection_id: connectionId,
-      candidate: data.candidate,
-      sdp_mid: data.sdp_mid as string | null | undefined,
-      sdp_mline_index: data.sdp_mline_index as number | null | undefined
-    }
+function displayControllerText(t: (key: string) => string, value: unknown): string {
+  if (value === 'Plain RPC client closed') return t('remote_rpc_failed')
+  if (typeof value !== 'string') return displayJson(t, value)
+
+  const translated = t(value)
+  return translated === value ? value : translated
+}
+
+function displayRpcResult(t: (key: string) => string, result: RpcResultState): string {
+  if (result.status === 'idle') return t('waiting_for_relay')
+  if (result.status === 'loading') return t('waiting_for_response')
+  if (result.status === 'error') return displayControllerText(t, result.value)
+  return displayJson(t, result.value)
+}
+
+function renderSessionGroups(t: (key: string) => string, sessionsResult: RpcResultState) {
+  if (sessionsResult.status === 'idle') return <p className="state-message">{t('waiting_for_relay')}</p>
+  if (sessionsResult.status === 'loading') return <p className="state-message">{t('waiting_for_response')}</p>
+  if (sessionsResult.status === 'error' || !isProjectGroupPage(sessionsResult.value)) {
+    return (
+      <p className="state-message state-message-error" role="alert">
+        {t('remote_sessions_failed')}
+      </p>
+    )
   }
-  return null
+
+  return <RemoteSessionGroupsView page={sessionsResult.value} emptyText={t('remote_sessions_empty')} />
 }
 
 export function DeviceConsolePage({
   device,
   connectionsApi,
-  createConnection = createConnectionClient,
-  createRelay = createRelayClient,
-  createWebRtc = createWebRtcTransport,
+  createConnection,
+  createRelay,
+  createWebRtc,
   autoConnect = false,
   t,
   onBack
 }: DeviceConsolePageProps) {
   const clientId = useMemo(() => getStableClientId(), [])
-  const [status, setStatus] = useState<ConnectionStatus | 'idle'>('idle')
-  const [relayStatus, setRelayStatus] = useState<TransportConnectionState>('idle')
-  const [webRtcStatus, setWebRtcStatus] = useState<TransportConnectionState>('idle')
-  const [activeTransport, setActiveTransport] = useState<ActiveTransportState>('idle')
-  const [connectionId, setConnectionId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [snapshot, setSnapshot] = useState<RemoteDeviceSessionSnapshot>(() => createIdleSnapshot())
   const [messages, setMessages] = useState<unknown[]>([])
-  const [pingResult, setPingResult] = useState<RpcResultState>({ status: 'idle', value: null })
-  const [stateResult, setStateResult] = useState<RpcResultState>({ status: 'idle', value: null })
-  const [sessionsResult, setSessionsResult] = useState<RpcResultState>({ status: 'idle', value: null })
-  const socketRef = useRef<ConnectionClient | null>(null)
-  const relayRef = useRef<RelayClient | null>(null)
-  const relayOpenRef = useRef(false)
-  const webRtcRef = useRef<WebRtcTransport | null>(null)
-  const webRtcOpenRef = useRef(false)
-  const messageBusRef = useRef<RemoteMessageBus | null>(null)
-  const rpcRef = useRef<PlainRpcClient | null>(null)
-  const remoteLocalApiRef = useRef<ReturnType<typeof createRemoteLocalApiClient> | null>(null)
-  const sessionStreamRef = useRef<{ close(): Promise<void> } | null>(null)
-  const activeConnectionRef = useRef(0)
-  const nextSignalSeqRef = useRef(1)
-  const mountedRef = useRef(false)
   const autoConnectStartedRef = useRef(false)
 
+  const controller = useMemo<RemoteDeviceSessionController>(() => {
+    return createRemoteDeviceSessionController({
+      device,
+      connectionsApi,
+      clientId,
+      createConnection,
+      createRelay,
+      createWebRtc,
+      onSnapshot: setSnapshot,
+      onSignalMessage: (message) => {
+        setMessages((current) => [message, ...current].slice(0, 20))
+      }
+    })
+  }, [clientId, connectionsApi, createConnection, createRelay, createWebRtc, device])
+
   useEffect(() => {
-    mountedRef.current = true
+    setSnapshot(createIdleSnapshot())
+    setMessages([])
     return () => {
-      mountedRef.current = false
-      activeConnectionRef.current += 1
-      socketRef.current?.close()
-      void sessionStreamRef.current?.close().catch(() => {})
-      rpcRef.current?.close()
-      messageBusRef.current?.close()
-      webRtcRef.current?.close()
-      relayRef.current?.close()
-      socketRef.current = null
-      sessionStreamRef.current = null
-      remoteLocalApiRef.current = null
-      messageBusRef.current = null
-      rpcRef.current = null
-      webRtcRef.current = null
-      relayOpenRef.current = false
-      webRtcOpenRef.current = false
-      relayRef.current = null
+      controller.close()
     }
-  }, [])
-
-  function isActiveConnection(connectionId: number): boolean {
-    return mountedRef.current && activeConnectionRef.current === connectionId
-  }
-
-  function resetRelayConsole() {
-    setRelayStatus('idle')
-    setWebRtcStatus('idle')
-    setActiveTransport('idle')
-    setPingResult({ status: 'idle', value: null })
-    setStateResult({ status: 'idle', value: null })
-    setSessionsResult({ status: 'idle', value: null })
-  }
-
-  function closeRelayConsole() {
-    void sessionStreamRef.current?.close().catch(() => {})
-    rpcRef.current?.close()
-    messageBusRef.current?.close()
-    webRtcRef.current?.close()
-    relayRef.current?.close()
-    sessionStreamRef.current = null
-    remoteLocalApiRef.current = null
-    messageBusRef.current = null
-    rpcRef.current = null
-    webRtcRef.current = null
-    relayOpenRef.current = false
-    webRtcOpenRef.current = false
-    relayRef.current = null
-  }
-
-  function nextSignalId(prefix: string): string {
-    const seq = nextSignalSeqRef.current
-    nextSignalSeqRef.current += 1
-    return `msg_${prefix}_${seq}`
-  }
-
-  function handleWebRtcSignal(value: unknown, expectedConnectionId: string) {
-    const transport = webRtcRef.current
-    if (!transport) return
-
-    const answer = readWebRtcAnswerSignal(value, expectedConnectionId)
-    if (answer) {
-      void transport.acceptAnswer(answer).catch(() => {})
-      return
-    }
-
-    const candidate = readWebRtcIceCandidateSignal(value, expectedConnectionId)
-    if (candidate) {
-      void transport.addRemoteIceCandidate(candidate).catch(() => {})
-    }
-  }
-
-  function displayJson(value: unknown): string {
-    if (value === null) return t('waiting_for_relay')
-    if (typeof value === 'string') return value
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
-    }
-  }
-
-  function displayRpcResult(result: RpcResultState): string {
-    if (result.status === 'idle') return t('waiting_for_relay')
-    if (result.status === 'loading') return t('waiting_for_response')
-    return displayJson(result.value)
-  }
-
-  function rpcErrorText(error: unknown): string {
-    // 本地清理 pending 请求属于连接生命周期收敛，不把内部实现文案直接暴露给用户。
-    if (error instanceof Error && error.message === 'Plain RPC client closed') return t('remote_rpc_failed')
-    return error instanceof Error && error.message ? error.message : t('remote_rpc_failed')
-  }
-
-  function activeTransportLabel(): string {
-    return t(`active_transport_${activeTransport}`)
-  }
+  }, [controller])
 
   useEffect(() => {
     if (!autoConnect || autoConnectStartedRef.current || !device.online) return
     autoConnectStartedRef.current = true
     // 从设备列表点击“连接”进入控制台时，自动发起一次真实连接。
-    void handleConnect()
-  }, [autoConnect, device.online])
+    void controller.connect()
+  }, [autoConnect, controller, device.online])
 
-  function renderSessionGroups() {
-    if (sessionsResult.status === 'idle') return <p className="state-message">{t('waiting_for_relay')}</p>
-    if (sessionsResult.status === 'loading') return <p className="state-message">{t('waiting_for_response')}</p>
-    if (sessionsResult.status === 'error' || !isProjectGroupPage(sessionsResult.value)) {
-      return (
-        <p className="state-message state-message-error" role="alert">
-          {t('remote_sessions_failed')}
-        </p>
-      )
-    }
-
-    return <RemoteSessionGroupsView page={sessionsResult.value} emptyText={t('remote_sessions_empty')} />
-  }
-
-  function openRelayConsole(
-    result: ConnectionCreateResult,
-    activeConnectionId: number,
-    signalClient: ConnectionClient
-  ) {
-    closeRelayConsole()
-    resetRelayConsole()
-    setRelayStatus('connecting')
-    setWebRtcStatus('connecting')
-
-    const relayUrl = buildRelaySocketUrl(result.relay_url || result.signaling_url || window.location.origin, {
-      connection_id: result.connection_id,
-      connection_token: result.connection_token,
-      side: 'client'
-    })
-    let relayClient: RelayClient
-    const messageBus = createRemoteMessageBus({
-      onInbound: (message) => {
-        rpcClient.handle(message)
-      }
-    })
-    const rpcClient = createPlainRpcClient({
-      timeoutMs: 10_000,
-      send: (value) => {
-        return messageBus.send(value)
-      },
-      onNotification: ({ method, params, observedTransport, declaredTransport }) => {
-        remoteLocalApiRef.current?.handleNotification(method, params, {
-          observedTransport,
-          declaredTransport
-        })
-      }
-    })
-    messageBusRef.current = messageBus
-    let webRtcProbeId: string | null = null
-    let remoteReadsStarted = false
-    let retryRemoteReadsOnRelayReady = false
-
-    function markWebRtcUnhealthyAndUseRelay() {
-      webRtcProbeId = null
-      if (webRtcOpenRef.current) {
-        // WebRTC 可写但业务 RPC 无响应时，先退回 relay，避免控制台一直卡在坏通道上。
-        webRtcOpenRef.current = false
-        messageBus.setOpen('webrtc', false)
-        setWebRtcStatus('error')
-        setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
-        webRtcRef.current?.close()
-      }
-    }
-
-    function requestWithTransportFallback(method: string, params?: unknown): Promise<unknown> {
-      const request = rpcClient.request(method, params)
-      if (!webRtcOpenRef.current) return request
-      return request.catch((error) => {
-        if (
-          error instanceof PlainRpcTimeoutError &&
-          error.transportKind === 'webrtc' &&
-          relayOpenRef.current &&
-          isActiveConnection(activeConnectionId)
-        ) {
-          markWebRtcUnhealthyAndUseRelay()
-          return rpcClient.request(method, params)
-        }
-        if (
-          error instanceof PlainRpcTimeoutError &&
-          error.transportKind === 'webrtc' &&
-          !relayOpenRef.current &&
-          isActiveConnection(activeConnectionId)
-        ) {
-          retryRemoteReadsOnRelayReady = true
-          markWebRtcUnhealthyAndUseRelay()
-        }
-        throw error
-      })
-    }
-
-    const remoteLocalApi = createRemoteLocalApiClient({
-      request: (method, params) => requestWithTransportFallback(method, params)
-    })
-    remoteLocalApiRef.current = remoteLocalApi
-
-    function closeRemoteRpcConsole(options: { closeRelay: boolean; closeWebRtc: boolean }) {
-      // 所有传输通道都不可用后，本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
-      webRtcProbeId = null
-      void sessionStreamRef.current?.close().catch(() => {})
-      rpcClient.close()
-      messageBus.close()
-      if (options.closeWebRtc) webRtcRef.current?.close()
-      if (options.closeRelay) relayClient.close()
-      sessionStreamRef.current = null
-      if (remoteLocalApiRef.current === remoteLocalApi) remoteLocalApiRef.current = null
-      if (messageBusRef.current === messageBus) messageBusRef.current = null
-      if (rpcRef.current === rpcClient) rpcRef.current = null
-      if (webRtcRef.current) webRtcRef.current = null
-      relayOpenRef.current = false
-      webRtcOpenRef.current = false
-      setWebRtcStatus('closed')
-      setActiveTransport('idle')
-      if (relayRef.current === relayClient) relayRef.current = null
-    }
-
-    if (createWebRtc !== createWebRtcTransport || typeof RTCPeerConnection !== 'undefined') {
-      const webRtcTransport = createWebRtc({
-        connectionId: result.connection_id,
-        onOffer: (offer) => {
-          signalClient.send({
-            version: 1,
-            type: 'signal.offer',
-            id: nextSignalId('offer'),
-            data: {
-              sdp: offer.sdp
-            }
-          })
-        },
-        onIceCandidate: (candidate) => {
-          signalClient.send({
-            version: 1,
-            type: 'signal.ice_candidate',
-            id: nextSignalId('ice'),
-            data: {
-              candidate: candidate.candidate,
-              sdp_mid: candidate.sdp_mid ?? null,
-              sdp_mline_index: candidate.sdp_mline_index ?? null
-            }
-          })
-        },
-        onOpen: () => {
-          if (!isActiveConnection(activeConnectionId)) return
-          webRtcOpenRef.current = false
-          messageBus.setOpen('webrtc', false)
-          setWebRtcStatus('connecting')
-          webRtcProbeId = `rpc_webrtc_probe_${activeConnectionId}`
-          try {
-            // DataChannel open 只代表传输层可写；先用 plain RPC 探活，成功后才提升为主通道。
-            webRtcTransport.send(createPlainRpcRequest(webRtcProbeId, 'rpc.ping', {}, 'webrtc'))
-          } catch {
-            webRtcProbeId = null
-            setWebRtcStatus('error')
-            setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
-          }
-        },
-        onPayload: (value) => {
-          if (!isActiveConnection(activeConnectionId)) return
-          if (webRtcProbeId && isPlainRpcResponse(value) && value.id === webRtcProbeId) {
-            webRtcProbeId = null
-            if (value.ok) {
-              webRtcOpenRef.current = true
-              messageBus.setOpen('webrtc', true)
-              setWebRtcStatus('open')
-              setActiveTransport('webrtc')
-              startRemoteReadsOnce()
-              return
-            }
-            webRtcOpenRef.current = false
-            messageBus.setOpen('webrtc', false)
-            setWebRtcStatus('error')
-            setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
-            webRtcTransport.close()
-            if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
-            return
-          }
-          if (webRtcOpenRef.current) messageBus.receive(value, 'webrtc')
-        },
-        onClose: () => {
-          if (!isActiveConnection(activeConnectionId)) return
-          webRtcProbeId = null
-          webRtcOpenRef.current = false
-          messageBus.setOpen('webrtc', false)
-          setWebRtcStatus('closed')
-          setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
-          if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
-        },
-        onError: () => {
-          if (!isActiveConnection(activeConnectionId)) return
-          webRtcProbeId = null
-          webRtcOpenRef.current = false
-          messageBus.setOpen('webrtc', false)
-          setWebRtcStatus('error')
-          setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
-          if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
-        }
-      })
-      webRtcRef.current = webRtcTransport
-      messageBus.register(webRtcTransport)
-      // WebRTC 后台协商失败不影响 relay 首屏可用性。
-      void webRtcTransport.start().catch(() => {
-        if (isActiveConnection(activeConnectionId)) {
-          webRtcProbeId = null
-          webRtcOpenRef.current = false
-          messageBus.setOpen('webrtc', false)
-          setWebRtcStatus('error')
-          setActiveTransport(relayOpenRef.current ? 'relay' : 'idle')
-          if (!relayOpenRef.current) closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: false })
-        }
-      })
-    }
-
-    function updateRpcResult(
-      method: string,
-      setResult: Dispatch<SetStateAction<RpcResultState>>,
-      params?: unknown
-    ) {
-      setResult({ status: 'loading', value: null })
-      void requestWithTransportFallback(method, params)
-        .then((value) => {
-          if (isActiveConnection(activeConnectionId)) setResult({ status: 'ready', value })
-        })
-        .catch((error) => {
-          if (isActiveConnection(activeConnectionId)) {
-            setResult({ status: 'error', value: rpcErrorText(error) })
-          }
-        })
-    }
-
-    function subscribeRemoteSessions() {
-      setSessionsResult({ status: 'loading', value: null })
-      void remoteLocalApi
-        .stream('/api/v1/session_project_groups/stream?tool=codex&page=1&page_size=20', {
-          onEvent(event) {
-            if (event.event !== 'session_project_groups') return
-            if (isActiveConnection(activeConnectionId)) {
-              setSessionsResult({ status: 'ready', value: event.data })
-            }
-          },
-          onClosed() {
-            if (isActiveConnection(activeConnectionId)) {
-              setSessionsResult({ status: 'error', value: t('remote_rpc_failed') })
-            }
-          },
-          onError() {
-            if (isActiveConnection(activeConnectionId)) {
-              setSessionsResult({ status: 'error', value: t('remote_rpc_failed') })
-            }
-          }
-        })
-        .then((stream) => {
-          if (isActiveConnection(activeConnectionId)) {
-            sessionStreamRef.current = stream
-          } else {
-            void stream.close().catch(() => {})
-          }
-        })
-        .catch((error) => {
-          if (isActiveConnection(activeConnectionId)) {
-            setSessionsResult({ status: 'error', value: rpcErrorText(error) })
-          }
-        })
-    }
-
-    function startRemoteReadsOnce() {
-      if (remoteReadsStarted) return
-      remoteReadsStarted = true
-      updateRpcResult('rpc.ping', setPingResult)
-      updateRpcResult('state.get', setStateResult)
-      subscribeRemoteSessions()
-    }
-
-    function retryRemoteReadsThroughRelay() {
-      retryRemoteReadsOnRelayReady = false
-      updateRpcResult('rpc.ping', setPingResult)
-      updateRpcResult('state.get', setStateResult)
-      subscribeRemoteSessions()
-    }
-
-    relayClient = createRelay({
-      url: relayUrl,
-      connectionId: result.connection_id,
-      onOpen: () => {
-        if (!isActiveConnection(activeConnectionId)) return
-        setRelayStatus('connecting')
-      },
-      onReady: () => {
-        if (!isActiveConnection(activeConnectionId)) return
-        messageBus.register({
-          kind: 'relay',
-          send: (value) => relayClient.send(value),
-          close: () => relayClient.close()
-        })
-        messageBus.setOpen('relay', true)
-        relayOpenRef.current = true
-        setRelayStatus('open')
-        if (!webRtcOpenRef.current) setActiveTransport('relay')
-        if (retryRemoteReadsOnRelayReady) {
-          retryRemoteReadsThroughRelay()
-          return
-        }
-        startRemoteReadsOnce()
-      },
-      onPayload: (value) => {
-        if (isActiveConnection(activeConnectionId)) {
-          messageBus.receive(value, 'relay')
-        }
-      },
-      onClose: () => {
-        if (!isActiveConnection(activeConnectionId)) return
-        messageBus.setOpen('relay', false)
-        relayOpenRef.current = false
-        if (webRtcOpenRef.current) {
-          if (relayRef.current === relayClient) relayRef.current = null
-          setRelayStatus('closed')
-          return
-        }
-        closeRemoteRpcConsole({ closeRelay: false, closeWebRtc: true })
-        setRelayStatus('closed')
-      },
-      onError: () => {
-        if (!isActiveConnection(activeConnectionId)) return
-        messageBus.setOpen('relay', false)
-        relayOpenRef.current = false
-        if (webRtcOpenRef.current) {
-          relayClient.close()
-          if (relayRef.current === relayClient) relayRef.current = null
-          setRelayStatus('error')
-          return
-        }
-        closeRemoteRpcConsole({ closeRelay: true, closeWebRtc: true })
-        setRelayStatus('error')
-      }
-    })
-
-    relayRef.current = relayClient
-    rpcRef.current = rpcClient
-  }
-
-  async function handleConnect() {
-    if (!device.online || status === 'connecting') return
-    const activeConnectionId = activeConnectionRef.current + 1
-    activeConnectionRef.current = activeConnectionId
-    socketRef.current?.close()
-    closeRelayConsole()
-    socketRef.current = null
-
-    setStatus('connecting')
-    setError(null)
+  function handleConnect() {
+    if (!device.online || snapshot.connectionStatus === 'connecting') return
     setMessages([])
-    resetRelayConsole()
-
-    try {
-      const result = await connectionsApi.create(device.id, clientId)
-      if (!isActiveConnection(activeConnectionId)) return
-      setConnectionId(result.connection_id)
-      const socketUrl = buildClientSocketUrl(result.signaling_url || window.location.origin, {
-        connection_id: result.connection_id,
-        connection_token: result.connection_token
-      })
-      let relayStarted = false
-      let signalClient: ConnectionClient | null = null
-      signalClient = createConnection({
-        url: socketUrl,
-        onStatus: (nextStatus) => {
-          if (!isActiveConnection(activeConnectionId)) return
-          setStatus(nextStatus)
-          if (nextStatus === 'accepted' && !relayStarted && signalClient) {
-            relayStarted = true
-            openRelayConsole(result, activeConnectionId, signalClient)
-          }
-        },
-        onMessage: (value) => {
-          if (isActiveConnection(activeConnectionId)) {
-            setMessages((current) => [value, ...current].slice(0, 20))
-            handleWebRtcSignal(value, result.connection_id)
-          }
-        }
-      })
-      socketRef.current = signalClient
-    } catch (err) {
-      if (!isActiveConnection(activeConnectionId)) return
-      setStatus('error')
-      setError(toDisplayErrorMessage(t, err, 'connection_failed'))
-    }
+    void controller.connect()
   }
+
+  const activeTransportLabel = t(`active_transport_${snapshot.activeTransport}`)
 
   return (
     <section className="device-panel console-panel">
@@ -666,59 +180,63 @@ export function DeviceConsolePage({
         </div>
         <div>
           <span className="summary-label">{t('connection_status')}</span>
-          <strong>{t(`connection_status_${status}`)}</strong>
+          <strong>{t(`connection_status_${snapshot.connectionStatus}`)}</strong>
         </div>
-        {connectionId ? (
+        {snapshot.connectionId ? (
           <div>
             <span className="summary-label">{t('connection_id')}</span>
-            <strong className="device-id">{connectionId}</strong>
+            <strong className="device-id">{snapshot.connectionId}</strong>
           </div>
         ) : null}
       </div>
 
-      {error ? (
+      {snapshot.error ? (
         <p className="state-message state-message-error" role="alert">
-          {error}
+          {displayControllerText(t, snapshot.error)}
         </p>
       ) : null}
 
       <div className="console-actions">
-        <button type="button" onClick={() => void handleConnect()} disabled={!device.online || status === 'connecting'}>
+        <button
+          type="button"
+          onClick={handleConnect}
+          disabled={!device.online || snapshot.connectionStatus === 'connecting'}
+        >
           <PlugZap aria-hidden="true" size={16} />
-          {status === 'connecting' ? t('connecting') : t('connect')}
+          {snapshot.connectionStatus === 'connecting' ? t('connecting') : t('connect')}
         </button>
       </div>
 
       <section className="remote-sessions" aria-label={t('remote_sessions')}>
         <div className="panel-title">{t('remote_sessions')}</div>
-        {renderSessionGroups()}
+        {renderSessionGroups(t, snapshot.sessionsResult)}
       </section>
 
       <section className="relay-log" aria-label={t('remote_rpc_status')}>
         <div className="panel-title">
           {t('remote_rpc_status')}
-          <span className={`relay-status relay-status-${relayStatus}`}>
-            {t(`relay_status_${relayStatus}`)}
+          <span className={`relay-status relay-status-${snapshot.relayStatus}`}>
+            {t(`relay_status_${snapshot.relayStatus}`)}
           </span>
-          <span className={`relay-status relay-status-${webRtcStatus}`}>
-            {t(`webrtc_status_${webRtcStatus}`)}
+          <span className={`relay-status relay-status-${snapshot.webRtcStatus}`}>
+            {t(`webrtc_status_${snapshot.webRtcStatus}`)}
           </span>
-          <span className={`relay-status transport-status-${activeTransport}`}>
-            {t('active_transport')}: {activeTransportLabel()}
+          <span className={`relay-status transport-status-${snapshot.activeTransport}`}>
+            {t('active_transport')}: {activeTransportLabel}
           </span>
         </div>
         <div className="rpc-result-grid">
           <div className="rpc-result">
             <div className="summary-label">{t('remote_ping')}</div>
-            <pre className="json-preview">{displayRpcResult(pingResult)}</pre>
+            <pre className="json-preview">{displayRpcResult(t, snapshot.pingResult)}</pre>
           </div>
           <div className="rpc-result">
             <div className="summary-label">{t('remote_state')}</div>
-            <pre className="json-preview">{displayRpcResult(stateResult)}</pre>
+            <pre className="json-preview">{displayRpcResult(t, snapshot.stateResult)}</pre>
           </div>
           <div className="rpc-result">
             <div className="summary-label">{t('remote_sessions_debug')}</div>
-            <pre className="json-preview">{displayRpcResult(sessionsResult)}</pre>
+            <pre className="json-preview">{displayRpcResult(t, snapshot.sessionsResult)}</pre>
           </div>
         </div>
       </section>

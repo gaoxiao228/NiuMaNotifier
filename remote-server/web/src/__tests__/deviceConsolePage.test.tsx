@@ -366,10 +366,10 @@ describe('DeviceConsolePage', () => {
       relayOptions?.onReady()
     })
 
-    expect(relayClient.send).toHaveBeenCalledTimes(3)
+    expect(relayClient.send).toHaveBeenCalledTimes(4)
     expect(relayClient.send).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ id: 'rpc_1', method: 'rpc.ping' })
+      expect.objectContaining({ id: 'diag_relay_1', method: 'rpc.ping' })
     )
     expect(relayClient.send).toHaveBeenNthCalledWith(
       1,
@@ -377,10 +377,14 @@ describe('DeviceConsolePage', () => {
     )
     expect(relayClient.send).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ id: 'rpc_2', method: 'state.get' })
+      expect.objectContaining({ id: 'rpc_1', method: 'rpc.ping' })
     )
     expect(relayClient.send).toHaveBeenNthCalledWith(
       3,
+      expect.objectContaining({ id: 'rpc_2', method: 'state.get' })
+    )
+    expect(relayClient.send).toHaveBeenNthCalledWith(
+      4,
       expect.objectContaining({
         id: 'rpc_3',
         method: 'local_api.stream',
@@ -960,7 +964,10 @@ describe('DeviceConsolePage', () => {
       'state.get',
       'local_api.stream'
     ])
-    expect(relayClient.send).not.toHaveBeenCalled()
+    expect(relayClient.send).toHaveBeenCalledTimes(1)
+    expect(relayClient.send).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'diag_relay_2', method: 'rpc.ping', transport: { kind: 'relay' } })
+    )
 
     await act(async () => {
       vi.advanceTimersByTime(10_000)
@@ -974,6 +981,7 @@ describe('DeviceConsolePage', () => {
       .mocked(relayClient.send)
       .mock.calls.map((call) => call[0] as { method?: string; transport?: { kind?: string } })
     expect(relayRequests.map((request) => request.method)).toEqual([
+      'rpc.ping',
       'rpc.ping',
       'state.get',
       'local_api.stream'
@@ -1070,6 +1078,7 @@ describe('DeviceConsolePage', () => {
       .mocked(relayClient.send)
       .mock.calls.map((call) => call[0] as { method?: string; transport?: { kind?: string } })
     expect(relayRequests.map((request) => request.method)).toEqual([
+      'rpc.ping',
       'rpc.ping',
       'state.get',
       'local_api.stream'
