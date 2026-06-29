@@ -42,6 +42,7 @@ async function openRelayConsoleWithSessionPayload(sessionPayload: unknown) {
   const createConnection = vi.fn((options: ConnectionClientOptions) => {
     const client = {
       socket: {} as WebSocket,
+      send: vi.fn(),
       close: vi.fn(),
       onStatus: options.onStatus,
       onMessage: options.onMessage
@@ -217,6 +218,7 @@ describe('DeviceConsolePage', () => {
     const createConnection = vi.fn((options: ConnectionClientOptions) => {
       const client = {
         socket: {} as WebSocket,
+        send: vi.fn(),
         close: vi.fn(),
         onStatus: options.onStatus,
         onMessage: options.onMessage
@@ -257,6 +259,7 @@ describe('DeviceConsolePage', () => {
     const create = vi.fn().mockResolvedValue(createConnectionResult())
     const client = {
       socket: {} as WebSocket,
+      send: vi.fn(),
       close: vi.fn(),
       onStatus: (_status: ConnectionStatus) => {},
       onMessage: (_value: unknown) => {}
@@ -300,6 +303,7 @@ describe('DeviceConsolePage', () => {
     const createConnection = vi.fn((options: ConnectionClientOptions) => {
       const client = {
         socket: {} as WebSocket,
+        send: vi.fn(),
         close: vi.fn(),
         onStatus: options.onStatus,
         onMessage: options.onMessage
@@ -489,6 +493,7 @@ describe('DeviceConsolePage', () => {
     const createConnection = vi.fn((options: ConnectionClientOptions) => {
       const client = {
         socket: {} as WebSocket,
+        send: vi.fn(),
         close: vi.fn(),
         onStatus: options.onStatus,
         onMessage: options.onMessage
@@ -547,6 +552,7 @@ describe('DeviceConsolePage', () => {
     const createConnection = vi.fn((options: ConnectionClientOptions) => {
       const client = {
         socket: {} as WebSocket,
+        send: vi.fn(),
         close: vi.fn(),
         onStatus: options.onStatus,
         onMessage: options.onMessage
@@ -605,6 +611,7 @@ describe('DeviceConsolePage', () => {
     const createConnection = vi.fn((options: ConnectionClientOptions) => {
       const client = {
         socket: {} as WebSocket,
+        send: vi.fn(),
         close: vi.fn(),
         onStatus: options.onStatus,
         onMessage: options.onMessage
@@ -659,6 +666,7 @@ describe('DeviceConsolePage', () => {
     const create = vi.fn().mockResolvedValue(createConnectionResult())
     const signalClient = {
       socket: {} as WebSocket,
+      send: vi.fn(),
       close: vi.fn(),
       onStatus: (_status: ConnectionStatus) => {},
       onMessage: (_value: unknown) => {}

@@ -15,6 +15,7 @@ export type ConnectionClientOptions = {
 
 export type ConnectionClient = {
   socket: WebSocket
+  send(value: unknown): void
   close(): void
 }
 
@@ -116,6 +117,10 @@ export function createConnectionClient(options: ConnectionClientOptions): Connec
 
   return {
     socket,
+    send(value) {
+      if (!active) return
+      socket.send(JSON.stringify(value))
+    },
     close() {
       if (!active && closedByClient) return
       closedByClient = true

@@ -118,6 +118,37 @@ describe('createConnectionClient', () => {
     expect(messages).toEqual([])
   })
 
+  it('sends signaling messages as JSON while the socket is active', () => {
+    class FakeWebSocket {
+      sent: string[] = []
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      onclose: (() => void) | null = null
+      onerror: (() => void) | null = null
+
+      constructor(public url: string) {}
+
+      send(value: string) {
+        this.sent.push(value)
+      }
+
+      close = vi.fn()
+    }
+
+    const client = createConnectionClient({
+      url: 'ws://127.0.0.1/ws/client',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      onStatus: () => {},
+      onMessage: () => {}
+    })
+    const socket = client.socket as unknown as FakeWebSocket
+
+    client.send({ version: 1, type: 'signal.offer', id: 'msg_1', data: { sdp: 'offer' } })
+
+    expect(socket.sent).toEqual([
+      JSON.stringify({ version: 1, type: 'signal.offer', id: 'msg_1', data: { sdp: 'offer' } })
+    ])
+  })
+
   it('times out when no signaling response is received', () => {
     vi.useFakeTimers()
     const statuses: string[] = []
