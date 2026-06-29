@@ -20,6 +20,7 @@ import {
   type RelayClientOptions
 } from './relayTransport.js'
 import { createRemoteLocalApiClient } from './remoteLocalApiClient.js'
+import { createRemoteMessageBus, type RemoteMessageBus } from './remoteTransport.js'
 
 type ConnectionsApi = {
   create(deviceId: string, clientId: string): Promise<ConnectionCreateResult>
@@ -188,6 +189,7 @@ export function DeviceConsolePage({
   const [sessionsResult, setSessionsResult] = useState<RpcResultState>({ status: 'idle', value: null })
   const socketRef = useRef<ConnectionClient | null>(null)
   const relayRef = useRef<RelayClient | null>(null)
+  const messageBusRef = useRef<RemoteMessageBus | null>(null)
   const rpcRef = useRef<PlainRpcClient | null>(null)
   const remoteLocalApiRef = useRef<ReturnType<typeof createRemoteLocalApiClient> | null>(null)
   const sessionStreamRef = useRef<{ close(): Promise<void> } | null>(null)
@@ -203,10 +205,12 @@ export function DeviceConsolePage({
       socketRef.current?.close()
       void sessionStreamRef.current?.close().catch(() => {})
       rpcRef.current?.close()
+      messageBusRef.current?.close()
       relayRef.current?.close()
       socketRef.current = null
       sessionStreamRef.current = null
       remoteLocalApiRef.current = null
+      messageBusRef.current = null
       rpcRef.current = null
       relayRef.current = null
     }
@@ -226,9 +230,11 @@ export function DeviceConsolePage({
   function closeRelayConsole() {
     void sessionStreamRef.current?.close().catch(() => {})
     rpcRef.current?.close()
+    messageBusRef.current?.close()
     relayRef.current?.close()
     sessionStreamRef.current = null
     remoteLocalApiRef.current = null
+    messageBusRef.current = null
     rpcRef.current = null
     relayRef.current = null
   }
@@ -316,10 +322,15 @@ export function DeviceConsolePage({
       side: 'client'
     })
     let relayClient: RelayClient
+    const messageBus = createRemoteMessageBus({
+      onInbound: (message) => {
+        rpcClient.handle(message)
+      }
+    })
     const rpcClient = createPlainRpcClient({
       timeoutMs: 10_000,
       send: (value) => {
-        relayClient.send(value)
+        messageBus.send(value)
       },
       onNotification: ({ method, params, observedTransport, declaredTransport }) => {
         remoteLocalApiRef.current?.handleNotification(method, params, {
@@ -328,6 +339,7 @@ export function DeviceConsolePage({
         })
       }
     })
+    messageBusRef.current = messageBus
     const remoteLocalApi = createRemoteLocalApiClient({
       request: (method, params) => rpcClient.request(method, params)
     })
@@ -355,9 +367,11 @@ export function DeviceConsolePage({
       // relay 断开后本轮请求已不会再收到响应，立即关闭 RPC 以清理 pending。
       void sessionStreamRef.current?.close().catch(() => {})
       rpcClient.close()
+      messageBus.close()
       if (options.closeRelay) relayClient.close()
       sessionStreamRef.current = null
       if (remoteLocalApiRef.current === remoteLocalApi) remoteLocalApiRef.current = null
+      if (messageBusRef.current === messageBus) messageBusRef.current = null
       if (rpcRef.current === rpcClient) rpcRef.current = null
       if (relayRef.current === relayClient) relayRef.current = null
     }
@@ -402,6 +416,12 @@ export function DeviceConsolePage({
       connectionId: result.connection_id,
       onOpen: () => {
         if (!isActiveConnection(activeConnectionId)) return
+        messageBus.register({
+          kind: 'relay',
+          send: (value) => relayClient.send(value),
+          close: () => relayClient.close()
+        })
+        messageBus.setOpen('relay', true)
         setRelayStatus('open')
         updateRpcResult('rpc.ping', setPingResult)
         updateRpcResult('state.get', setStateResult)
@@ -409,19 +429,18 @@ export function DeviceConsolePage({
       },
       onPayload: (value) => {
         if (isActiveConnection(activeConnectionId)) {
-          rpcClient.handle({
-            payload: value,
-            observedTransport: 'relay'
-          })
+          messageBus.receive(value, 'relay')
         }
       },
       onClose: () => {
         if (!isActiveConnection(activeConnectionId)) return
+        messageBus.setOpen('relay', false)
         closeRpcForRelayEvent({ closeRelay: false })
         setRelayStatus('closed')
       },
       onError: () => {
         if (!isActiveConnection(activeConnectionId)) return
+        messageBus.setOpen('relay', false)
         closeRpcForRelayEvent({ closeRelay: true })
         setRelayStatus('error')
       }
