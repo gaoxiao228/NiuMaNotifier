@@ -1,4 +1,6 @@
-use crate::remote::webrtc_transport::{create_webrtc_answer, WebRtcTransportConfig};
+use crate::remote::webrtc_transport::{
+    add_remote_ice_candidate, create_webrtc_answer, WebRtcSession, WebRtcTransportConfig,
+};
 use niuma_core::remote::config::RemoteConfig;
 use niuma_core::remote::signaling::{
     connection_accept_message, connection_reject_message, signal_cancel_message, ConnectionInvite,
@@ -9,6 +11,8 @@ use niuma_core::remote::transport::RemoteTransportKind;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteSignalingSession {
@@ -20,6 +24,7 @@ pub struct RemoteSignalingSession {
 #[derive(Clone, Default)]
 pub struct RemoteSignalingManager {
     sessions: Arc<Mutex<HashMap<String, RemoteSignalingSession>>>,
+    webrtc_sessions: Arc<Mutex<HashMap<String, WebRtcSession>>>,
     status: Option<crate::remote::status::RemoteAgentStatusHandle>,
 }
 
@@ -27,6 +32,7 @@ impl RemoteSignalingManager {
     pub fn with_status(status: crate::remote::status::RemoteAgentStatusHandle) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            webrtc_sessions: Arc::new(Mutex::new(HashMap::new())),
             status: Some(status),
         }
     }
@@ -76,6 +82,9 @@ impl RemoteSignalingManager {
                 if same_client {
                     // 浏览器刷新、超时或重连可能让旧连接没有及时收到 cancel；同一 client 的新邀请可替换旧会话。
                     sessions.clear();
+                    if let Ok(mut webrtc_sessions) = self.webrtc_sessions.lock() {
+                        webrtc_sessions.clear();
+                    }
                 } else {
                     return vec![connection_reject_message(
                         &invite.connection_id,
@@ -117,6 +126,9 @@ impl RemoteSignalingManager {
         if !removed {
             return;
         }
+        if let Ok(mut sessions) = self.webrtc_sessions.lock() {
+            sessions.remove(connection_id);
+        }
 
         if let Some(status) = &self.status {
             let snapshot = status.snapshot();
@@ -132,6 +144,8 @@ impl RemoteSignalingManager {
         config: &RemoteConfig,
         offer: SignalOffer,
         webrtc_config: WebRtcTransportConfig,
+        rpc_context: crate::remote::rpc_router::RemoteRpcContext,
+        signal_outbound: Option<UnboundedSender<Value>>,
     ) -> Vec<Value> {
         if !self.has_session(&offer.connection_id) {
             return vec![signal_cancel_message(
@@ -146,14 +160,20 @@ impl RemoteSignalingManager {
             )];
         }
         let connection_id = offer.connection_id.clone();
-        match create_webrtc_answer(&connection_id, offer, webrtc_config).await {
+        match create_webrtc_answer(&connection_id, offer, webrtc_config, rpc_context).await {
             Ok(mut result) => {
+                if let Ok(mut sessions) = self.webrtc_sessions.lock() {
+                    sessions.insert(connection_id.clone(), result.session);
+                }
                 if let Some(status) = &self.status {
                     status.set_selected_transport(Some(RemoteTransportKind::Webrtc));
                 }
                 let mut outbound = vec![result.answer_message];
                 while let Ok(candidate) = result.ice_rx.try_recv() {
                     outbound.push(candidate);
+                }
+                if let Some(signal_outbound) = signal_outbound {
+                    spawn_late_webrtc_ice_forwarder(result.ice_rx, signal_outbound);
                 }
                 outbound
             }
@@ -184,8 +204,38 @@ impl RemoteSignalingManager {
         vec![]
     }
 
+    pub async fn handle_ice_candidate_async(&self, candidate: SignalIceCandidate) -> Vec<Value> {
+        if !self.has_session(&candidate.connection_id) {
+            return vec![signal_cancel_message(
+                &candidate.connection_id,
+                "unknown_connection",
+            )];
+        }
+        let connection_id = candidate.connection_id.clone();
+
+        let session = self
+            .webrtc_sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(&connection_id).cloned());
+        let Some(session) = session else {
+            return vec![];
+        };
+
+        if let Err(error) = add_remote_ice_candidate(&session.peer_connection, candidate).await {
+            return vec![signal_cancel_message(
+                &connection_id,
+                &format!("webrtc_ice_failed:{error}"),
+            )];
+        }
+        vec![]
+    }
+
     fn handle_cancel(&self, cancel: SignalCancel) -> Vec<Value> {
         if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.remove(&cancel.connection_id);
+        }
+        if let Ok(mut sessions) = self.webrtc_sessions.lock() {
             sessions.remove(&cancel.connection_id);
         }
         if let Some(status) = &self.status {
@@ -193,6 +243,19 @@ impl RemoteSignalingManager {
         }
         vec![]
     }
+}
+
+fn spawn_late_webrtc_ice_forwarder(
+    mut ice_rx: UnboundedReceiver<Value>,
+    signal_outbound: UnboundedSender<Value>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(candidate) = ice_rx.recv().await {
+            if signal_outbound.send(candidate).is_err() {
+                break;
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -303,6 +366,7 @@ mod webrtc_policy_tests {
     use super::*;
     use niuma_core::remote::config::RemoteConfig;
     use niuma_core::remote::signaling::{DeviceSignalMessage, SignalOffer};
+    use tokio::sync::mpsc;
 
     #[test]
     fn offer_without_session_is_cancelled() {
@@ -322,5 +386,30 @@ mod webrtc_policy_tests {
 
         assert_eq!(outbound[0]["type"], "signal.cancel");
         assert_eq!(outbound[0]["data"]["reason"], "unknown_connection");
+    }
+
+    #[tokio::test]
+    async fn forwards_late_webrtc_ice_candidates_to_signal_outbound() {
+        let (ice_tx, ice_rx) = mpsc::unbounded_channel();
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
+
+        let handle = spawn_late_webrtc_ice_forwarder(ice_rx, outbound_tx);
+        ice_tx
+            .send(serde_json::json!({
+                "version": 1,
+                "type": "signal.ice_candidate",
+                "id": "msg_ice",
+                "data": {
+                    "connection_id": "conn_1",
+                    "candidate": "candidate:1"
+                }
+            }))
+            .unwrap();
+
+        let outbound = outbound_rx.recv().await.unwrap();
+        handle.abort();
+
+        assert_eq!(outbound["type"], "signal.ice_candidate");
+        assert_eq!(outbound["data"]["connection_id"], "conn_1");
     }
 }

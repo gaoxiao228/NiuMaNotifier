@@ -169,8 +169,19 @@ pub async fn run_device_socket_once(
 
     let mut heartbeat = time::interval(Duration::from_secs(request.heartbeat_interval_seconds));
     let mut relay_tasks = RelayTaskMap::default();
+    let (signal_outbound_tx, mut signal_outbound_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Value>();
     loop {
         tokio::select! {
+            outbound = signal_outbound_rx.recv() => {
+                let Some(message) = outbound else {
+                    continue;
+                };
+                if let Err(error) = writer.send(Message::Text(message.to_string())).await {
+                    abort_all_relays(&mut relay_tasks);
+                    return DeviceSocketRunResult::Failed(format!("发送远程异步信令失败：{error}"));
+                }
+            }
             _ = heartbeat.tick() => {
                 if let Err(error) = writer
                     .send(Message::Text(device_heartbeat_message().to_string()))
@@ -240,13 +251,22 @@ pub async fn run_device_socket_once(
                                 outbound
                             }
                             DeviceSignalMessage::SignalOffer { data, .. } => {
+                                let rpc_context = crate::remote::rpc_router::RemoteRpcContext::new(
+                                    request.store.clone(),
+                                    request.tool_sessions.clone(),
+                                );
                                 signaling_manager
                                     .handle_offer_async(
                                         &request.remote_config,
                                         data,
                                         webrtc_config.clone(),
+                                        rpc_context,
+                                        Some(signal_outbound_tx.clone()),
                                     )
                                     .await
+                            }
+                            DeviceSignalMessage::SignalIceCandidate { data, .. } => {
+                                signaling_manager.handle_ice_candidate_async(data).await
                             }
                             DeviceSignalMessage::SignalCancel { id, data } => {
                                 abort_relay_for_connection(&mut relay_tasks, &data.connection_id);
