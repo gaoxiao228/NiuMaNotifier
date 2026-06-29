@@ -385,6 +385,35 @@ fn remote_device_install_id_is_created_once_and_reused() {
 }
 
 #[test]
+fn remote_device_install_id_concurrent_create_returns_same_value() {
+    for attempt in 0..64 {
+        let root = test_data_dir(&format!(
+            "remote_device_install_id_concurrent_create_{attempt}"
+        ));
+        let path = root.join("state.sqlite");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    NiumaStore::new(path).remote_device_install_id().unwrap()
+                })
+            })
+            .collect();
+
+        let values: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        for value in &values[1..] {
+            assert_eq!(value, &values[0]);
+        }
+    }
+}
+
+#[test]
 fn schema_initializes_only_notification_records_table() {
     let path = test_sqlite_path("schema_notification_only");
     let store = NiumaStore::new(path.clone());

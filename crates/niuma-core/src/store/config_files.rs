@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +33,11 @@ struct AppConfigFile {
 struct RemoteDeviceInstallIdFile {
     version: u32,
     install_id: String,
+}
+
+enum RemoteDeviceInstallIdCreateError {
+    AlreadyExists,
+    Other(String),
 }
 
 impl Default for AppConfigFile {
@@ -103,25 +110,21 @@ impl ConfigFileStore {
 
     pub(super) fn remote_device_install_id(&self) -> Result<DeviceInstallId, String> {
         let path = self.remote_device_install_id_path();
-        if path.exists() {
-            let file: RemoteDeviceInstallIdFile = serde_json::from_value(read_json_file(&path)?)
-                .map_err(|error| format!("解析远程设备安装 ID 文件失败：{error}"))?;
-            if file.version != 1 {
-                return Err(format!("远程设备安装 ID 文件版本不支持：{}", file.version));
+        match create_remote_device_install_id_file(&path) {
+            Ok(install_id) => Ok(install_id),
+            Err(RemoteDeviceInstallIdCreateError::AlreadyExists) => {
+                read_remote_device_install_id_with_retry(&path)
             }
-            return DeviceInstallId::from_hex(&file.install_id);
+            Err(RemoteDeviceInstallIdCreateError::Other(error)) => Err(error),
         }
+    }
 
-        let install_id = DeviceInstallId::generate();
-        let file = RemoteDeviceInstallIdFile {
-            version: 1,
-            install_id: install_id.to_hex(),
-        };
-        let value = serde_json::to_value(file)
-            .map_err(|error| format!("序列化远程设备安装 ID 文件失败：{error}"))?;
-        // 安装 ID 独立于运行态 SQLite，用配置文件保证同一安装后续登录复用同一指纹来源。
-        write_json_file(&path, &value)?;
-        Ok(install_id)
+    fn app_config_path(&self) -> PathBuf {
+        self.root.join("config.json")
+    }
+
+    fn remote_device_install_id_path(&self) -> PathBuf {
+        self.root.join("remote-device-install-id.json")
     }
 
     pub(super) fn plugin_config(
@@ -156,14 +159,6 @@ impl ConfigFileStore {
         Ok(())
     }
 
-    fn app_config_path(&self) -> PathBuf {
-        self.root.join("config.json")
-    }
-
-    fn remote_device_install_id_path(&self) -> PathBuf {
-        self.root.join("remote-device-install-id.json")
-    }
-
     fn plugin_config_path(&self, plugin_id: &str) -> PathBuf {
         self.root
             .join("plugin-configs")
@@ -188,6 +183,73 @@ impl ConfigFileStore {
 
 fn default_language_preference() -> String {
     LanguagePreference::System.storage_id().to_string()
+}
+
+fn create_remote_device_install_id_file(
+    path: &Path,
+) -> Result<DeviceInstallId, RemoteDeviceInstallIdCreateError> {
+    let install_id = DeviceInstallId::generate();
+    let file = RemoteDeviceInstallIdFile {
+        version: 1,
+        install_id: install_id.to_hex(),
+    };
+    let value = serde_json::to_value(file).map_err(|error| {
+        RemoteDeviceInstallIdCreateError::Other(format!("序列化远程设备安装 ID 文件失败：{error}"))
+    })?;
+    let content = serde_json::to_string_pretty(&value).map_err(|error| {
+        RemoteDeviceInstallIdCreateError::Other(format!("序列化远程设备安装 ID 文件失败：{error}"))
+    })?;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            RemoteDeviceInstallIdCreateError::Other(format!("创建配置目录失败：{error}"))
+        })?;
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == ErrorKind::AlreadyExists {
+                RemoteDeviceInstallIdCreateError::AlreadyExists
+            } else {
+                RemoteDeviceInstallIdCreateError::Other(format!(
+                    "创建远程设备安装 ID 文件失败：{error}"
+                ))
+            }
+        })?;
+
+    // create_new 保证只有一个首次创建者；其他并发调用会读取这个创建者写入的 ID。
+    file.write_all(content.as_bytes()).map_err(|error| {
+        RemoteDeviceInstallIdCreateError::Other(format!("写入远程设备安装 ID 文件失败：{error}"))
+    })?;
+    Ok(install_id)
+}
+
+fn read_remote_device_install_id_with_retry(path: &Path) -> Result<DeviceInstallId, String> {
+    let mut last_error = None;
+    for attempt in 0..20 {
+        match read_remote_device_install_id_file(path) {
+            Ok(install_id) => return Ok(install_id),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < 19 {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "读取远程设备安装 ID 文件失败".to_string()))
+}
+
+fn read_remote_device_install_id_file(path: &Path) -> Result<DeviceInstallId, String> {
+    let file: RemoteDeviceInstallIdFile = serde_json::from_value(read_json_file(path)?)
+        .map_err(|error| format!("解析远程设备安装 ID 文件失败：{error}"))?;
+    if file.version != 1 {
+        return Err(format!("远程设备安装 ID 文件版本不支持：{}", file.version));
+    }
+    DeviceInstallId::from_hex(&file.install_id)
 }
 
 fn read_json_file(path: &Path) -> Result<serde_json::Value, String> {
