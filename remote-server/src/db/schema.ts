@@ -1,4 +1,5 @@
-import { jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
+import { jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -25,20 +26,29 @@ export const refreshTokens = pgTable('refresh_tokens', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull()
 })
 
-export const devices = pgTable('devices', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id),
-  name: text('name').notNull(),
-  fingerprintHash: text('fingerprint_hash').notNull(),
-  tokenHash: text('token_hash').notNull().unique(),
-  identityPublicKeyJson: jsonb('identity_public_key_json').notNull(),
-  status: text('status').notNull(),
-  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
-  capabilityJson: jsonb('capability_json').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
-  revokedAt: timestamp('revoked_at', { withTimezone: true })
-})
+export const devices = pgTable(
+  'devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id),
+    name: text('name').notNull(),
+    fingerprintHash: text('fingerprint_hash').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    identityPublicKeyJson: jsonb('identity_public_key_json').notNull(),
+    status: text('status').notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    capabilityJson: jsonb('capability_json').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true })
+  },
+  (table) => [
+    // 与 0001 手写迁移保持一致：只约束 active 设备，允许历史 revoked 记录保留。
+    uniqueIndex('devices_active_user_fingerprint_unique')
+      .on(table.userId, table.fingerprintHash)
+      .where(sql`${table.status} = 'active'`)
+  ]
+)
 
 export const remoteConnections = pgTable('remote_connections', {
   id: uuid('id').primaryKey().defaultRandom(),

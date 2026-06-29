@@ -50,6 +50,10 @@ export type DesktopLoginRepository = {
     updatedAt: Date
     revokedAt: Date | null
   }): Promise<{ id: string; name: string }>
+  runDeviceBindingTransaction<T>(
+    fingerprintHash: string,
+    action: (repo: DesktopLoginRepository) => Promise<T>
+  ): Promise<T>
 }
 
 export type DesktopLoginFailure = {
@@ -129,42 +133,55 @@ export function createDesktopLoginService(options: {
         return failure(ErrorCode.DESKTOP_LOGIN_CONSUMED, '桌面登录会话已被消费')
       }
 
-      const now = clock.now()
-      const deviceToken = createRandomToken('dvt')
-      const device = await options.repo.upsertDevice({
-        userId: input.user.id,
-        name: session.deviceName,
-        fingerprintHash: session.fingerprintHash,
-        tokenHash: createHash(deviceToken, options.config.tokenPepper),
-        identityPublicKeyJson: JSON.parse(session.deviceIdentityPublicKey),
-        status: 'active',
-        capabilityJson: session.capabilityJson,
-        createdAt: now,
-        updatedAt: now,
-        revokedAt: null
-      })
+      return options.repo.runDeviceBindingTransaction(session.fingerprintHash, async (repo) => {
+        const currentSession = await repo.findSessionByRequestId(input.requestId)
+        if (!currentSession) {
+          return failure(ErrorCode.DESKTOP_LOGIN_NOT_FOUND, '桌面登录会话不存在')
+        }
+        if (isExpired(currentSession)) {
+          return failure(ErrorCode.DESKTOP_LOGIN_EXPIRED, '桌面登录会话已过期')
+        }
+        if (currentSession.status !== 'pending') {
+          return failure(ErrorCode.DESKTOP_LOGIN_CONSUMED, '桌面登录会话已被消费')
+        }
 
-      const encryptedResult = await encryptDesktopLoginResult(session.desktopPublicKey, {
-        user: input.user,
-        device,
-        device_token: deviceToken
-      })
+        const now = clock.now()
+        const deviceToken = createRandomToken('dvt')
+        const device = await repo.upsertDevice({
+          userId: input.user.id,
+          name: currentSession.deviceName,
+          fingerprintHash: currentSession.fingerprintHash,
+          tokenHash: createHash(deviceToken, options.config.tokenPepper),
+          identityPublicKeyJson: JSON.parse(currentSession.deviceIdentityPublicKey),
+          status: 'active',
+          capabilityJson: currentSession.capabilityJson,
+          createdAt: now,
+          updatedAt: now,
+          revokedAt: null
+        })
 
-      await options.repo.completeSession(input.requestId, {
-        status: 'completed',
-        userId: input.user.id,
-        deviceId: device.id,
-        encryptedResultJson: encryptedResult,
-        completedAt: clock.now()
-      })
-      await options.repo.consumeOtherSessionsForDevice({
-        userId: input.user.id,
-        fingerprintHash: session.fingerprintHash,
-        requestId: input.requestId,
-        consumedAt: clock.now()
-      })
+        const encryptedResult = await encryptDesktopLoginResult(currentSession.desktopPublicKey, {
+          user: input.user,
+          device,
+          device_token: deviceToken
+        })
 
-      return { ok: true as const, data: {} }
+        await repo.completeSession(input.requestId, {
+          status: 'completed',
+          userId: input.user.id,
+          deviceId: device.id,
+          encryptedResultJson: encryptedResult,
+          completedAt: clock.now()
+        })
+        await repo.consumeOtherSessionsForDevice({
+          userId: input.user.id,
+          fingerprintHash: currentSession.fingerprintHash,
+          requestId: input.requestId,
+          consumedAt: clock.now()
+        })
+
+        return { ok: true as const, data: {} }
+      })
     },
 
     async poll(input: { request_id: string; poll_token: string }) {

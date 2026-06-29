@@ -1,9 +1,16 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { desktopLoginSessions } from '../../db/schema.js'
 import type { DesktopLoginRepository, DesktopLoginSession } from './desktopLogin.service.js'
 
 export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
   return {
+    async runDeviceBindingTransaction(fingerprintHash, action) {
+      return db.transaction(async (tx: any) => {
+        // 同一设备指纹的绑定完成流程必须串行化，避免 token 轮换后旧会话重新写回 completed。
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${fingerprintHash}))`)
+        return action(createDesktopLoginRepository(tx))
+      })
+    },
     async createSession(input) {
       const row = (await db.insert(desktopLoginSessions).values(input).returning())[0]
       return row as DesktopLoginSession
@@ -22,7 +29,12 @@ export function createDesktopLoginRepository(db: any): DesktopLoginRepository {
       await db
         .update(desktopLoginSessions)
         .set(input)
-        .where(eq(desktopLoginSessions.requestId, requestId))
+        .where(
+          and(
+            eq(desktopLoginSessions.requestId, requestId),
+            eq(desktopLoginSessions.status, 'pending')
+          )
+        )
     },
     async consumeSession(requestId) {
       await db

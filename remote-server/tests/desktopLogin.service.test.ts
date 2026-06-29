@@ -6,11 +6,13 @@ import {
 } from '../src/modules/desktopLogin/desktopLogin.service.js'
 import { ErrorCode } from '../src/shared/errors.js'
 
-function createRepo(): DesktopLoginRepository {
+function createRepo(options?: {
+  beforeDeviceBindingTransaction?: (repo: DesktopLoginRepository) => Promise<void> | void
+}): DesktopLoginRepository {
   const sessions = new Map<string, any>()
   const devices = new Map<string, any>()
 
-  return {
+  const repo: DesktopLoginRepository = {
     async createSession(input) {
       sessions.set(input.requestId, { id: `dls_${sessions.size + 1}`, ...input })
       return sessions.get(input.requestId)
@@ -19,7 +21,8 @@ function createRepo(): DesktopLoginRepository {
       return sessions.get(requestId) ?? null
     },
     async completeSession(requestId, input) {
-      Object.assign(sessions.get(requestId), input)
+      const session = sessions.get(requestId)
+      if (session?.status === 'pending') Object.assign(session, input)
     },
     async consumeSession(requestId) {
       sessions.get(requestId).status = 'consumed'
@@ -53,8 +56,15 @@ function createRepo(): DesktopLoginRepository {
       const device = { id: `dev_${devices.size + 1}`, ...input }
       devices.set(device.id, device)
       return device
+    },
+    async runDeviceBindingTransaction(_fingerprintHash, action) {
+      // 测试用钩子模拟真实事务拿锁后，当前会话已被另一条 complete 流程消费。
+      await options?.beforeDeviceBindingTransaction?.(repo)
+      return action(repo)
     }
   }
+
+  return repo
 }
 
 const validStartInput = async () => {
@@ -231,6 +241,42 @@ describe('desktop login service', () => {
     })
 
     expect(superseded).toEqual({
+      ok: false,
+      code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
+      message: '桌面登录会话已被消费'
+    })
+  })
+
+  it('returns consumed when session is consumed inside device binding transaction', async () => {
+    const { input } = await validStartInput()
+    let requestId = ''
+    const repo = createRepo({
+      beforeDeviceBindingTransaction: async (transactionRepo) => {
+        await transactionRepo.completeSession(requestId, {
+          status: 'consumed',
+          consumedAt: new Date()
+        })
+      }
+    })
+    const service = createDesktopLoginService({
+      repo,
+      config: {
+        publicUrl: 'https://remote.example.com',
+        tokenPepper: 'pepper',
+        desktopLoginTtlSeconds: 600
+      }
+    })
+
+    const start = await service.start(input)
+    if (!start.ok) throw new Error('start failed')
+    requestId = start.data.request_id
+
+    const result = await service.complete({
+      requestId,
+      user: { id: 'usr_1', email: 'user@example.com', role: 'user' }
+    })
+
+    expect(result).toEqual({
       ok: false,
       code: ErrorCode.DESKTOP_LOGIN_CONSUMED,
       message: '桌面登录会话已被消费'
