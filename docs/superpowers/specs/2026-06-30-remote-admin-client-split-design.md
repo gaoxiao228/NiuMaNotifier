@@ -366,6 +366,18 @@ https://remote.example.com/client -> remote-client-web
 5. Docker Compose 增加 `remote-client-web` 服务。
 6. 更新接入文档和部署文档。
 
+## 实施路径 / 最终路径
+
+第一版实施路径以“职责先清晰、目录少搬迁”为原则：
+
+- 保留 `remote-server/web` 作为 `remote-admin` 的源码目录，继续随 `remote-server` 构建和部署。
+- `remote-server` 本地和 Docker 默认入口 `http://127.0.0.1:27880/` 只表达后台管理能力，不再承担外部客户端职责。
+- 新增仓库根目录 `remote-client-web/`，作为独立外部客户端源码目录、构建上下文和 Docker 镜像入口。
+- `remote-client-web` 本地开发入口使用 `http://127.0.0.1:27882/`，Docker host 入口使用 `http://127.0.0.1:27883/`。
+- `remote-client-web` 通过构建期 `VITE_REMOTE_SERVER_URL` 指向远程服务端 API 地址；Docker Compose 默认写入 `http://127.0.0.1:27880`。
+
+最终路径保持该职责边界：`remote-server/web` 是随服务端内置的 `remote-admin`，`remote-client-web/` 是终端用户外部客户端。后续即使重命名 `remote-server/web` 为 `remote-server/admin-web`，也只作为目录语义优化，不改变部署边界和协议边界。
+
 ## 测试策略
 
 自动测试：
