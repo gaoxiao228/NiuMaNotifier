@@ -8,6 +8,13 @@ import {
   type ConnectionStatus
 } from './connectionClient.js'
 import {
+  createDiagnosticStep,
+  finishDiagnosticReport,
+  startDiagnosticReport,
+  type DiagnosticReport,
+  type DiagnosticStep
+} from './diagnostics.js'
+import {
   createPlainRpcClient,
   createPlainRpcRequest,
   isPlainRpcResponse,
@@ -54,10 +61,13 @@ export type RemoteDeviceSessionSnapshot = {
     relay: RpcResultState
     webrtc: RpcResultState
   }
+  diagnosticReport: DiagnosticReport | null
+  diagnosticRunning: boolean
 }
 
 export type RemoteDeviceSessionController = {
   connect(): Promise<void>
+  runDiagnostics(): Promise<void>
   close(): void
   handleSignalMessage(message: unknown): void
 }
@@ -108,6 +118,12 @@ function errorResult(value: unknown): RpcResultState {
   return { status: 'error', value }
 }
 
+function timeoutAfter<T>(timeoutMs: number, error: Error): Promise<T> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(error), timeoutMs)
+  })
+}
+
 function initialSnapshot(): RemoteDeviceSessionSnapshot {
   return {
     connectionStatus: 'idle',
@@ -122,7 +138,9 @@ function initialSnapshot(): RemoteDeviceSessionSnapshot {
     diagnostics: {
       relay: idleResult(),
       webrtc: idleResult()
-    }
+    },
+    diagnosticReport: null,
+    diagnosticRunning: false
   }
 }
 
@@ -139,7 +157,11 @@ function cloneSnapshot(snapshot: RemoteDeviceSessionSnapshot): RemoteDeviceSessi
     diagnostics: {
       relay: cloneResult(snapshot.diagnostics.relay),
       webrtc: cloneResult(snapshot.diagnostics.webrtc)
-    }
+    },
+    diagnosticReport: snapshot.diagnosticReport
+      ? (cloneSnapshotValue(snapshot.diagnosticReport) as DiagnosticReport)
+      : null,
+    diagnosticRunning: snapshot.diagnosticRunning
   }
 }
 
@@ -282,8 +304,23 @@ export function createRemoteDeviceSessionController(
     diagnostics.delete(kind)
   }
 
-  function closeRemoteResources() {
-    for (const kind of diagnostics.keys()) clearDiagnostic(kind)
+  function failDiagnostic(generation: number, kind: RemoteTransportKind, message: string) {
+    clearDiagnostic(kind)
+    patchDiagnostic(generation, kind, errorResult(message))
+  }
+
+  function failPendingDiagnostics(generation: number, message: string) {
+    for (const kind of [...diagnostics.keys()]) {
+      failDiagnostic(generation, kind, message)
+    }
+  }
+
+  function closeRemoteResources(generation?: number, diagnosticMessage = 'transport_closed') {
+    if (typeof generation === 'number') {
+      failPendingDiagnostics(generation, diagnosticMessage)
+    } else {
+      for (const kind of diagnostics.keys()) clearDiagnostic(kind)
+    }
     void sessionStream?.close().catch(() => {})
     sessionStream = null
     remoteLocalApi = null
@@ -338,7 +375,7 @@ export function createRemoteDeviceSessionController(
 
   function markWebRtcUnhealthyAndUseRelay(generation: number) {
     const alreadyMarkedUnavailable = !webRtcOpen && snapshot.webRtcStatus === 'error'
-    clearDiagnostic('webrtc')
+    failDiagnostic(generation, 'webrtc', 'webrtc_unavailable')
     webRtcOpen = false
     messageBus?.setOpen('webrtc', false)
     patchSnapshot(generation, {
@@ -349,10 +386,10 @@ export function createRemoteDeviceSessionController(
     if (!alreadyMarkedUnavailable) webRtcTransport?.close()
   }
 
-  function closeRemoteResourcesUnlessRelayPending() {
+  function closeRemoteResourcesUnlessRelayPending(generation: number) {
     if (relayOpen) return
     if (relayClient && !relayTerminated) return
-    closeRemoteResources()
+    closeRemoteResources(generation)
   }
 
   function markWebRtcUnavailable(
@@ -360,7 +397,7 @@ export function createRemoteDeviceSessionController(
     status: Extract<RemoteDeviceTransportStatus, 'closed' | 'error'>,
     closeTransport: boolean
   ) {
-    clearDiagnostic('webrtc')
+    failDiagnostic(generation, 'webrtc', `webrtc_${status}`)
     webRtcOpen = false
     messageBus?.setOpen('webrtc', false)
     patchSnapshot(generation, {
@@ -372,7 +409,7 @@ export function createRemoteDeviceSessionController(
       webRtcTransport = null
       transport?.close()
     }
-    closeRemoteResourcesUnlessRelayPending()
+    closeRemoteResourcesUnlessRelayPending(generation)
   }
 
   function requestWithTransportFallback(generation: number, method: string, params?: unknown): Promise<unknown> {
@@ -524,8 +561,113 @@ export function createRemoteDeviceSessionController(
     }
   }
 
+  function waitForResult(
+    generation: number,
+    read: () => RpcResultState,
+    timeoutMs: number,
+    failureMessage: string
+  ): Promise<RpcResultState> {
+    const started = Date.now()
+    const initial = read()
+    if (initial.status === 'ready' || initial.status === 'error') return Promise.resolve(initial)
+
+    return new Promise((resolve) => {
+      // 诊断复用现有异步 snapshot 状态，避免再引入一套 RPC 回调状态机。
+      const timer = setInterval(() => {
+        if (!isActive(generation)) {
+          clearInterval(timer)
+          resolve(errorResult('remote_rpc_failed'))
+          return
+        }
+        const result = read()
+        if (result.status === 'ready' || result.status === 'error') {
+          clearInterval(timer)
+          resolve(result)
+          return
+        }
+        if (Date.now() - started >= timeoutMs) {
+          clearInterval(timer)
+          resolve(errorResult(failureMessage))
+        }
+      }, 50)
+    })
+  }
+
+  function reportStep(
+    key: string,
+    title: string,
+    status: DiagnosticStep['status'],
+    started: number,
+    message?: string
+  ): DiagnosticStep {
+    return createDiagnosticStep({
+      key,
+      title,
+      status,
+      duration_ms: Date.now() - started,
+      severity: status === 'failed' ? 'error' : 'info',
+      message
+    })
+  }
+
+  function resultMessage(result: RpcResultState): string | undefined {
+    if (result.status !== 'error') return undefined
+    return typeof result.value === 'string' ? result.value : 'remote_rpc_failed'
+  }
+
+  function resultStep(
+    key: string,
+    title: string,
+    result: RpcResultState,
+    started: number,
+    failureSeverity: DiagnosticStep['severity'] = 'error'
+  ): DiagnosticStep {
+    const status = result.status === 'ready' ? 'passed' : 'failed'
+    return {
+      ...reportStep(key, title, status, started, resultMessage(result)),
+      severity: status === 'failed' ? failureSeverity : 'info'
+    }
+  }
+
+  function skippedStep(key: string, title: string, started: number, message: string): DiagnosticStep {
+    return reportStep(key, title, 'skipped', started, message)
+  }
+
+  function patchDiagnosticReport(generation: number, report: DiagnosticReport, diagnosticRunning: boolean) {
+    patchSnapshot(generation, {
+      diagnosticReport: report,
+      diagnosticRunning
+    })
+  }
+
+  function hasAcceptedConnectionResource(): boolean {
+    return (
+      socketClient !== null &&
+      snapshot.connectionStatus === 'accepted' &&
+      messageBus !== null &&
+      rpcClient !== null
+    )
+  }
+
+  function rerunDiagnosticsForAcceptedConnection(generation: number) {
+    if (relayOpen) {
+      startDiagnosticPing(generation, 'relay', rpcTimeoutMs)
+    } else {
+      patchDiagnostic(generation, 'relay', errorResult('relay_unavailable'))
+    }
+    if (webRtcOpen) {
+      startDiagnosticPing(generation, 'webrtc', webRtcProbeTimeoutMs)
+    } else {
+      patchDiagnostic(generation, 'webrtc', errorResult('webrtc_unavailable'))
+    }
+    if (!remoteLocalApi) return
+    void sessionStream?.close().catch(() => {})
+    sessionStream = null
+    subscribeRemoteSessions(generation)
+  }
+
   function openRemoteSession(result: ConnectionCreateResult, generation: number, signalClient: ConnectionClient) {
-    closeRemoteResources()
+    closeRemoteResources(generation)
     relayTerminated = false
     patchSnapshot(generation, {
       relayStatus: 'connecting',
@@ -612,7 +754,7 @@ export function createRemoteDeviceSessionController(
               if (!isActive(generation) || !messageBus) return
               markWebRtcUnhealthyAndUseRelay(generation)
               // WebRTC 业务探活失败不能拆掉仍在连接中的 relay 管线；relay ready 后仍要能启动首屏读取。
-              closeRemoteResourcesUnlessRelayPending()
+              closeRemoteResourcesUnlessRelayPending(generation)
             }
           })
           if (!webRtcOpen) messageBus?.setOpen('webrtc', false)
@@ -670,7 +812,7 @@ export function createRemoteDeviceSessionController(
       },
       onClose: () => {
         if (!isActive(generation)) return
-        clearDiagnostic('relay')
+        failDiagnostic(generation, 'relay', 'relay_closed')
         relayOpen = false
         relayTerminated = true
         messageBus?.setOpen('relay', false)
@@ -678,7 +820,7 @@ export function createRemoteDeviceSessionController(
           patchSnapshot(generation, { relayStatus: 'closed' })
           return
         }
-        closeRemoteResources()
+        closeRemoteResources(generation)
         patchSnapshot(generation, {
           relayStatus: 'closed',
           webRtcStatus: 'closed',
@@ -687,7 +829,7 @@ export function createRemoteDeviceSessionController(
       },
       onError: () => {
         if (!isActive(generation)) return
-        clearDiagnostic('relay')
+        failDiagnostic(generation, 'relay', 'relay_error')
         relayOpen = false
         relayTerminated = true
         messageBus?.setOpen('relay', false)
@@ -696,7 +838,7 @@ export function createRemoteDeviceSessionController(
           patchSnapshot(generation, { relayStatus: 'error' })
           return
         }
-        closeRemoteResources()
+        closeRemoteResources(generation)
         patchSnapshot(generation, {
           relayStatus: 'error',
           webRtcStatus: 'closed',
@@ -706,58 +848,163 @@ export function createRemoteDeviceSessionController(
     })
   }
 
+  async function connectInternal(preserveDiagnosticState = false, createTimeoutMs?: number): Promise<number | null> {
+    if (!options.device.online || snapshot.connectionStatus === 'connecting') return null
+    const generation = activeGeneration + 1
+    const diagnosticReport = snapshot.diagnosticReport
+    const diagnosticRunning = snapshot.diagnosticRunning
+    activeGeneration = generation
+    closeAllResources()
+    snapshot = {
+      ...initialSnapshot(),
+      connectionStatus: 'connecting',
+      diagnosticReport: preserveDiagnosticState ? diagnosticReport : null,
+      diagnosticRunning: preserveDiagnosticState ? diagnosticRunning : false
+    }
+    emit(generation)
+
+    try {
+      const createPromise = options.connectionsApi.create(options.device.id, options.clientId)
+      const result =
+        typeof createTimeoutMs === 'number'
+          ? await Promise.race([
+              createPromise,
+              timeoutAfter<ConnectionCreateResult>(createTimeoutMs, new Error('connection_create_timeout'))
+            ])
+          : await createPromise
+      if (!isActive(generation)) return generation
+      patchSnapshot(generation, {
+        connectionId: result.connection_id
+      })
+      const socketUrl = buildClientSocketUrl(result.signaling_url || window.location.origin, {
+        connection_id: result.connection_id,
+        connection_token: result.connection_token
+      })
+      let relayStarted = false
+      let signalClient: ConnectionClient | null = null
+      signalClient = createConnection({
+        url: socketUrl,
+        onStatus: (status) => {
+          if (!isActive(generation)) return
+          patchSnapshot(generation, { connectionStatus: status })
+          if (status === 'accepted' && !relayStarted && signalClient) {
+            relayStarted = true
+            openRemoteSession(result, generation, signalClient)
+          }
+        },
+        onMessage: (message) => {
+          if (!isActive(generation)) return
+          options.onSignalMessage?.(message)
+          handleWebRtcSignal(message, result.connection_id)
+        }
+      })
+      socketClient = signalClient
+    } catch (error) {
+      if (!isActive(generation)) return generation
+      patchSnapshot(generation, {
+        connectionStatus: 'error',
+        error: errorText(error, 'connection_failed')
+      })
+    }
+    return generation
+  }
+
   return {
     async connect() {
-      if (!options.device.online || snapshot.connectionStatus === 'connecting') return
-      const generation = activeGeneration + 1
-      activeGeneration = generation
-      closeAllResources()
-      snapshot = {
-        ...initialSnapshot(),
-        connectionStatus: 'connecting'
-      }
-      emit(generation)
+      await connectInternal()
+    },
+    async runDiagnostics() {
+      if (snapshot.diagnosticRunning || snapshot.connectionStatus === 'connecting') return
 
-      try {
-        const result = await options.connectionsApi.create(options.device.id, options.clientId)
-        if (!isActive(generation)) return
-        patchSnapshot(generation, {
-          connectionId: result.connection_id
-        })
-        const socketUrl = buildClientSocketUrl(result.signaling_url || window.location.origin, {
-          connection_id: result.connection_id,
-          connection_token: result.connection_token
-        })
-        let relayStarted = false
-        let signalClient: ConnectionClient | null = null
-        signalClient = createConnection({
-          url: socketUrl,
-          onStatus: (status) => {
-            if (!isActive(generation)) return
-            patchSnapshot(generation, { connectionStatus: status })
-            if (status === 'accepted' && !relayStarted && signalClient) {
-              relayStarted = true
-              openRemoteSession(result, generation, signalClient)
-            }
-          },
-          onMessage: (message) => {
-            if (!isActive(generation)) return
-            options.onSignalMessage?.(message)
-            handleWebRtcSignal(message, result.connection_id)
-          }
-        })
-        socketClient = signalClient
-      } catch (error) {
-        if (!isActive(generation)) return
-        patchSnapshot(generation, {
-          connectionStatus: 'error',
-          error: errorText(error, 'connection_failed')
-        })
+      let report = startDiagnosticReport('web_client', new Date())
+      const steps: DiagnosticStep[] = []
+      let diagnosticGeneration = activeGeneration
+      patchDiagnosticReport(diagnosticGeneration, report, true)
+
+      const deviceStarted = Date.now()
+      if (!options.device.online) {
+        steps.push(reportStep('device_online', 'Device online', 'failed', deviceStarted, 'device_offline'))
+        report = finishDiagnosticReport(report, steps, new Date())
+        patchDiagnosticReport(diagnosticGeneration, report, false)
+        return
       }
+      steps.push(reportStep('device_online', 'Device online', 'passed', deviceStarted))
+
+      const connectionStarted = Date.now()
+      const hadAcceptedConnection = hasAcceptedConnectionResource()
+      if (!hadAcceptedConnection) {
+        const connectionGeneration = await connectInternal(true, rpcTimeoutMs)
+        if (connectionGeneration !== null) diagnosticGeneration = connectionGeneration
+      }
+
+      const connectionResult = await waitForResult(
+        diagnosticGeneration,
+        () => {
+          if (snapshot.connectionStatus === 'accepted') return readyResult(snapshot.connectionId)
+          if (snapshot.connectionStatus === 'error') return errorResult(snapshot.error ?? 'connection_failed')
+          if (snapshot.connectionStatus === 'rejected' || snapshot.connectionStatus === 'closed') {
+            return errorResult(`connection_${snapshot.connectionStatus}`)
+          }
+          return loadingResult()
+        },
+        rpcTimeoutMs,
+        'connection_accept_timeout'
+      )
+      steps.push(resultStep('connection_create', 'Create connection', connectionResult, connectionStarted))
+
+      if (connectionResult.status === 'error') {
+        const skippedStarted = Date.now()
+        steps.push(skippedStep('relay_rpc_ping', 'Relay RPC ping', skippedStarted, 'connection_unavailable'))
+        steps.push(skippedStep('webrtc_rpc_ping', 'WebRTC RPC ping', skippedStarted, 'connection_unavailable'))
+        steps.push(skippedStep('session_project_groups', 'Session project groups', skippedStarted, 'connection_unavailable'))
+        report = finishDiagnosticReport(report, steps, new Date())
+        patchDiagnosticReport(diagnosticGeneration, report, false)
+        return
+      }
+
+      if (hadAcceptedConnection) rerunDiagnosticsForAcceptedConnection(diagnosticGeneration)
+
+      const relayStarted = Date.now()
+      const relayResult = await waitForResult(
+        diagnosticGeneration,
+        () => snapshot.diagnostics.relay,
+        rpcTimeoutMs,
+        'relay_rpc_ping_timeout'
+      )
+      steps.push(resultStep('relay_rpc_ping', 'Relay RPC ping', relayResult, relayStarted))
+
+      const webRtcStarted = Date.now()
+      const webRtcResult = await waitForResult(
+        diagnosticGeneration,
+        () => snapshot.diagnostics.webrtc,
+        webRtcProbeTimeoutMs,
+        'webrtc_rpc_ping_timeout'
+      )
+      steps.push(resultStep('webrtc_rpc_ping', 'WebRTC RPC ping', webRtcResult, webRtcStarted, 'warning'))
+
+      const sessionsStarted = Date.now()
+      const sessionsResult = await waitForResult(
+        diagnosticGeneration,
+        () => snapshot.sessionsResult,
+        rpcTimeoutMs,
+        'session_project_groups_timeout'
+      )
+      steps.push(resultStep('session_project_groups', 'Session project groups', sessionsResult, sessionsStarted))
+
+      report = finishDiagnosticReport(report, steps, new Date())
+      patchDiagnosticReport(diagnosticGeneration, report, false)
     },
     close() {
       activeGeneration += 1
+      const closedGeneration = activeGeneration
       closeAllResources()
+      snapshot = {
+        ...snapshot,
+        connectionStatus: 'idle',
+        connectionId: null,
+        diagnosticRunning: false
+      }
+      emit(closedGeneration)
     },
     handleSignalMessage
   }

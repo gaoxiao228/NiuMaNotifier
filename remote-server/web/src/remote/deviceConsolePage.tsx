@@ -49,7 +49,9 @@ function createIdleSnapshot(): RemoteDeviceSessionSnapshot {
     diagnostics: {
       relay: emptyRpcResult(),
       webrtc: emptyRpcResult()
-    }
+    },
+    diagnosticReport: null,
+    diagnosticRunning: false
   }
 }
 

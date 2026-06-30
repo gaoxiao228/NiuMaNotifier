@@ -45,6 +45,7 @@ type Harness = {
   }
   relayClient: RelayClient & { send: MockFn<(value: unknown) => void>; close: MockFn<() => void> }
   webRtcClient: WebRtcTransport & { send: MockFn<(value: unknown) => void>; close: MockFn<() => void> }
+  connectionsApi: { create: MockFn<(deviceId: string, clientId: string) => Promise<ConnectionCreateResult>> }
   getRelayOptions(): RelayClientOptions
   getWebRtcOptions(): WebRtcTransportOptions
 }
@@ -56,6 +57,11 @@ function createHarness(
   let signalOptions: ConnectionClientOptions | null = null
   let relayOptions: RelayClientOptions | null = null
   let webRtcOptions: WebRtcTransportOptions | null = null
+  const connectionsApi = {
+    create: vi
+      .fn<(deviceId: string, clientId: string) => Promise<ConnectionCreateResult>>()
+      .mockResolvedValue(createConnectionResult())
+  }
 
   const signalClient = {
     socket: {} as WebSocket,
@@ -84,7 +90,7 @@ function createHarness(
 
   const controller = createRemoteDeviceSessionController({
     device: createDevice(),
-    connectionsApi: { create: vi.fn().mockResolvedValue(createConnectionResult()) },
+    connectionsApi,
     clientId: 'client-1',
     createConnection: (options) => {
       signalOptions = options
@@ -110,6 +116,7 @@ function createHarness(
     signalClient,
     relayClient,
     webRtcClient,
+    connectionsApi,
     getRelayOptions() {
       if (!relayOptions) throw new Error('relay options missing')
       return relayOptions
@@ -127,10 +134,58 @@ async function connectAndAccept(harness: Harness) {
   await Promise.resolve()
 }
 
-function latest(harness: Harness): RemoteDeviceSessionSnapshot {
-  const snapshot = harness.snapshots.at(-1)
-  if (!snapshot) throw new Error('snapshot missing')
+function latest(harness: { snapshots: RemoteDeviceSessionSnapshot[] }) {
+  const snapshot = harness.snapshots[harness.snapshots.length - 1]
+  if (!snapshot) throw new Error('expected at least one controller snapshot')
   return snapshot
+}
+
+async function openAcceptedConnection(harness: Harness) {
+  await Promise.resolve()
+  await Promise.resolve()
+  harness.signalClient.onStatus('accepted')
+  await Promise.resolve()
+}
+
+function openReadyRelay(relayOptions: RelayClientOptions) {
+  relayOptions.onOpen()
+  relayOptions.onReady()
+}
+
+function openWebRtc(harness: Harness) {
+  harness.getWebRtcOptions().onOpen()
+}
+
+function respondWebRtcError(harness: Harness, method: string, error: { code: string; message: string }) {
+  const request = harness.webRtcClient.send.mock.calls
+    .map((call) => call[0] as { id?: string; method?: string })
+    .find((item) => item.method === method)
+  if (!request?.id) throw new Error(`request missing: ${method}`)
+  harness.getWebRtcOptions().onPayload({
+    version: 1,
+    type: 'response',
+    id: request.id,
+    ok: false,
+    error,
+    transport: { kind: 'webrtc' }
+  })
+}
+
+async function emitSessionGroup(harness: Harness, value: unknown) {
+  respondRelay(harness, 'local_api.stream', { stream_id: 'stream_1' })
+  await Promise.resolve()
+  harness.getRelayOptions().onPayload({
+    version: 1,
+    type: 'notification',
+    method: 'local_api.stream.event',
+    params: {
+      stream_id: 'stream_1',
+      event: 'session_project_groups',
+      id: '1',
+      data: value
+    }
+  })
+  await Promise.resolve()
 }
 
 function openRelay(harness: Harness) {
@@ -151,6 +206,27 @@ function respondRelay(harness: Harness, method: string, result: unknown) {
     ok: true,
     result
   })
+}
+
+function respondLatestRelay(harness: Harness, method: string, result: unknown) {
+  const request = [...harness.relayClient.send.mock.calls]
+    .reverse()
+    .map((call) => call[0] as { id?: string; method?: string })
+    .find((item) => item.method === method)
+  if (!request?.id) throw new Error(`request missing: ${method}`)
+  harness.getRelayOptions().onPayload({
+    version: 1,
+    type: 'response',
+    id: request.id,
+    ok: true,
+    result
+  })
+}
+
+function countRelayRequests(harness: Harness, method: string): number {
+  return harness.relayClient.send.mock.calls
+    .map((call) => call[0] as { method?: string })
+    .filter((item) => item.method === method).length
 }
 
 async function openRelayAndEmitSessionGroups(harness: Harness, value: unknown) {
@@ -196,6 +272,257 @@ describe('createRemoteDeviceSessionController', () => {
         transport: { kind: 'relay' }
       })
     )
+  })
+
+  it('creates a connection when diagnostics run without an active session', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 100 })
+
+    await harness.controller.runDiagnostics()
+
+    expect(harness.connectionsApi.create).toHaveBeenCalledTimes(1)
+    expect(latest(harness).diagnosticReport?.steps.some((step) => step.key === 'connection_create')).toBe(true)
+  })
+
+  it('keeps diagnostics running while creating a connection and ignores duplicate runs', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 100 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+
+    expect(latest(harness).diagnosticRunning).toBe(true)
+    await harness.controller.runDiagnostics()
+    expect(harness.connectionsApi.create).toHaveBeenCalledTimes(1)
+
+    await diagnosticPromise
+  })
+
+  it('creates a new connection for diagnostics after the controller closes existing resources', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 100 })
+    await connectAndAccept(harness)
+    expect(harness.connectionsApi.create).toHaveBeenCalledTimes(1)
+
+    harness.controller.close()
+    await harness.controller.runDiagnostics()
+
+    expect(harness.connectionsApi.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('creates a new diagnostics connection when accepted signaling has lost remote resources', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 100 })
+    await connectAndAccept(harness)
+    openRelay(harness)
+    expect(harness.connectionsApi.create).toHaveBeenCalledTimes(1)
+
+    harness.getRelayOptions().onClose()
+    expect(latest(harness).connectionStatus).toBe('accepted')
+
+    await harness.controller.runDiagnostics()
+
+    expect(harness.connectionsApi.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let stale diagnostics write into a newer connection generation', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 100 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    harness.controller.close()
+    await harness.controller.connect()
+    harness.signalClient.onStatus('accepted')
+    await Promise.resolve()
+
+    await vi.advanceTimersByTimeAsync(100)
+    await diagnosticPromise
+
+    expect(latest(harness).diagnosticReport).toBeNull()
+    expect(latest(harness).diagnosticRunning).toBe(false)
+  })
+
+  it('emits diagnostics as stopped when closed during a diagnostics run', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 100 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    expect(latest(harness).diagnosticRunning).toBe(true)
+
+    harness.controller.close()
+    await diagnosticPromise
+
+    expect(latest(harness).connectionStatus).toBe('idle')
+    expect(latest(harness).diagnosticRunning).toBe(false)
+  })
+
+  it('finishes diagnostics when connection creation hangs', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness({
+      device: { ...createDevice(), online: true },
+      rpcTimeoutMs: 100,
+      connectionsApi: { create: vi.fn<() => Promise<ConnectionCreateResult>>(() => new Promise(() => {})) }
+    })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(150)
+    await diagnosticPromise
+
+    const connectionStep = latest(harness).diagnosticReport?.steps.find((step) => step.key === 'connection_create')
+    expect(latest(harness).diagnosticRunning).toBe(false)
+    expect(connectionStep?.status).toBe('failed')
+  })
+
+  it('reruns relay diagnostics and session reads for an existing accepted connection', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true } })
+    await connectAndAccept(harness)
+    openRelay(harness)
+    respondRelay(harness, 'rpc.ping', { pong: true })
+    await emitSessionGroup(harness, { list: [{ project_name: 'old' }], page: 1, page_size: 20, total: 1 })
+    const pingCountBefore = countRelayRequests(harness, 'rpc.ping')
+    const streamCountBefore = countRelayRequests(harness, 'local_api.stream')
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+
+    expect(countRelayRequests(harness, 'rpc.ping')).toBeGreaterThan(pingCountBefore)
+    expect(countRelayRequests(harness, 'local_api.stream')).toBeGreaterThan(streamCountBefore)
+
+    respondLatestRelay(harness, 'rpc.ping', { pong: true })
+    respondLatestRelay(harness, 'local_api.stream', { stream_id: 'stream_2' })
+    await Promise.resolve()
+    harness.getRelayOptions().onPayload({
+      version: 1,
+      type: 'notification',
+      method: 'local_api.stream.event',
+      params: {
+        stream_id: 'stream_2',
+        event: 'session_project_groups',
+        id: '2',
+        data: { list: [], page: 1, page_size: 20, total: 0 }
+      }
+    })
+    await Promise.resolve()
+    await diagnosticPromise
+  })
+
+  it('fails pending relay diagnostics immediately when relay closes', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 1_000 })
+    await connectAndAccept(harness)
+    openRelay(harness)
+    respondRelay(harness, 'rpc.ping', { pong: true })
+    await emitSessionGroup(harness, { list: [], page: 1, page_size: 20, total: 0 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    harness.getRelayOptions().onClose()
+    await diagnosticPromise
+
+    const relayStep = latest(harness).diagnosticReport?.steps.find((step) => step.key === 'relay_rpc_ping')
+    expect(relayStep).toMatchObject({
+      status: 'failed',
+      message: 'relay_closed'
+    })
+  })
+
+  it('fails pending WebRTC diagnostics when relay close tears down remote resources', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 1_000 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await openAcceptedConnection(harness)
+    openReadyRelay(harness.getRelayOptions())
+    respondRelay(harness, 'rpc.ping', { pong: true })
+    openWebRtc(harness)
+    harness.getRelayOptions().onClose()
+    expect(latest(harness).diagnostics.webrtc).toEqual({
+      status: 'error',
+      value: 'transport_closed'
+    })
+    await diagnosticPromise
+
+    const webRtcStep = latest(harness).diagnosticReport?.steps.find((step) => step.key === 'webrtc_rpc_ping')
+    expect(webRtcStep).toMatchObject({
+      status: 'failed',
+      message: 'transport_closed'
+    })
+  })
+
+  it('waits longer than 250ms for diagnostics connection acceptance', async () => {
+    vi.useFakeTimers()
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 1_000 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(latest(harness).diagnosticRunning).toBe(true)
+
+    await openAcceptedConnection(harness)
+    await vi.advanceTimersByTimeAsync(50)
+    openReadyRelay(harness.getRelayOptions())
+    respondRelay(harness, 'rpc.ping', { pong: true })
+    await vi.advanceTimersByTimeAsync(50)
+    openWebRtc(harness)
+    respondWebRtcError(harness, 'rpc.ping', { code: 'timeout', message: 'WebRTC ping timeout' })
+    await vi.advanceTimersByTimeAsync(50)
+    await emitSessionGroup(harness, { list: [], page: 1, page_size: 20, total: 0 })
+    await vi.advanceTimersByTimeAsync(50)
+
+    await diagnosticPromise
+  })
+
+  it('fails diagnostics immediately when signaling rejects the connection', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 1_000 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    await Promise.resolve()
+    harness.signalClient.onStatus('rejected')
+    await diagnosticPromise
+
+    const connectionStep = latest(harness).diagnosticReport?.steps.find((step) => step.key === 'connection_create')
+    expect(connectionStep).toMatchObject({
+      status: 'failed',
+      message: 'connection_rejected'
+    })
+    expect(latest(harness).diagnosticRunning).toBe(false)
+  })
+
+  it('fails diagnostics immediately when signaling closes the connection', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true }, rpcTimeoutMs: 1_000 })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await Promise.resolve()
+    await Promise.resolve()
+    harness.signalClient.onStatus('closed')
+    await diagnosticPromise
+
+    const report = latest(harness).diagnosticReport
+    const connectionStep = report?.steps.find((step) => step.key === 'connection_create')
+    expect(connectionStep).toMatchObject({
+      status: 'failed',
+      message: 'connection_closed'
+    })
+    expect(report?.steps.filter((step) => step.status === 'skipped').map((step) => step.key)).toEqual([
+      'relay_rpc_ping',
+      'webrtc_rpc_ping',
+      'session_project_groups'
+    ])
+    expect(latest(harness).diagnosticRunning).toBe(false)
+  })
+
+  it('reports degraded when relay ping works and WebRTC ping fails', async () => {
+    const harness = createHarness({ device: { ...createDevice(), online: true } })
+
+    const diagnosticPromise = harness.controller.runDiagnostics()
+    await openAcceptedConnection(harness)
+    openReadyRelay(harness.getRelayOptions())
+    respondRelay(harness, 'rpc.ping', { pong: true })
+    openWebRtc(harness)
+    respondWebRtcError(harness, 'rpc.ping', { code: 'timeout', message: 'WebRTC ping timeout' })
+    await emitSessionGroup(harness, { list: [], page: 1, page_size: 20, total: 0 })
+
+    await diagnosticPromise
+
+    expect(latest(harness).diagnosticReport?.overall).toBe('degraded')
   })
 
   it('marks relay diagnostics ready only after the relay RPC ping responds', async () => {
@@ -422,6 +749,7 @@ describe('createRemoteDeviceSessionController', () => {
     const countBeforeClose = harness.snapshots.length
 
     harness.controller.close()
+    const countAfterClose = harness.snapshots.length
     harness.getRelayOptions().onPayload({
       version: 1,
       type: 'response',
@@ -432,7 +760,9 @@ describe('createRemoteDeviceSessionController', () => {
     harness.getRelayOptions().onClose()
     harness.getWebRtcOptions().onOpen()
 
-    expect(harness.snapshots).toHaveLength(countBeforeClose)
+    expect(countAfterClose).toBe(countBeforeClose + 1)
+    expect(harness.snapshots).toHaveLength(countAfterClose)
+    expect(latest(harness).connectionStatus).toBe('idle')
     expect(harness.signalClient.close).toHaveBeenCalledTimes(1)
     expect(harness.relayClient.close).toHaveBeenCalledTimes(1)
     expect(harness.webRtcClient.close).toHaveBeenCalledTimes(1)
