@@ -1,12 +1,19 @@
 import { ConfigProvider, theme } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createAuthApi } from './api/authApi.js'
+import { createConnectionsApi } from './api/connectionsApi.js'
 import { createDevicesApi, type RemoteDevice } from './api/devicesApi.js'
 import { createHttpClient } from './api/httpClient.js'
 import { createAuthStore, type AuthSession } from './auth/authStore.js'
 import { LoginPage } from './auth/loginPage.js'
 import { DeviceListPage } from './devices/deviceListPage.js'
 import { I18nProvider, useI18n } from './i18n/index.js'
+import {
+  createRemoteDeviceSessionController,
+  type RemoteDeviceSessionSnapshot
+} from './remote/remoteDeviceSessionController.js'
+import { getStableClientId } from './remote/clientId.js'
+import { SessionConsolePage } from './sessions/sessionConsolePage.js'
 import { toDisplayErrorMessage } from './shared/errorMessage.js'
 
 function resolveRemoteServerUrl(): string {
@@ -22,6 +29,7 @@ function ClientShell() {
   const [session, setSession] = useState<AuthSession>(() => authStore.getSnapshot())
   const [devices, setDevices] = useState<RemoteDevice[]>([])
   const [selectedDevice, setSelectedDevice] = useState<RemoteDevice | null>(null)
+  const [sessionSnapshot, setSessionSnapshot] = useState<RemoteDeviceSessionSnapshot | null>(null)
   const [loginLoading, setLoginLoading] = useState(false)
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -56,6 +64,7 @@ function ClientShell() {
   )
   const authApi = useMemo(() => createAuthApi(http), [http])
   const devicesApi = useMemo(() => createDevicesApi(http), [http])
+  const connectionsApi = useMemo(() => createConnectionsApi(http), [http])
 
   const loadDevices = useCallback(async () => {
     setDevicesLoading(true)
@@ -79,6 +88,33 @@ function ClientShell() {
     }
   }, [loadDevices, selectedDevice, session.accessToken])
 
+  useEffect(() => {
+    if (!selectedDevice || !session.accessToken) {
+      setSessionSnapshot(null)
+      return
+    }
+
+    let closed = false
+    const controller = createRemoteDeviceSessionController({
+      device: selectedDevice,
+      connectionsApi,
+      clientId: getStableClientId(),
+      onSnapshot: (snapshot) => {
+        if (!closed) setSessionSnapshot(snapshot)
+      }
+    })
+
+    void controller.connect().catch(() => {
+      // controller 已将常规连接错误写入 snapshot；这里只兜底处理异常 reject。
+      if (!closed) setSessionSnapshot((current) => current)
+    })
+
+    return () => {
+      closed = true
+      controller.close()
+    }
+  }, [connectionsApi, selectedDevice, session.accessToken])
+
   async function handleLogin(email: string, password: string) {
     setLoginLoading(true)
     setError(null)
@@ -99,8 +135,15 @@ function ClientShell() {
   }
 
   function handleLogout() {
+    setSelectedDevice(null)
+    setSessionSnapshot(null)
     authStore.clear()
     setError(null)
+  }
+
+  function handleBackToDevices() {
+    setSelectedDevice(null)
+    setSessionSnapshot(null)
   }
 
   if (!session.accessToken || !session.user) {
@@ -114,25 +157,12 @@ function ClientShell() {
   if (selectedDevice) {
     return (
       <main className="client-app-shell app-wide">
-        <section className="session-placeholder" aria-labelledby="selected-device-title">
-          <div>
-            <h1 id="selected-device-title">{t('selected_device_title')}</h1>
-            <p>{t('selected_device_description')}</p>
-          </div>
-          <div className="selected-device-summary">
-            <span>{t('selected_device_label')}</span>
-            <strong>{selectedDevice.name}</strong>
-            <code>{selectedDevice.id}</code>
-          </div>
-          <div className="placeholder-actions">
-            <button type="button" onClick={() => setSelectedDevice(null)}>
-              {t('back_to_devices_button')}
-            </button>
-            <button type="button" onClick={handleLogout}>
-              {t('logout_button')}
-            </button>
-          </div>
-        </section>
+        <SessionConsolePage
+          device={selectedDevice}
+          snapshot={sessionSnapshot}
+          onBack={handleBackToDevices}
+          onLogout={handleLogout}
+        />
       </main>
     )
   }

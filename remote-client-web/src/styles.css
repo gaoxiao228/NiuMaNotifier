@@ -78,7 +78,8 @@ input {
 }
 
 .device-page,
-.session-placeholder {
+.session-placeholder,
+.session-console-page {
   width: min(1040px, 100%);
 }
 
@@ -186,6 +187,145 @@ input {
   cursor: pointer;
 }
 
+.session-console-page {
+  display: grid;
+  gap: 14px;
+}
+
+.session-console-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.session-toolbar-main {
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.session-toolbar-main h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  line-height: 1.25;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-device-id {
+  display: block;
+  margin-top: 2px;
+  color: #6b7890;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.session-connection-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dfe5f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.session-status-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #edf1f7;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.session-status-item span {
+  color: #53627a;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.session-status-item .ant-tag {
+  margin-inline-end: 0;
+}
+
+.session-error {
+  margin: 0;
+}
+
+.session-list-panel {
+  min-height: 360px;
+  padding: 8px 20px 12px;
+  border: 1px solid #dfe5f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.session-groups-list .ant-list-empty-text {
+  padding: 56px 0;
+}
+
+.session-row {
+  align-items: flex-start;
+}
+
+.session-row-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-row-title span {
+  min-width: 0;
+  color: #172033;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.session-row-title .ant-tag {
+  margin-inline-end: 0;
+  flex: 0 0 auto;
+}
+
+.session-row-body p {
+  margin: 4px 0 0;
+  color: #53627a;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.session-row-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 0.8fr) minmax(160px, 1fr);
+  gap: 12px;
+  margin: 10px 0 0;
+}
+
+.session-row-meta dt {
+  color: #6b7890;
+  font-size: 0.76rem;
+}
+
+.session-row-meta dd {
+  margin: 3px 0 0;
+  color: #253149;
+  overflow-wrap: anywhere;
+}
+
+.session-list-summary {
+  width: 100%;
+  justify-content: flex-end;
+  padding-top: 8px;
+  color: #53627a;
+}
+
 @media (max-width: 760px) {
   .client-app-shell {
     place-items: stretch;
@@ -207,5 +347,23 @@ input {
 
   .device-meta {
     grid-template-columns: 1fr;
+  }
+
+  .session-console-toolbar,
+  .session-toolbar-main {
+    align-items: flex-start;
+  }
+
+  .session-console-toolbar {
+    display: grid;
+  }
+
+  .session-connection-strip,
+  .session-row-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .session-row-title {
+    align-items: flex-start;
   }
 }
