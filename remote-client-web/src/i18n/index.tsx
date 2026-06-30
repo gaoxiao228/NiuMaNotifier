@@ -1,8 +1,11 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
 import { messages, type MessageKey, type SupportedLanguage, supportedLanguages } from './messages.js'
+
+const languageStorageKey = 'niuma_remote_client_language'
 
 type I18nContextValue = {
   language: SupportedLanguage
+  setLanguage: (language: SupportedLanguage) => void
   t: (key: MessageKey) => string
 }
 
@@ -31,11 +34,25 @@ export function detectLanguage(language?: string): SupportedLanguage {
   return 'en'
 }
 
+function readStoredLanguage(): SupportedLanguage | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null
+  const stored = window.localStorage.getItem(languageStorageKey)
+  return supportedLanguages.includes(stored as SupportedLanguage) ? (stored as SupportedLanguage) : null
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const language = detectLanguage()
+  const [language, setLanguageState] = useState<SupportedLanguage>(() => readStoredLanguage() ?? detectLanguage())
+  function setLanguage(nextLanguage: SupportedLanguage) {
+    setLanguageState(nextLanguage)
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(languageStorageKey, nextLanguage)
+    }
+  }
+
   const value = useMemo<I18nContextValue>(
     () => ({
       language,
+      setLanguage,
       t: (key) => messages[language][key] ?? messages.en[key] ?? key
     }),
     [language]

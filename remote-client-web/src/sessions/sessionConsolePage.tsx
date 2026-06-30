@@ -2,6 +2,7 @@ import { ArrowLeftOutlined, LogoutOutlined } from '@ant-design/icons'
 import { Alert, Button, Space, Tag } from 'antd'
 
 import type { RemoteDevice } from '../api/devicesApi.js'
+import { LanguageSelect } from '../i18n/LanguageSelect.js'
 import { useI18n } from '../i18n/index.js'
 import type {
   RemoteDeviceActiveTransport,
@@ -150,9 +151,12 @@ export function SessionConsolePage({ device, snapshot, onBack, onLogout }: Sessi
             <span className="session-device-id">{device.id}</span>
           </div>
         </div>
-        <Button icon={<LogoutOutlined />} aria-label={t('logout_button')} onClick={onLogout}>
-          {t('logout_button')}
-        </Button>
+        <Space wrap>
+          <LanguageSelect />
+          <Button icon={<LogoutOutlined />} aria-label={t('logout_button')} onClick={onLogout}>
+            {t('logout_button')}
+          </Button>
+        </Space>
       </header>
 
       <div className="session-connection-strip" aria-label={t('connection_summary_label')}>

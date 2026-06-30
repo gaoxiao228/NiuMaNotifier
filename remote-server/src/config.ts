@@ -7,6 +7,7 @@ const envSchema = z.object({
   REMOTE_SERVER_PUBLIC_URL: z.string().url().default('http://127.0.0.1:27880'),
   REMOTE_SERVER_BIND: z.string().default('0.0.0.0'),
   REMOTE_SERVER_PORT: z.coerce.number().int().positive().default(27880),
+  REMOTE_SERVER_CORS_ORIGINS: z.string().default('http://127.0.0.1:27883'),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_PRIVATE_KEY: z.string().min(1).optional(),
@@ -64,6 +65,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env) {
     publicUrl: parsed.REMOTE_SERVER_PUBLIC_URL,
     bind: parsed.REMOTE_SERVER_BIND,
     port: parsed.REMOTE_SERVER_PORT,
+    corsOrigins: parsed.REMOTE_SERVER_CORS_ORIGINS.split(',').map((item) => item.trim()).filter(Boolean),
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     jwtPrivateKey: requiredKey(

@@ -13,6 +13,10 @@ import { registerDeviceSocket } from './ws/device-socket.js'
 import { registerRelaySocket } from './ws/relay-socket.js'
 import { ensureWebsocketRegistered } from './ws/websocket-plugin.js'
 
+const defaultCorsOrigins = ['http://127.0.0.1:27883']
+const corsMethods = 'GET,POST,OPTIONS'
+const corsHeaders = 'Authorization,Content-Type,Accept'
+
 export type AppDeps = {
   registerAuthRoutes?: (app: FastifyInstance) => Promise<void>
   registerDesktopLoginRoutes?: (app: FastifyInstance) => Promise<void>
@@ -22,11 +26,34 @@ export type AppDeps = {
   registerClientSocket?: (app: FastifyInstance, registry: DeviceSocketRegistry) => Promise<void>
   registerRelaySocket?: (app: FastifyInstance) => Promise<void>
   registerWebConsoleRoutes?: (app: FastifyInstance) => Promise<void>
+  corsOrigins?: string[]
+}
+
+function getAllowedCorsOrigin(origin: string | undefined, allowedOrigins: string[]) {
+  if (!origin) return null
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return origin
+  return null
 }
 
 export function buildApp(deps: AppDeps = {}) {
   const app = Fastify({ logger: false })
   const deviceSocketRegistry = createDeviceSocketRegistry()
+  const corsOrigins = deps.corsOrigins ?? defaultCorsOrigins
+
+  app.addHook('onRequest', async (request, reply) => {
+    const allowedOrigin = getAllowedCorsOrigin(request.headers.origin, corsOrigins)
+    if (!allowedOrigin) return
+
+    // 外部客户端使用 Bearer token，不需要 Cookie；这里只开放浏览器跨源 API/RPC 调用需要的最小头。
+    reply.header('Access-Control-Allow-Origin', allowedOrigin)
+    reply.header('Vary', 'Origin')
+    reply.header('Access-Control-Allow-Methods', corsMethods)
+    reply.header('Access-Control-Allow-Headers', corsHeaders)
+  })
+
+  app.options('/*', async (_request, reply) => {
+    return reply.status(204).send()
+  })
 
   void app.register(async (instance) => {
     if (deps.registerDeviceSocket || deps.registerClientSocket || deps.registerRelaySocket) {

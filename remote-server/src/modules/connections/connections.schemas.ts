@@ -20,7 +20,7 @@ export const signalOfferPayloadSchema = z.object({
 
 export const signalIceCandidatePayloadSchema = z.object({
   candidate: candidateSchema,
-  sdp_mid: z.string().min(1).max(160).nullable().optional(),
+  sdp_mid: z.string().max(160).nullable().optional(),
   sdp_mline_index: z.number().int().nonnegative().nullable().optional()
 })
 

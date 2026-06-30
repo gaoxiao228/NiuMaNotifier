@@ -1,5 +1,6 @@
 import { LoginOutlined } from '@ant-design/icons'
 import { Alert, Button, Form, Input } from 'antd'
+import { LanguageSelect } from '../i18n/LanguageSelect.js'
 import { useI18n } from '../i18n/index.js'
 
 export type LoginPageProps = {
@@ -23,6 +24,7 @@ export function LoginPage({ loading = false, error, onLogin }: LoginPageProps) {
   return (
     <section className="login-page" aria-labelledby="remote-client-title">
       <div className="login-copy">
+        <LanguageSelect />
         <h1 id="remote-client-title">{t('app_title')}</h1>
         <p>{t('login_description')}</p>
       </div>

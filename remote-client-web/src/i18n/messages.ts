@@ -4,6 +4,7 @@ export type SupportedLanguage = (typeof supportedLanguages)[number]
 export const messages = {
   'zh-CN': {
     app_title: 'NiuMa Remote Client',
+    language_label: '界面语言',
     login_title: '登录远程客户端',
     login_description: '使用远程访问凭证进入你的设备会话。',
     login_button: '登录',
@@ -73,6 +74,7 @@ export const messages = {
   },
   'zh-TW': {
     app_title: 'NiuMa Remote Client',
+    language_label: '介面語言',
     login_title: '登入遠端用戶端',
     login_description: '使用遠端存取憑證進入你的裝置會話。',
     login_button: '登入',
@@ -142,6 +144,7 @@ export const messages = {
   },
   en: {
     app_title: 'NiuMa Remote Client',
+    language_label: 'Language',
     login_title: 'Sign in to remote client',
     login_description: 'Use remote access credentials to enter your device session.',
     login_button: 'Sign in',
@@ -211,6 +214,7 @@ export const messages = {
   },
   ja: {
     app_title: 'NiuMa Remote Client',
+    language_label: '表示言語',
     login_title: 'リモートクライアントにサインイン',
     login_description: 'リモートアクセス資格情報でデバイスセッションに入ります。',
     login_button: 'サインイン',
@@ -280,6 +284,7 @@ export const messages = {
   },
   ko: {
     app_title: 'NiuMa Remote Client',
+    language_label: '화면 언어',
     login_title: '원격 클라이언트 로그인',
     login_description: '원격 접근 자격 증명으로 기기 세션에 들어갑니다.',
     login_button: '로그인',
@@ -349,6 +354,7 @@ export const messages = {
   },
   de: {
     app_title: 'NiuMa Remote Client',
+    language_label: 'Sprache',
     login_title: 'Beim Remote-Client anmelden',
     login_description: 'Mit Remote-Zugriffsdaten die Gerätesitzung öffnen.',
     login_button: 'Anmelden',

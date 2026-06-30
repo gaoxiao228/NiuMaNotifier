@@ -67,6 +67,21 @@ describe('client signaling prerequisites', () => {
     ).toBe('signal.offer')
   })
 
+  it('accepts browser ice candidates with empty sdp mid', () => {
+    expect(
+      clientSignalMessageSchema.parse({
+        version: 1,
+        id: 'msg_ice',
+        type: 'signal.ice_candidate',
+        data: {
+          candidate: 'candidate:1 1 udp 2122260223 192.0.2.1 54400 typ host',
+          sdp_mid: '',
+          sdp_mline_index: 0
+        }
+      }).type
+    ).toBe('signal.ice_candidate')
+  })
+
   it('rejects client signal messages missing protocol required fields', () => {
     expect(() => clientSignalMessageSchema.parse({
       version: 1,

@@ -28,4 +28,35 @@ describe('health route', () => {
       data: null
     })
   })
+
+  it('allows configured remote client origin for browser api calls', async () => {
+    const app = buildApp({ corsOrigins: ['http://127.0.0.1:27883'] })
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { origin: 'http://127.0.0.1:27883' }
+    })
+
+    expect(response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:27883')
+    expect(response.headers.vary).toBe('Origin')
+  })
+
+  it('returns empty preflight response for configured remote client origin', async () => {
+    const app = buildApp({ corsOrigins: ['http://127.0.0.1:27883'] })
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/auth/login',
+      headers: {
+        origin: 'http://127.0.0.1:27883',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization,content-type'
+      }
+    })
+
+    expect(response.statusCode).toBe(204)
+    expect(response.body).toBe('')
+    expect(response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:27883')
+    expect(response.headers['access-control-allow-methods']).toBe('GET,POST,OPTIONS')
+    expect(response.headers['access-control-allow-headers']).toBe('Authorization,Content-Type,Accept')
+  })
 })

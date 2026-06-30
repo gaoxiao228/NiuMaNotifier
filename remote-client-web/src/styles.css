@@ -45,6 +45,23 @@ input {
   letter-spacing: 0;
 }
 
+.language-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 190px;
+  color: #53627a;
+  font-size: 0.86rem;
+}
+
+.language-select .ant-select {
+  min-width: 118px;
+}
+
+.login-copy .language-select {
+  margin-bottom: 18px;
+}
+
 .login-copy p,
 .page-toolbar p,
 .session-placeholder p {

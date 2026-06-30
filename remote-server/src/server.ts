@@ -16,7 +16,8 @@ const app = buildApp({
   registerConnectionsRoutes,
   registerDeviceSocket,
   registerClientSocket,
-  registerRelaySocket
+  registerRelaySocket,
+  corsOrigins: config.corsOrigins
 })
 
 await app.listen({ host: config.bind, port: config.port })

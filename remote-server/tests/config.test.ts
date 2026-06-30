@@ -13,7 +13,21 @@ describe('remote server config', () => {
 
     expect(config.port).toBe(27880)
     expect(config.bind).toBe('0.0.0.0')
+    expect(config.corsOrigins).toEqual(['http://127.0.0.1:27883'])
     expect(config.registrationMode).toBe('admin_invite')
+  })
+
+  it('parses explicit remote client cors origins', () => {
+    const config = loadConfigFromEnv({
+      REMOTE_SERVER_CORS_ORIGINS: 'http://127.0.0.1:27883, https://client.example.com ',
+      DATABASE_URL: 'postgres://niuma:pw@postgres:5432/niuma_remote',
+      REDIS_URL: 'redis://redis:6379',
+      JWT_PRIVATE_KEY: 'private',
+      JWT_PUBLIC_KEY: 'public',
+      TOKEN_PEPPER: 'pepper'
+    })
+
+    expect(config.corsOrigins).toEqual(['http://127.0.0.1:27883', 'https://client.example.com'])
   })
 
   it('rejects default host-facing application ports', () => {

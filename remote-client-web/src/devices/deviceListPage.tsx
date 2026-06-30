@@ -2,6 +2,7 @@ import { LogoutOutlined, ReloadOutlined, SelectOutlined } from '@ant-design/icon
 import { Button, Empty, List, Space, Tag } from 'antd'
 
 import type { RemoteDevice } from '../api/devicesApi.js'
+import { LanguageSelect } from '../i18n/LanguageSelect.js'
 import { useI18n } from '../i18n/index.js'
 
 export type DeviceListPageProps = {
@@ -57,6 +58,7 @@ export function DeviceListPage({
           <span className="user-email">{userEmail}</span>
         </div>
         <Space wrap>
+          <LanguageSelect />
           <Button icon={<ReloadOutlined />} onClick={onRefresh} loading={loading}>
             {t('refresh_button')}
           </Button>
