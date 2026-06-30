@@ -10,6 +10,12 @@
 
 `remote-client-web` 是独立外部 Web 客户端，面向普通用户。它通过 `remote-server` 登录账号、查看已绑定设备、连接在线设备，并查看设备上的远程 session 列表。后续 iOS、Android、Windows 桌面端也应按同一套 HTTP / WebSocket / Relay / WebRTC / RPC 协议接入。
 
+外部客户端协议细节见：
+
+```text
+docs/integration/remote-external-client-api_zh.md
+```
+
 ## 默认本地入口
 
 Docker Compose 本地部署默认使用以下宿主机端口：
