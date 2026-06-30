@@ -15,6 +15,10 @@ export type RefreshResponse = {
   user: AuthUser
 }
 
+export type MeResponse = {
+  user: AuthUser
+}
+
 export function createAuthApi(http: HttpClient) {
   return {
     login(email: string, password: string) {
@@ -27,7 +31,8 @@ export function createAuthApi(http: HttpClient) {
       return http.post<null>('/api/v1/auth/logout', { refresh_token: refreshToken })
     },
     me() {
-      return http.get<AuthUser>('/api/v1/auth/me')
+      // 后端 envelope 的 data 是 { user }，这里保留完整 data 结构给调用方。
+      return http.get<MeResponse>('/api/v1/auth/me')
     }
   }
 }
