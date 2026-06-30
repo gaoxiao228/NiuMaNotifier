@@ -51,6 +51,21 @@ VITE_REMOTE_SERVER_URL=http://127.0.0.1:27880
 
 Docker Compose 默认在构建 `remote-client-web` 镜像时写入 `http://127.0.0.1:27880`，对应本地 `remote-admin` 和远程服务端 API 的默认入口。
 
+如果需要指向线上远程服务端，可以在构建镜像时显式传入 build arg：
+
+```bash
+docker build \
+  -f remote-client-web/Dockerfile \
+  --build-arg VITE_REMOTE_SERVER_URL=https://remote.example.com \
+  -t niuma-remote-client-web .
+```
+
+使用 Docker Compose 时，在 `remote-server/docker-compose.yml` 的 `remote-client-web.build.args.VITE_REMOTE_SERVER_URL` 中覆盖该值，然后重新执行：
+
+```bash
+docker compose build remote-client-web
+```
+
 ## 第一版范围
 
 第一版只实现外部客户端闭环：
