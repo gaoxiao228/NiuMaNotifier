@@ -6,6 +6,7 @@ import type {
 } from './api'
 import { translations, type LanguageCode } from './i18n'
 import { renderPluginIcon } from './pluginIcon'
+import { renderRemoteDiagnosticReport, type RemoteDiagnosticReport } from './remoteDiagnostics'
 import { escapeHtml } from './viewUtils'
 
 export type SettingsShellRenderOptions = {
@@ -36,8 +37,9 @@ export type RemoteSettingsRenderOptions = {
   language: LanguageCode
   settings: RemoteSettingsPayload | null
   agentStatus: RemoteAgentStatus | null
-  busyAction: 'save' | 'login' | 'logout' | null
+  busyAction: 'save' | 'login' | 'logout' | 'diagnostic' | null
   resultText: string
+  diagnosticReport?: RemoteDiagnosticReport | null
 }
 
 export function renderSettingsShell(options: SettingsShellRenderOptions) {
@@ -100,22 +102,35 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
   const saveBusy = options.busyAction === 'save'
   const loginBusy = options.busyAction === 'login'
   const logoutBusy = options.busyAction === 'logout'
+  const diagnosticBusy = options.busyAction === 'diagnostic'
   const serverUrl = settings?.server_url ?? ''
   const account = settings?.user?.email ?? t.remoteNotLoggedIn
   const device = settings?.device?.name ?? t.remoteNoBoundDevice
-  const bound = settings?.bound === true
+  const bound = isRemoteBound(settings)
   const agentStatus = options.agentStatus?.state
     ? translateRemoteAgentState(options.language, options.agentStatus.state)
     : t.loading
+  const availableTransports = displayRemoteTransports(
+    options.language,
+    options.agentStatus?.available_transports ?? []
+  )
+  const selectedTransport = options.agentStatus?.selected_transport
+    ? displayRemoteTransport(options.language, options.agentStatus.selected_transport)
+    : t.remoteTransportNone
+  const activeConnectionId = options.agentStatus?.active_connection_id ?? null
   return `
     <div class="settings-heading">
       <div>
         <h2>${escapeHtml(t.remoteAccess)}</h2>
         <p>${escapeHtml(t.remoteAccessDescription)}</p>
       </div>
-      <button id="remote-login" type="button" ${loginBusy ? 'disabled' : ''}>${escapeHtml(
-        loginBusy ? t.remoteLoginOpening : t.remoteLogin
-      )}</button>
+      ${
+        bound
+          ? ''
+          : `<button id="remote-login" type="button" ${loginBusy ? 'disabled' : ''}>${escapeHtml(
+              loginBusy ? t.remoteLoginOpening : t.remoteLogin
+            )}</button>`
+      }
     </div>
     <form id="remote-settings-form" class="remote-settings-form">
       <label class="plugin-config-field" for="remote-server-url">
@@ -153,10 +168,18 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
           : ''
       }
       ${
-        options.agentStatus?.active_connection_id
+        options.agentStatus
           ? `<dt>${escapeHtml(t.remoteActiveConnection)}</dt><dd>${escapeHtml(
-              options.agentStatus.active_connection_id
+              activeConnectionId || t.remoteNoActiveConnection
             )}</dd>`
+          : ''
+      }
+      ${
+        options.agentStatus && activeConnectionId
+          ? `<dt>${escapeHtml(t.remoteAvailableTransports)}</dt><dd>${escapeHtml(
+              availableTransports || t.remoteTransportNone
+            )}</dd>
+      <dt>${escapeHtml(t.remoteSelectedTransport)}</dt><dd>${escapeHtml(selectedTransport)}</dd>`
           : ''
       }
     </dl>
@@ -164,9 +187,36 @@ export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) 
       <button id="remote-logout" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(
         logoutBusy ? t.remoteLoggingOut : t.remoteLogout
       )}</button>
+      <button id="remote-diagnostics-run" type="button" ${diagnosticBusy ? 'disabled' : ''}>${escapeHtml(
+        diagnosticBusy ? t.remoteDiagnosticsRunning : t.remoteRunDiagnostics
+      )}</button>
     </div>
+    ${renderRemoteDiagnosticReport({
+      language: options.language,
+      report: options.diagnosticReport ?? null,
+      translations
+    })}
     ${options.resultText ? `<p id="remote-settings-result" class="settings-result">${escapeHtml(options.resultText)}</p>` : ''}
   `
+}
+
+function isRemoteBound(settings: RemoteSettingsPayload | null) {
+  // 保存设置后后端可能暂时无法重新判断凭据，但账号和设备摘要仍代表当前绑定对象。
+  return settings?.bound === true || Boolean(settings?.user && settings?.device)
+}
+
+function displayRemoteTransports(language: LanguageCode, transports: string[]) {
+  return transports
+    .map((transport) => displayRemoteTransport(language, transport))
+    .filter(Boolean)
+    .join(' / ')
+}
+
+function displayRemoteTransport(language: LanguageCode, transport: string) {
+  const t = translations[language]
+  if (transport === 'relay') return t.remoteTransportRelay
+  if (transport === 'webrtc') return t.remoteTransportWebrtc
+  return transport
 }
 
 export function translateRemoteAgentState(language: LanguageCode, state: string) {

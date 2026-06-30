@@ -370,3 +370,10 @@ if (!mediaRuleIncludes('@media (max-width: 720px)', '.event-center-row', 'grid-t
 if (css.includes('@media (max-width: 980px)')) {
   throw new Error('980px 断点会导致桌面窗口过早变成竖向布局')
 }
+
+if (
+  !css.includes('.remote-toggle span') ||
+  !ruleIncludes('.remote-toggle span', 'font-size: 13px;')
+) {
+  throw new Error('远程访问开关必须显示文字标签，不能继承插件开关的隐藏文字样式')
+}

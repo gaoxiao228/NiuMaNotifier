@@ -11,6 +11,7 @@ import {
   pollRemoteLogin,
   refreshMainState,
   removePlugin,
+  runRemoteAccessDiagnostics,
   runPluginAction,
   setPluginEnabled,
   savePluginConfig,
@@ -74,12 +75,18 @@ import { createLanguageController } from './languageController'
 import { collectPluginConfig, cssEscape, delay, pluginActionKey } from './pluginController'
 import { notificationPlugins } from './settingsController'
 import { createStateStreamClient, type StateStreamClient } from './sseClient'
+import {
+  createRemoteAgentStatusRefresh,
+  type RemoteAgentStatusRefreshController
+} from './remoteAgentStatusRefresh'
+import type { RemoteDiagnosticReport } from './remoteDiagnostics'
 import './styles.css'
 
 const languageChangedEvent = 'niuma-language-changed'
 const pluginTransitionPollDelayMs = 500
 const pluginTransitionPollMaxAttempts = 20
 const pluginRuntimeRefreshIntervalMs = 3_000
+const remoteAgentStatusRefreshIntervalMs = 1_000
 const stateStreamPath = '/api/v1/state/stream'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -93,6 +100,7 @@ let latestMainState: MainStatePayload | null = null
 let streamFallbackTimer: number | undefined
 let stateStreamClient: StateStreamClient | undefined
 let pluginRuntimeRefresh: PluginRuntimeRefreshController | undefined
+let remoteAgentStatusRefresh: RemoteAgentStatusRefreshController | undefined
 let clearBlockerConfirmTimer: number | undefined
 let clearBlockerNeedsConfirm = false
 let notificationResultText = ''
@@ -117,8 +125,9 @@ let notificationRecords: NotificationRecord[] = []
 let notificationRecordsLoaded = false
 let remoteSettings: RemoteSettingsPayload | null = null
 let remoteAgentStatus: RemoteAgentStatus | null = null
-let remoteSettingsBusyAction: 'save' | 'login' | 'logout' | null = null
+let remoteSettingsBusyAction: 'save' | 'login' | 'logout' | 'diagnostic' | null = null
 let remoteSettingsResultText = ''
+let remoteDiagnosticReport: RemoteDiagnosticReport | null = null
 let remoteLoginPollTimer: number | null = null
 let localApiUrlText = ''
 let localSseConnected = false
@@ -219,6 +228,22 @@ function startPluginRuntimeRefresh() {
   pluginRuntimeRefresh.start()
 }
 
+function startRemoteAgentStatusRefresh() {
+  if (!remoteAgentStatusRefresh) {
+    remoteAgentStatusRefresh = createRemoteAgentStatusRefresh({
+      intervalMs: remoteAgentStatusRefreshIntervalMs,
+      isActive: () => activeView === 'settings' && activeSettingsPanel === 'remote-access',
+      refresh: loadRemoteAgentStatus
+    })
+  }
+  // 外部客户端连接和 WebRTC 升级不会触发前端事件，远程访问页需要轮询本地状态快照。
+  remoteAgentStatusRefresh.start()
+}
+
+function stopRemoteAgentStatusRefresh() {
+  remoteAgentStatusRefresh?.stop()
+}
+
 function applyPluginSnapshot(snapshot: PluginManagementItem[]) {
   const nextPlugins = snapshot.map((plugin) =>
     mergePendingPluginTransition(plugin, pendingPluginTransition)
@@ -291,6 +316,7 @@ function renderActiveView() {
 
 function showDashboardView() {
   activeView = 'dashboard'
+  stopRemoteAgentStatusRefresh()
   renderActiveView()
 }
 
@@ -311,6 +337,7 @@ function showSettingsView() {
   }
   if (activeSettingsPanel === 'remote-access') {
     void loadRemoteAgentStatus()
+    startRemoteAgentStatusRefresh()
   }
 }
 
@@ -347,7 +374,8 @@ function renderRemoteSettings() {
     settings: remoteSettings,
     agentStatus: remoteAgentStatus,
     busyAction: remoteSettingsBusyAction,
-    resultText: remoteSettingsResultText
+    resultText: remoteSettingsResultText,
+    diagnosticReport: remoteDiagnosticReport
   })
 }
 
@@ -648,6 +676,9 @@ settingsViewEl?.addEventListener('click', async (event) => {
     }
     if (activeSettingsPanel === 'remote-access') {
       await loadRemoteAgentStatus()
+      startRemoteAgentStatusRefresh()
+    } else {
+      stopRemoteAgentStatusRefresh()
     }
     return
   }
@@ -674,6 +705,22 @@ settingsViewEl?.addEventListener('click', async (event) => {
     try {
       remoteSettings = await clearRemoteBinding()
       remoteSettingsResultText = translations[currentLanguage].remoteLogoutSuccess
+    } catch (error) {
+      remoteSettingsResultText =
+        error instanceof Error ? error.message : translations[currentLanguage].error
+    } finally {
+      remoteSettingsBusyAction = null
+      renderRemoteSettings()
+    }
+    return
+  }
+  if (target?.id === 'remote-diagnostics-run') {
+    remoteSettingsBusyAction = 'diagnostic'
+    remoteSettingsResultText = ''
+    renderRemoteSettings()
+    try {
+      remoteDiagnosticReport = await runRemoteAccessDiagnostics()
+      await loadRemoteAgentStatus()
     } catch (error) {
       remoteSettingsResultText =
         error instanceof Error ? error.message : translations[currentLanguage].error

@@ -10,6 +10,7 @@ use niuma_core::models::ToolId;
 use niuma_core::platform::locale::{
     active_language, active_language_preference, set_active_language_preference, LanguagePreference,
 };
+use niuma_core::remote::credentials::RemoteCredentialStore;
 use niuma_core::plugin::{
     current_plugin_registry, default_user_plugin_dir, import_external_plugin_dir,
     listener_config_after_plugin_removed, plugin_uses_listener_config, remove_external_plugin,
@@ -135,6 +136,31 @@ pub(crate) fn get_remote_agent_status(
     ApiResponse::ok(serde_json::json!({
         "status": runtime_state.remote_agent_status.snapshot()
     }))
+}
+
+#[tauri::command]
+pub(crate) fn run_remote_access_diagnostics(
+    runtime_state: tauri::State<'_, AppRuntimeState>,
+) -> ApiResponse<serde_json::Value> {
+    let config = match runtime_state.store.remote_config() {
+        Ok(config) => config,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    };
+    let credential_store = crate::remote::commands::credential_store_for_data_dir(
+        NiumaStore::default_path()
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(std::env::temp_dir),
+    );
+    let has_credential = credential_store.load(&config.server_url).is_ok();
+    let report = crate::remote::diagnostics::diagnose_remote_access(
+        &config,
+        has_credential,
+        &runtime_state.remote_agent_status.snapshot(),
+        Utc::now(),
+    );
+
+    ApiResponse::ok(serde_json::json!({ "report": report }))
 }
 
 #[tauri::command]

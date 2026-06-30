@@ -90,6 +90,7 @@ fn main() {
             commands::get_remote_settings,
             commands::save_remote_settings,
             commands::get_remote_agent_status,
+            commands::run_remote_access_diagnostics,
             commands::clear_remote_binding,
             commands::start_remote_login,
             commands::poll_remote_login,

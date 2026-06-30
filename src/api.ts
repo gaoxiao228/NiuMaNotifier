@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { RemoteDiagnosticReport } from './remoteDiagnostics'
 
 export type ApiResponse<T> = {
   code: number
@@ -276,6 +277,8 @@ export type RemoteAgentStatus = {
   state: string
   last_error: string | null
   active_connection_id?: string | null
+  selected_transport?: 'relay' | 'webrtc' | null
+  available_transports?: Array<'relay' | 'webrtc'>
 }
 
 export type NotificationRecordStatus = 'pending' | 'sent' | 'failed' | 'skipped'
@@ -653,6 +656,16 @@ export async function getRemoteAgentStatus() {
     throw new Error(response.message)
   }
   return response.data.status
+}
+
+export async function runRemoteAccessDiagnostics() {
+  const response = await invoke<ApiResponse<{ report: RemoteDiagnosticReport }>>(
+    'run_remote_access_diagnostics'
+  )
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.report
 }
 
 export async function getLocalApiUrl() {

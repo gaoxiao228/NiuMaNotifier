@@ -1162,6 +1162,10 @@ select {
   max-width: 560px;
 }
 
+.remote-toggle span {
+  font-size: 13px;
+}
+
 .remote-binding-summary {
   display: grid;
   gap: 10px 16px;
@@ -1182,8 +1186,89 @@ select {
 
 .remote-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 18px;
+}
+
+.remote-diagnostics-report {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  max-width: 720px;
+  border: 1px solid #d6e0ec;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.remote-diagnostics-report h3,
+.remote-diagnostics-summary {
+  margin: 0;
+}
+
+.remote-diagnostics-summary {
+  color: #334155;
+  font-size: 13px;
+}
+
+.remote-diagnostics-steps {
+  display: grid;
+  margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.remote-diagnostics-step {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-top: 1px solid #e2e8f0;
+  padding: 8px 10px;
+}
+
+.remote-diagnostics-step:first-child {
+  border-top: 0;
+}
+
+.remote-diagnostics-step dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.remote-diagnostics-step dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: #53627a;
+  font-size: 12px;
+}
+
+.remote-diagnostics-step dd span {
+  overflow-wrap: anywhere;
+}
+
+.remote-diagnostics-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ffffff;
+  font-weight: 700;
+}
+
+.remote-diagnostics-status-passed {
+  border-color: #99d3ca;
+  color: #0f766e;
+}
+
+.remote-diagnostics-status-failed {
+  border-color: #fecaca;
+  color: #b42318;
 }
 
 .plugin-meta {
@@ -1599,6 +1684,7 @@ select {
 
   .plugin-config-fields,
   .plugin-management-action,
+  .remote-diagnostics-step,
   .event-center-row,
   .notification-record-header,
   .notification-record-meta {
