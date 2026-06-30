@@ -117,26 +117,47 @@ describe('DeviceListPage', () => {
     expect(screen.queryByText('Old device')).toBeNull()
   })
 
-  it('does not call connection creation while rendering online devices', async () => {
-    const createConnection = vi.fn()
+  it('does not request connection creation while rendering online devices', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 0,
+          message: 'ok',
+          data: {
+            list: [createDevice('offline-1', 'Offline laptop', false), createDevice('online-1', 'Desk Mac')]
+          }
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      )
+    )
+    const devicesApi = {
+      list: async () => {
+        const response = await fetch('/api/v1/devices/list')
+        const payload = (await response.json()) as { data: { list: RemoteDevice[] } }
+        return payload.data
+      }
+    }
+
+    render(<DeviceListPage devicesApi={devicesApi} t={t} />)
+
+    await screen.findByText('Desk Mac')
+    const requestedUrls = fetchMock.mock.calls.map(([input]) => String(input))
+
+    expect(requestedUrls).toContain('/api/v1/devices/list')
+    expect(requestedUrls).not.toContain('/api/v1/connections/create')
+  })
+
+  it('does not expose remote connection actions on the admin device list', async () => {
+    const onSelectDevice = vi.fn()
     await renderDeviceListWithDevices([
       createDevice('offline-1', 'Offline laptop', false),
       createDevice('online-1', 'Desk Mac')
     ])
 
     expect(screen.getAllByText('Desk Mac').length).toBeGreaterThan(0)
-    expect(createConnection).not.toHaveBeenCalled()
-  })
-
-  it('does not expose remote connection actions on the admin device list', async () => {
-    const onSelectDevice = vi.fn()
-    const createConnection = vi.fn()
-    await renderDeviceListWithDevices([createDevice('online-1', 'Desk Mac')])
-
     expect(screen.queryByRole('columnheader', { name: 'Connect' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Connect Desk Mac' })).toBeNull()
     expect(onSelectDevice).not.toHaveBeenCalled()
-    expect(createConnection).not.toHaveBeenCalled()
   })
 
   it('does not render remote sessions or connection diagnostics on the device list page', async () => {
