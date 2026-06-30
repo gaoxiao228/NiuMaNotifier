@@ -7,6 +7,7 @@ import { createAuthStore, type AuthSession } from './auth/authStore.js'
 import { LoginPage } from './auth/loginPage.js'
 import { DeviceListPage } from './devices/deviceListPage.js'
 import { I18nProvider, useI18n } from './i18n/index.js'
+import { toDisplayErrorMessage } from './shared/errorMessage.js'
 
 function resolveRemoteServerUrl(): string {
   const meta = import.meta as ImportMeta & { env?: Record<string, string | undefined> }
@@ -65,7 +66,7 @@ function ClientShell() {
     } catch (cause) {
       // 鉴权过期会由 HTTP client 清空 session；此处只处理仍处于登录态的普通列表错误。
       if (authStore.getSnapshot().accessToken) {
-        setError(cause instanceof Error ? cause.message : t('devices_load_error'))
+        setError(toDisplayErrorMessage(t, cause, 'devices_load_error'))
       }
     } finally {
       setDevicesLoading(false)
@@ -91,7 +92,7 @@ function ClientShell() {
       setSelectedDevice(null)
     } catch (cause) {
       if (authStore.getSnapshot().accessToken) return
-      setError(cause instanceof Error ? cause.message : t('login_error'))
+      setError(toDisplayErrorMessage(t, cause, 'login_error'))
     } finally {
       setLoginLoading(false)
     }

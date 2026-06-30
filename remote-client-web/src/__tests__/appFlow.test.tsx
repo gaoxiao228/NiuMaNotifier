@@ -108,4 +108,55 @@ describe('App login and device flow', () => {
       expect(screen.getByRole('heading', { name: 'Sign in to remote client' })).toBeInTheDocument()
     })
   })
+
+  it('shows a localized login error for network failures', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'user@example.com' }
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'secret-password' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    expect(await screen.findByText('Network connection failed. Check your connection and try again.')).toBeInTheDocument()
+    expect(screen.queryByText('api_error_network')).not.toBeInTheDocument()
+  })
+
+  it('shows a localized device loading error for network failures', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/auth/login')) {
+        return new Response(
+          envelope({
+            access_token: 'access-token',
+            refresh_token: 'refresh-token',
+            expires_at: '2026-07-01T00:00:00.000Z',
+            user
+          })
+        )
+      }
+      if (url.endsWith('/api/v1/devices/list')) {
+        throw new TypeError('Failed to fetch')
+      }
+      return new Response(envelope(null, 404, 'not found'), { status: 404 })
+    })
+
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'user@example.com' }
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'secret-password' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    expect(await screen.findByText('Network connection failed. Check your connection and try again.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Select a device' })).toBeInTheDocument()
+    expect(screen.queryByText('api_error_network')).not.toBeInTheDocument()
+  })
 })
