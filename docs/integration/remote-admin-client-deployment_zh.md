@@ -111,3 +111,55 @@ npm run admin:bootstrap
 3. 使用 `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` 对应管理员登录后台，应能进入设备管理页面。
 4. 如果外部客户端提示网络连接失败，优先检查 `REMOTE_SERVER_CORS_ORIGINS` 是否包含当前浏览器地址对应的完整 Origin。
 5. 如果外部客户端请求仍打到错误服务端，检查 `remote-client-web` 镜像是否用正确的 `VITE_REMOTE_SERVER_URL` 重新构建。
+
+## 脚本化验收
+
+基础 smoke 检查不需要账号，会验证：
+
+- `remote-server` 健康接口。
+- `remote-client-web` CORS 预检。
+- `remote-client-web` 页面可访问。
+
+运行：
+
+```bash
+cd remote-server
+npm run smoke:remote
+```
+
+默认检查本地 Docker 入口：
+
+```text
+REMOTE_SERVER_URL=http://127.0.0.1:27880
+REMOTE_CLIENT_WEB_URL=http://127.0.0.1:27883
+REMOTE_CLIENT_CORS_ORIGIN=http://localhost:27883
+```
+
+如果要验证普通账号登录、设备列表和普通用户不能登录后台：
+
+```bash
+cd remote-server
+SMOKE_USER_EMAIL=user@example.com \
+SMOKE_USER_PASSWORD=11111111 \
+SMOKE_EXPECT_USER_ADMIN_FORBIDDEN=true \
+npm run smoke:remote
+```
+
+如果要验证管理员账号登录后台：
+
+```bash
+cd remote-server
+SMOKE_ADMIN_EMAIL=admin@example.com \
+SMOKE_ADMIN_PASSWORD=change-me \
+npm run smoke:remote
+```
+
+线上环境可以覆盖入口：
+
+```bash
+cd remote-server
+REMOTE_SERVER_URL=https://remote.example.com \
+REMOTE_CLIENT_WEB_URL=https://client.example.com \
+REMOTE_CLIENT_CORS_ORIGIN=https://client.example.com \
+npm run smoke:remote
+```

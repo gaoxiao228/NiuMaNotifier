@@ -11,7 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "sh -c 'if [ -f dist/db/migrate.js ]; then node dist/db/migrate.js; else tsx src/db/migrate.ts; fi'",
     "admin:bootstrap": "sh -c 'if [ -f dist/db/bootstrap-admin.js ]; then node dist/db/bootstrap-admin.js; else tsx src/db/bootstrap-admin.ts; fi'",
-    "devices:dedupe": "node scripts/dedupe-devices.mjs"
+    "devices:dedupe": "node scripts/dedupe-devices.mjs",
+    "smoke:remote": "node scripts/remote-smoke.mjs"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.2",
