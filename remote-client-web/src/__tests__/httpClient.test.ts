@@ -31,19 +31,77 @@ describe('createHttpClient', () => {
     expect(headers.get('Authorization')).toBe('Bearer access-token')
   })
 
-  it('notifies auth expiration for token business errors', async () => {
+  it.each([
+    { code: 200001, message: '未登录' },
+    { code: 200002, message: 'Token 无效' },
+    { code: 200003, message: 'Token 已过期' }
+  ])('notifies auth expiration for token business error $code', async ({ code, message }) => {
     const onAuthExpired = vi.fn()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ code: 200003, message: 'Token 已过期', data: null }), { status: 401 })
+      new Response(JSON.stringify({ code, message, data: null }))
     )
     const client = createHttpClient({ baseUrl: '', onAuthExpired })
 
     await expect(client.get('/api/v1/auth/me')).rejects.toMatchObject({
-      code: 200003,
-      status: 401,
-      message: 'Token 已过期'
+      code,
+      status: 200,
+      message
     })
     expect(onAuthExpired).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not notify auth expiration for normal business errors', async () => {
+    const onAuthExpired = vi.fn()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 100101, message: '邮箱或密码错误', data: null }))
+    )
+    const client = createHttpClient({ baseUrl: '', onAuthExpired })
+
+    await expect(client.post('/api/v1/auth/login', { email: 'user@example.com' })).rejects.toMatchObject({
+      code: 100101,
+      status: 200,
+      message: '邮箱或密码错误'
+    })
+    expect(onAuthExpired).not.toHaveBeenCalled()
+  })
+
+  it('throws ApiError with empty response message key', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(''))
+    const client = createHttpClient({ baseUrl: '' })
+
+    await expect(client.get('/empty')).rejects.toBeInstanceOf(ApiError)
+    await expect(client.get('/empty')).rejects.toMatchObject({
+      code: -1,
+      status: 200,
+      messageKey: 'api_error_empty_response'
+    })
+  })
+
+  it.each([
+    { name: 'non JSON body', body: '<html></html>' },
+    { name: 'invalid envelope shape', body: JSON.stringify({ code: 0, message: 'ok' }) }
+  ])('throws ApiError with invalid JSON message key for $name', async ({ body }) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body))
+    const client = createHttpClient({ baseUrl: '' })
+
+    await expect(client.get('/invalid-json')).rejects.toBeInstanceOf(ApiError)
+    await expect(client.get('/invalid-json')).rejects.toMatchObject({
+      code: -1,
+      status: 200,
+      messageKey: 'api_error_invalid_json'
+    })
+  })
+
+  it('throws ApiError for non-2xx HTTP responses without a valid envelope', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('Internal Server Error', { status: 500 }))
+    const client = createHttpClient({ baseUrl: '' })
+
+    await expect(client.get('/http-error')).rejects.toBeInstanceOf(ApiError)
+    await expect(client.get('/http-error')).rejects.toMatchObject({
+      code: 500,
+      status: 500,
+      messageKey: 'api_error_http'
+    })
   })
 
   it('wraps network failures in ApiError', async () => {
