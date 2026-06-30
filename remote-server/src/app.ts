@@ -13,7 +13,7 @@ import { registerDeviceSocket } from './ws/device-socket.js'
 import { registerRelaySocket } from './ws/relay-socket.js'
 import { ensureWebsocketRegistered } from './ws/websocket-plugin.js'
 
-const defaultCorsOrigins = ['http://127.0.0.1:27883']
+const defaultCorsOrigins = ['http://127.0.0.1:27883', 'http://localhost:27883']
 const corsMethods = 'GET,POST,OPTIONS'
 const corsHeaders = 'Authorization,Content-Type,Accept'
 

@@ -64,7 +64,7 @@ describe('App auth state', () => {
     })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input)
-      if (url === '/api/v1/auth/login') {
+      if (url === '/api/v1/admin/auth/login') {
         return new Response(
           JSON.stringify({
             code: 0,
@@ -119,9 +119,42 @@ describe('App auth state', () => {
     fireEvent.click(screen.getByRole('button', { name: messages.en.login }))
 
     expect(await screen.findByText('Desk Mac')).not.toBeNull()
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/admin/auth/login', expect.anything())
     expect(screen.queryByText(messages.en.device_console)).toBeNull()
     expect(screen.queryByText(messages.en.remote_sessions)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Connect Desk Mac' })).toBeNull()
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/v1/connections'), expect.anything())
+  })
+
+  it('keeps normal users out of the admin console', async () => {
+    const storage = createStorage()
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: storage
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 230401,
+          message: '需要管理员权限',
+          data: null
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      )
+    )
+
+    render(<App />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: messages.en.email }), {
+      target: { value: 'user@example.com' }
+    })
+    fireEvent.change(screen.getByLabelText(messages.en.password), {
+      target: { value: 'password' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: messages.en.login }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('需要管理员权限')
+    expect(storage.getItem('niuma.remote.access_token')).toBeNull()
+    expect(screen.getByRole('textbox', { name: messages.en.email })).not.toBeNull()
   })
 })

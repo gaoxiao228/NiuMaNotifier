@@ -41,6 +41,21 @@ describe('health route', () => {
     expect(response.headers.vary).toBe('Origin')
   })
 
+  it('allows localhost remote client origin by default', async () => {
+    const app = buildApp()
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/auth/login',
+      headers: {
+        origin: 'http://localhost:27883',
+        'access-control-request-method': 'POST'
+      }
+    })
+
+    expect(response.statusCode).toBe(204)
+    expect(response.headers['access-control-allow-origin']).toBe('http://localhost:27883')
+  })
+
   it('returns empty preflight response for configured remote client origin', async () => {
     const app = buildApp({ corsOrigins: ['http://127.0.0.1:27883'] })
     const response = await app.inject({

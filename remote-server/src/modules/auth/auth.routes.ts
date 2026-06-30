@@ -47,6 +47,17 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     return result.ok ? apiSuccess(result.data) : apiFailure(result.code, result.message)
   })
 
+  app.post('/api/v1/admin/auth/login', async (request) => {
+    const parsed = parseBody(authLoginSchema, request.body)
+    if (!parsed.ok) return parsed.response
+
+    const result = await service.loginAdmin({
+      ...parsed.data,
+      clientId: headerClientId(request.headers['user-agent'])
+    })
+    return result.ok ? apiSuccess(result.data) : apiFailure(result.code, result.message)
+  })
+
   app.post('/api/v1/auth/refresh', async (request) => {
     const parsed = parseBody(authRefreshSchema, request.body)
     if (!parsed.ok) return parsed.response

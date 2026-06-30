@@ -13,7 +13,7 @@ describe('remote server config', () => {
 
     expect(config.port).toBe(27880)
     expect(config.bind).toBe('0.0.0.0')
-    expect(config.corsOrigins).toEqual(['http://127.0.0.1:27883'])
+    expect(config.corsOrigins).toEqual(['http://127.0.0.1:27883', 'http://localhost:27883'])
     expect(config.registrationMode).toBe('admin_invite')
   })
 

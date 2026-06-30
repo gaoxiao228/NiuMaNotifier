@@ -7,7 +7,7 @@ const envSchema = z.object({
   REMOTE_SERVER_PUBLIC_URL: z.string().url().default('http://127.0.0.1:27880'),
   REMOTE_SERVER_BIND: z.string().default('0.0.0.0'),
   REMOTE_SERVER_PORT: z.coerce.number().int().positive().default(27880),
-  REMOTE_SERVER_CORS_ORIGINS: z.string().default('http://127.0.0.1:27883'),
+  REMOTE_SERVER_CORS_ORIGINS: z.string().default('http://127.0.0.1:27883,http://localhost:27883'),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_PRIVATE_KEY: z.string().min(1).optional(),
@@ -21,6 +21,8 @@ const envSchema = z.object({
   DEVICE_PRESENCE_TTL_SECONDS: z.coerce.number().int().positive().default(90),
   DEVICE_HEARTBEAT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(45),
   REGISTRATION_MODE: z.enum(['open', 'admin_invite', 'disabled']).default('admin_invite'),
+  BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).max(128).optional(),
   TURN_ENABLED: z.coerce.boolean().default(false),
   TURN_URLS: z.string().default(''),
   TURN_USERNAME: z.string().default(''),
@@ -87,6 +89,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env) {
     devicePresenceTtlSeconds: parsed.DEVICE_PRESENCE_TTL_SECONDS,
     deviceHeartbeatTimeoutSeconds: parsed.DEVICE_HEARTBEAT_TIMEOUT_SECONDS,
     registrationMode: parsed.REGISTRATION_MODE,
+    bootstrapAdmin: {
+      email: parsed.BOOTSTRAP_ADMIN_EMAIL,
+      password: parsed.BOOTSTRAP_ADMIN_PASSWORD
+    },
     turn: {
       enabled: parsed.TURN_ENABLED,
       urls: parsed.TURN_URLS.split(',').map((item) => item.trim()).filter(Boolean),

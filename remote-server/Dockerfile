@@ -27,4 +27,4 @@ COPY --from=admin-web-build /app/web/dist ./web/dist
 COPY migrations ./migrations
 COPY scripts ./scripts
 EXPOSE 27880
-CMD ["sh", "-c", "node dist/db/migrate.js && node dist/server.js"]
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/db/bootstrap-admin.js && node dist/server.js"]

@@ -150,6 +150,21 @@ export function createAuthService(options: {
       } satisfies ServiceSuccess<object>
     },
 
+    async loginAdmin(input: { email: string; password: string; clientId: string }) {
+      const user = await repo.findUserByEmail(input.email.toLowerCase())
+      if (!user) return failure(ErrorCode.ACCOUNT_NOT_FOUND, '账号不存在')
+      if (user.status !== 'active') return failure(ErrorCode.ACCOUNT_DISABLED, '账号已禁用')
+
+      const passwordValid = await verifyPassword(user.passwordHash, input.password)
+      if (!passwordValid) return failure(ErrorCode.PASSWORD_INCORRECT, '密码错误')
+      if (user.role !== 'admin') return failure(ErrorCode.ADMIN_FORBIDDEN, '需要管理员权限')
+
+      return {
+        ok: true,
+        data: await issueSession(user, input.clientId)
+      } satisfies ServiceSuccess<object>
+    },
+
     async refresh(input: { refreshToken: string; clientId: string }) {
       const tokenHash = createHash(input.refreshToken, config.tokenPepper)
       const token = await repo.findRefreshTokenByHash(tokenHash)

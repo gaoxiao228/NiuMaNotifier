@@ -17,7 +17,7 @@ export type LoginResponse = {
 export function createAuthApi(http: HttpClient) {
   return {
     login(email: string, password: string) {
-      return http.post<LoginResponse>('/api/v1/auth/login', { email, password })
+      return http.post<LoginResponse>('/api/v1/admin/auth/login', { email, password })
     }
   }
 }

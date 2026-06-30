@@ -129,4 +129,85 @@ describe('auth service', () => {
     expect(refresh.ok).toBe(true)
     if (refresh.ok) expect(refresh.data.refresh_token).not.toBe(login.data.refresh_token)
   })
+
+  it('rejects non-admin users from admin login', async () => {
+    const { privateKey, publicKey } = await generateKeyPair('EdDSA')
+    const privateKeyPem = await exportPKCS8(privateKey)
+    const publicKeyPem = await exportSPKI(publicKey)
+    const repo = createFakeRepo()
+    const password = await hashPassword('password123')
+    await repo.createUser({
+      email: 'user@example.com',
+      passwordHash: password.hash,
+      passwordAlgo: password.algo,
+      role: 'user',
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      passwordUpdatedAt: new Date()
+    })
+
+    const service = createAuthService({
+      repo,
+      config: {
+        registrationMode: 'open',
+        tokenPepper: 'pepper',
+        jwtPrivateKey: privateKeyPem,
+        jwtPublicKey: publicKeyPem,
+        accessTokenTtlSeconds: 900,
+        refreshTokenTtlDays: 30
+      }
+    })
+
+    const result = await service.loginAdmin({
+      email: 'user@example.com',
+      password: 'password123',
+      clientId: 'admin-web'
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      code: ErrorCode.ADMIN_FORBIDDEN,
+      message: '需要管理员权限'
+    })
+  })
+
+  it('allows admin users to use admin login', async () => {
+    const { privateKey, publicKey } = await generateKeyPair('EdDSA')
+    const privateKeyPem = await exportPKCS8(privateKey)
+    const publicKeyPem = await exportSPKI(publicKey)
+    const repo = createFakeRepo()
+    const password = await hashPassword('password123')
+    await repo.createUser({
+      email: 'admin@example.com',
+      passwordHash: password.hash,
+      passwordAlgo: password.algo,
+      role: 'admin',
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      passwordUpdatedAt: new Date()
+    })
+
+    const service = createAuthService({
+      repo,
+      config: {
+        registrationMode: 'open',
+        tokenPepper: 'pepper',
+        jwtPrivateKey: privateKeyPem,
+        jwtPublicKey: publicKeyPem,
+        accessTokenTtlSeconds: 900,
+        refreshTokenTtlDays: 30
+      }
+    })
+
+    const result = await service.loginAdmin({
+      email: 'admin@example.com',
+      password: 'password123',
+      clientId: 'admin-web'
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.user.role).toBe('admin')
+  })
 })
