@@ -9,6 +9,18 @@ services:
       - postgres
       - redis
 
+  remote-client-web:
+    build:
+      context: ..
+      dockerfile: remote-client-web/Dockerfile
+      args:
+        # Vite 静态资源在构建期写入服务端地址，运行期 environment 不会改写已构建产物。
+        VITE_REMOTE_SERVER_URL: http://127.0.0.1:27880
+    ports:
+      - "27883:80"
+    depends_on:
+      - remote-server
+
   postgres:
     image: postgres:16-alpine
     environment:

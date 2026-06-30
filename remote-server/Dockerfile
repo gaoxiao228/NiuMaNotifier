@@ -10,7 +10,7 @@ COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:22-alpine AS web-build
+FROM node:22-alpine AS admin-web-build
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -23,7 +23,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-COPY --from=web-build /app/web/dist ./web/dist
+COPY --from=admin-web-build /app/web/dist ./web/dist
 COPY migrations ./migrations
 COPY scripts ./scripts
 EXPOSE 27880
