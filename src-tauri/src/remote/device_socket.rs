@@ -166,6 +166,7 @@ pub async fn run_device_socket_once(
     {
         return DeviceSocketRunResult::Failed(format!("发送远程 hello 失败：{error}"));
     }
+    signaling_manager.mark_device_online();
 
     let mut heartbeat = time::interval(Duration::from_secs(request.heartbeat_interval_seconds));
     let mut relay_tasks = RelayTaskMap::default();

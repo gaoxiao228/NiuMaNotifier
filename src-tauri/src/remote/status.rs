@@ -9,6 +9,7 @@ pub struct RemoteAgentStatus {
     pub last_error: Option<String>,
     pub active_connection_id: Option<String>,
     pub selected_transport: Option<RemoteTransportKind>,
+    pub available_transports: Vec<RemoteTransportKind>,
 }
 
 impl RemoteAgentStatus {
@@ -18,6 +19,7 @@ impl RemoteAgentStatus {
             last_error: None,
             active_connection_id: None,
             selected_transport: None,
+            available_transports: Vec::new(),
         }
     }
 }
@@ -45,6 +47,7 @@ impl RemoteAgentStatusHandle {
                 last_error,
                 active_connection_id: value.active_connection_id.clone(),
                 selected_transport: value.selected_transport,
+                available_transports: value.available_transports.clone(),
             };
         }
     }
@@ -55,9 +58,25 @@ impl RemoteAgentStatusHandle {
         }
     }
 
+    pub fn clear_connection(&self) {
+        if let Ok(mut value) = self.inner.lock() {
+            value.active_connection_id = None;
+            value.selected_transport = None;
+            value.available_transports.clear();
+        }
+    }
+
     pub fn set_selected_transport(&self, transport: Option<RemoteTransportKind>) {
         if let Ok(mut value) = self.inner.lock() {
             value.selected_transport = transport;
+        }
+    }
+
+    pub fn add_available_transport(&self, transport: RemoteTransportKind) {
+        if let Ok(mut value) = self.inner.lock() {
+            if !value.available_transports.contains(&transport) {
+                value.available_transports.push(transport);
+            }
         }
     }
 
@@ -70,6 +89,7 @@ impl RemoteAgentStatusHandle {
                 last_error: Some("远程状态锁定失败".to_string()),
                 active_connection_id: None,
                 selected_transport: None,
+                available_transports: Vec::new(),
             })
     }
 }
@@ -116,5 +136,21 @@ mod tests {
         let snapshot = handle.snapshot();
 
         assert_eq!(snapshot.active_connection_id.as_deref(), Some("conn_1"));
+    }
+
+    #[test]
+    fn status_tracks_available_and_selected_transports() {
+        let handle = RemoteAgentStatusHandle::default();
+        handle.add_available_transport(RemoteTransportKind::Relay);
+        handle.set_selected_transport(Some(RemoteTransportKind::Relay));
+        handle.add_available_transport(RemoteTransportKind::Webrtc);
+        handle.set_selected_transport(Some(RemoteTransportKind::Webrtc));
+        let snapshot = handle.snapshot();
+
+        assert_eq!(
+            snapshot.available_transports,
+            vec![RemoteTransportKind::Relay, RemoteTransportKind::Webrtc]
+        );
+        assert_eq!(snapshot.selected_transport, Some(RemoteTransportKind::Webrtc));
     }
 }

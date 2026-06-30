@@ -37,6 +37,12 @@ impl RemoteSignalingManager {
         }
     }
 
+    pub fn mark_device_online(&self) {
+        if let Some(status) = &self.status {
+            status.set_state(niuma_core::remote::agent_state::RemoteAgentState::Online, None);
+        }
+    }
+
     pub fn handle_message(
         &self,
         config: &RemoteConfig,
@@ -104,6 +110,7 @@ impl RemoteSignalingManager {
         if let Some(status) = &self.status {
             status.set_active_connection(Some(invite.connection_id.clone()));
             if transport == TransportPreference::Relay {
+                status.add_available_transport(RemoteTransportKind::Relay);
                 status.set_selected_transport(Some(RemoteTransportKind::Relay));
             }
         }
@@ -133,8 +140,7 @@ impl RemoteSignalingManager {
         if let Some(status) = &self.status {
             let snapshot = status.snapshot();
             if snapshot.active_connection_id.as_deref() == Some(connection_id) {
-                status.set_active_connection(None);
-                status.set_selected_transport(None);
+                status.clear_connection();
             }
         }
     }
@@ -166,6 +172,7 @@ impl RemoteSignalingManager {
                     sessions.insert(connection_id.clone(), result.session);
                 }
                 if let Some(status) = &self.status {
+                    status.add_available_transport(RemoteTransportKind::Webrtc);
                     status.set_selected_transport(Some(RemoteTransportKind::Webrtc));
                 }
                 let mut outbound = vec![result.answer_message];
@@ -239,7 +246,7 @@ impl RemoteSignalingManager {
             sessions.remove(&cancel.connection_id);
         }
         if let Some(status) = &self.status {
-            status.set_active_connection(None);
+            status.clear_connection();
         }
         vec![]
     }
@@ -285,6 +292,16 @@ mod tests {
 
         assert_eq!(outbound[0]["type"], "connection.accept");
         assert!(manager.has_session("conn_1"));
+    }
+
+    #[test]
+    fn marks_agent_online_after_device_socket_connects() {
+        let status = crate::remote::status::RemoteAgentStatusHandle::default();
+        let manager = RemoteSignalingManager::with_status(status.clone());
+
+        manager.mark_device_online();
+
+        assert_eq!(status.snapshot().state, "online");
     }
 
     #[test]

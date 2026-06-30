@@ -49,6 +49,22 @@ describe('device websocket schema and registry', () => {
     ).toBe('signal.answer')
   })
 
+  it('accepts ice candidates with empty sdp mid from WebRTC stacks', () => {
+    expect(
+      deviceSocketMessageSchema.parse({
+        version: 1,
+        type: 'signal.ice_candidate',
+        id: 'msg_ice_empty_mid',
+        data: {
+          connection_id: 'conn_1',
+          candidate: 'candidate:1 1 udp 2122260223 127.0.0.1 9999 typ host',
+          sdp_mid: '',
+          sdp_mline_index: 0
+        }
+      }).type
+    ).toBe('signal.ice_candidate')
+  })
+
   it('rejects device response messages missing protocol required fields', () => {
     expect(() => deviceSocketMessageSchema.parse({
       version: 1,

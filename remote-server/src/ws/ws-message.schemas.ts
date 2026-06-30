@@ -51,7 +51,7 @@ export const deviceResponseMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('signal.ice_candidate'),
     data: deviceConnectionResponseDataSchema.extend({
       candidate: candidateSchema,
-      sdp_mid: z.string().min(1).max(160).nullable().optional(),
+      sdp_mid: z.string().max(160).nullable().optional(),
       sdp_mline_index: z.number().int().nonnegative().nullable().optional()
     })
   }),
