@@ -51,9 +51,10 @@ VITE_REMOTE_SERVER_URL=http://127.0.0.1:27880
 
 Docker Compose 默认在构建 `remote-client-web` 镜像时写入 `http://127.0.0.1:27880`，对应本地 `remote-admin` 和远程服务端 API 的默认入口。
 
-如果需要指向线上远程服务端，可以在构建镜像时显式传入 build arg：
+如果不用 Compose，需要从仓库根目录执行 `docker build`，因为 Dockerfile 的 `COPY remote-client-web/...` 依赖仓库根目录作为 build context。需要指向线上远程服务端时，可以显式传入 build arg：
 
 ```bash
+# 在仓库根目录执行
 docker build \
   -f remote-client-web/Dockerfile \
   --build-arg VITE_REMOTE_SERVER_URL=https://remote.example.com \
