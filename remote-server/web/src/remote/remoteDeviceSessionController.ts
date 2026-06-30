@@ -923,12 +923,14 @@ export function createRemoteDeviceSessionController(
 
       const deviceStarted = Date.now()
       if (!options.device.online) {
-        steps.push(reportStep('device_online', 'Device online', 'failed', deviceStarted, 'device_offline'))
+        steps.push(
+          reportStep('device_online', 'diagnostics_step_device_online', 'failed', deviceStarted, 'device_offline')
+        )
         report = finishDiagnosticReport(report, steps, new Date())
         patchDiagnosticReport(diagnosticGeneration, report, false)
         return
       }
-      steps.push(reportStep('device_online', 'Device online', 'passed', deviceStarted))
+      steps.push(reportStep('device_online', 'diagnostics_step_device_online', 'passed', deviceStarted))
 
       const connectionStarted = Date.now()
       const hadAcceptedConnection = hasAcceptedConnectionResource()
@@ -950,13 +952,26 @@ export function createRemoteDeviceSessionController(
         rpcTimeoutMs,
         'connection_accept_timeout'
       )
-      steps.push(resultStep('connection_create', 'Create connection', connectionResult, connectionStarted))
+      steps.push(
+        resultStep('connection_create', 'diagnostics_step_connection_create', connectionResult, connectionStarted)
+      )
 
       if (connectionResult.status === 'error') {
         const skippedStarted = Date.now()
-        steps.push(skippedStep('relay_rpc_ping', 'Relay RPC ping', skippedStarted, 'connection_unavailable'))
-        steps.push(skippedStep('webrtc_rpc_ping', 'WebRTC RPC ping', skippedStarted, 'connection_unavailable'))
-        steps.push(skippedStep('session_project_groups', 'Session project groups', skippedStarted, 'connection_unavailable'))
+        steps.push(
+          skippedStep('relay_rpc_ping', 'diagnostics_step_relay_rpc_ping', skippedStarted, 'connection_unavailable')
+        )
+        steps.push(
+          skippedStep('webrtc_rpc_ping', 'diagnostics_step_webrtc_rpc_ping', skippedStarted, 'connection_unavailable')
+        )
+        steps.push(
+          skippedStep(
+            'session_project_groups',
+            'diagnostics_step_session_project_groups',
+            skippedStarted,
+            'connection_unavailable'
+          )
+        )
         report = finishDiagnosticReport(report, steps, new Date())
         patchDiagnosticReport(diagnosticGeneration, report, false)
         return
@@ -971,7 +986,7 @@ export function createRemoteDeviceSessionController(
         rpcTimeoutMs,
         'relay_rpc_ping_timeout'
       )
-      steps.push(resultStep('relay_rpc_ping', 'Relay RPC ping', relayResult, relayStarted))
+      steps.push(resultStep('relay_rpc_ping', 'diagnostics_step_relay_rpc_ping', relayResult, relayStarted))
 
       const webRtcStarted = Date.now()
       const webRtcResult = await waitForResult(
@@ -980,7 +995,9 @@ export function createRemoteDeviceSessionController(
         webRtcProbeTimeoutMs,
         'webrtc_rpc_ping_timeout'
       )
-      steps.push(resultStep('webrtc_rpc_ping', 'WebRTC RPC ping', webRtcResult, webRtcStarted, 'warning'))
+      steps.push(
+        resultStep('webrtc_rpc_ping', 'diagnostics_step_webrtc_rpc_ping', webRtcResult, webRtcStarted, 'warning')
+      )
 
       const sessionsStarted = Date.now()
       const sessionsResult = await waitForResult(
@@ -989,7 +1006,14 @@ export function createRemoteDeviceSessionController(
         rpcTimeoutMs,
         'session_project_groups_timeout'
       )
-      steps.push(resultStep('session_project_groups', 'Session project groups', sessionsResult, sessionsStarted))
+      steps.push(
+        resultStep(
+          'session_project_groups',
+          'diagnostics_step_session_project_groups',
+          sessionsResult,
+          sessionsStarted
+        )
+      )
 
       report = finishDiagnosticReport(report, steps, new Date())
       patchDiagnosticReport(diagnosticGeneration, report, false)

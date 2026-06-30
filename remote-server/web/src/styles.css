@@ -247,6 +247,70 @@ select {
   gap: 10px;
 }
 
+.remote-session-topbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.remote-session-device {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.remote-session-device strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.remote-session-device .status-online,
+.remote-session-device .status-offline {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.remote-session-device .device-id {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.remote-session-connection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.compact-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.compact-status strong {
+  font-size: 11px;
+}
+
+.remote-session-actions {
+  justify-content: flex-end;
+}
+
 .signal-log {
   min-width: 0;
 }
@@ -257,6 +321,108 @@ select {
 
 .remote-sessions {
   min-width: 0;
+}
+
+.remote-sessions-primary {
+  margin-top: 2px;
+}
+
+.diagnostic-report {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.diagnostic-report-passed {
+  border-color: #99d3ca;
+}
+
+.diagnostic-report-degraded {
+  border-color: #facc15;
+}
+
+.diagnostic-report-failed {
+  border-color: #fecaca;
+}
+
+.diagnostic-summary {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+.diagnostic-step-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.diagnostic-step {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid #e2e8f0;
+  padding: 8px 10px;
+}
+
+.diagnostic-step:first-child {
+  border-top: 0;
+}
+
+.diagnostic-step dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.diagnostic-step dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.diagnostic-step dd span {
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-step-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ffffff;
+  font-weight: 700;
+}
+
+.diagnostic-step-status-passed {
+  border-color: #99d3ca;
+  color: #0f766e;
+}
+
+.diagnostic-step-status-failed {
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.diagnostic-step-status-skipped,
+.diagnostic-step-status-running {
+  border-color: #cbd5e1;
+  color: #475569;
 }
 
 .device-list-remote-sessions {
@@ -457,11 +623,23 @@ button:disabled,
     grid-template-columns: 1fr;
   }
 
+  .remote-session-topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-session-actions {
+    justify-content: flex-start;
+  }
+
   .rpc-result-grid {
     grid-template-columns: 1fr;
   }
 
   .remote-session-row {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostic-step {
     grid-template-columns: 1fr;
   }
 

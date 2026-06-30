@@ -180,6 +180,161 @@ describe('DeviceConsolePage', () => {
     expect(onBack).toHaveBeenCalled()
   })
 
+  it('uses remote sessions as the primary page and keeps connection details in the top bar', () => {
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create: vi.fn() }}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    expect(screen.getAllByText('Remote sessions')[0]).not.toBeNull()
+    const topBar = screen.getByLabelText('Remote connection summary')
+    expect(topBar).not.toBeNull()
+    expect(screen.queryByLabelText('Channel information')).toBeNull()
+    expect(topBar.textContent).toContain('Desk Mac')
+    expect(topBar.textContent).toContain('Online')
+    expect(topBar.textContent).toContain('Connection status')
+    expect(topBar.textContent).toContain('Active transport: Idle')
+    expect(topBar.textContent).toContain('Relay idle')
+    expect(topBar.textContent).toContain('WebRTC idle')
+    expect(screen.queryByText('Ping')).toBeNull()
+    expect(screen.queryByText('Remote state')).toBeNull()
+    expect(screen.queryByText('Remote sessions raw data')).toBeNull()
+    expect(screen.queryByText('Signal messages')).toBeNull()
+  })
+
+  it('runs diagnostics from the console and renders the report', async () => {
+    const create = vi.fn().mockResolvedValue(createConnectionResult())
+    const signalClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn(),
+      onStatus: (_status: ConnectionStatus) => {}
+    }
+    const createConnection = vi.fn((options: ConnectionClientOptions) => {
+      signalClient.onStatus = options.onStatus
+      return signalClient
+    })
+    let relayOptions: RelayClientOptions | null = null
+    const relayClient: RelayClient = {
+      socket: {} as WebSocket,
+      send: vi.fn(),
+      close: vi.fn()
+    }
+    const createRelay = vi.fn((options: RelayClientOptions) => {
+      relayOptions = options
+      return relayClient
+    })
+    let webRtcOptions: WebRtcTransportOptions | null = null
+    const webRtcSend = vi.fn()
+    const createWebRtc = vi.fn((options: WebRtcTransportOptions): WebRtcTransport => {
+      webRtcOptions = options
+      return {
+        kind: 'webrtc',
+        start: vi.fn(async () => {}),
+        acceptAnswer: vi.fn(),
+        addRemoteIceCandidate: vi.fn(),
+        send: webRtcSend,
+        close: vi.fn()
+      }
+    })
+
+    render(
+      <DeviceConsolePage
+        device={createDevice(true)}
+        connectionsApi={{ create }}
+        createConnection={createConnection}
+        createRelay={createRelay}
+        createWebRtc={createWebRtc}
+        t={t}
+        onBack={() => {}}
+      />
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Run diagnostics' }))
+      await Promise.resolve()
+    })
+    expect((screen.getByRole('button', { name: 'Diagnosing' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Diagnostics are running')).not.toBeNull()
+    await waitFor(() => expect(createConnection).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      signalClient.onStatus('accepted')
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(createRelay).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      openReadyRelay(relayOptions)
+      webRtcOptions?.onOpen()
+      await Promise.resolve()
+    })
+
+    const relayDiagnostic = vi
+      .mocked(relayClient.send)
+      .mock.calls
+      .map((call) => call[0] as { id?: string; method?: string })
+      .find((request) => request.id?.startsWith('diag_relay_') && request.method === 'rpc.ping')
+    const webRtcDiagnostic = webRtcSend.mock.calls
+      .map((call) => call[0] as { id?: string; method?: string })
+      .find((request) => request.id?.startsWith('diag_webrtc_') && request.method === 'rpc.ping')
+    expect(relayDiagnostic).toBeTruthy()
+    expect(webRtcDiagnostic).toBeTruthy()
+
+    await act(async () => {
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: relayDiagnostic?.id,
+        ok: true,
+        result: { pong: true },
+        transport: { kind: 'relay' }
+      })
+      webRtcOptions?.onPayload({
+        version: 1,
+        type: 'response',
+        id: webRtcDiagnostic?.id,
+        ok: false,
+        error: { code: 'probe_failed', message: 'webrtc_unavailable' },
+        transport: { kind: 'webrtc' }
+      })
+      relayOptions?.onPayload({ version: 1, type: 'response', id: 'rpc_3', ok: true, result: { stream_id: 'stream_1' } })
+      await Promise.resolve()
+      relayOptions?.onPayload({
+        version: 1,
+        type: 'notification',
+        method: 'local_api.stream.event',
+        params: {
+          stream_id: 'stream_1',
+          event: 'session_project_groups',
+          id: '1',
+          data: {
+            list: [],
+            page: 1,
+            page_size: 20,
+            total: 0
+          }
+        }
+      })
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Relay is available. WebRTC direct access is unavailable, so Relay is used as fallback'))
+        .not.toBeNull()
+      expect(screen.getByText('Device online')).not.toBeNull()
+      expect(screen.getByText('Create connection')).not.toBeNull()
+      expect(screen.getByText('Relay RPC ping')).not.toBeNull()
+      expect(screen.getByText('WebRTC RPC ping')).not.toBeNull()
+      expect(screen.getAllByText('Remote sessions').length).toBeGreaterThan(1)
+      expect(screen.getByRole('button', { name: 'Run diagnostics' })).not.toBeNull()
+    })
+  })
+
   it('does not touch a localStorage accessor in the Node test environment', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')
     const localStorageGetter = vi.fn(() => {
@@ -455,11 +610,9 @@ describe('DeviceConsolePage', () => {
       await Promise.resolve()
     })
 
-    expect(await screen.findByText('Ping')).not.toBeNull()
-    expect(screen.getByText(/"pong": true/)).not.toBeNull()
-    expect(screen.getByText(/"state": "ready"/)).not.toBeNull()
-    expect(screen.getByText(/"project_name": "repo"/)).not.toBeNull()
-    expect(screen.getByText(/"title": "Demo session"/)).not.toBeNull()
+    expect(screen.queryByText('Ping')).toBeNull()
+    expect(screen.queryByText('Remote state')).toBeNull()
+    expect(screen.queryByText('Remote sessions raw data')).toBeNull()
     expect(screen.getByText('repo')).not.toBeNull()
     expect(screen.getByText('/repo')).not.toBeNull()
     expect(screen.getByText('Demo session')).not.toBeNull()
@@ -877,7 +1030,7 @@ describe('DeviceConsolePage', () => {
       'state.get',
       'local_api.stream'
     ])
-    expect(screen.getAllByText('Waiting for response')).toHaveLength(4)
+    expect(screen.getAllByText('Waiting for response')).toHaveLength(1)
   })
 
   it('falls back to relay when WebRTC RPC requests time out', async () => {
@@ -1067,7 +1220,7 @@ describe('DeviceConsolePage', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(screen.getAllByText('Plain RPC request timed out')).toHaveLength(3)
+    expect(screen.queryByText('Plain RPC request timed out')).toBeNull()
     expect(relayClient.send).not.toHaveBeenCalled()
 
     act(() => {
@@ -1175,7 +1328,7 @@ describe('DeviceConsolePage', () => {
 
     expect(screen.getByText('WebRTC closed')).not.toBeNull()
     expect(screen.getByText('Active transport: Idle')).not.toBeNull()
-    expect(screen.getAllByText('RPC request failed')).toHaveLength(3)
+    expect(screen.getByText('Unable to read remote sessions')).not.toBeNull()
     expect(screen.queryByText('Waiting for response')).toBeNull()
   })
 
@@ -1330,7 +1483,8 @@ describe('DeviceConsolePage', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText('method_not_found: unknown RPC method: rpc.ping')).not.toBeNull()
+    expect(screen.queryByText('method_not_found: unknown RPC method: rpc.ping')).toBeNull()
+    expect(screen.getByText('Relay open')).not.toBeNull()
   })
 
   it('closes pending RPC requests immediately when relay closes', async () => {
@@ -1380,7 +1534,7 @@ describe('DeviceConsolePage', () => {
     act(() => {
       openReadyRelay(relayOptions)
     })
-    expect(screen.getAllByText('Waiting for response')).toHaveLength(4)
+    expect(screen.getAllByText('Waiting for response')).toHaveLength(1)
 
     await act(async () => {
       relayOptions?.onClose()
@@ -1388,7 +1542,7 @@ describe('DeviceConsolePage', () => {
     })
 
     expect(screen.getByText('Relay closed')).not.toBeNull()
-    expect(screen.getAllByText('RPC request failed')).toHaveLength(3)
+    expect(screen.getByText('Unable to read remote sessions')).not.toBeNull()
     expect(screen.queryByText('Waiting for response')).toBeNull()
   })
 
@@ -1446,7 +1600,7 @@ describe('DeviceConsolePage', () => {
 
     expect(relayClient.close).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Relay error')).not.toBeNull()
-    expect(screen.getAllByText('RPC request failed')).toHaveLength(3)
+    expect(screen.getByText('Unable to read remote sessions')).not.toBeNull()
   })
 
   it('cleans relay RPC requests on unmount and ignores later relay callbacks', async () => {
