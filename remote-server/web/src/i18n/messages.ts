@@ -229,7 +229,7 @@ const diagnosticMessages: Record<SupportedLanguage, Record<string, string>> = {
 
 export const messages: Record<SupportedLanguage, Record<string, string>> = {
   'zh-CN': {
-    app_title: 'NiuMaNotifier 远程控制台',
+    app_title: 'NiuMaNotifier 远程后台',
     login: '登录',
     email: '邮箱',
     email_placeholder: 'operator@example.com',
@@ -311,7 +311,7 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     ...diagnosticMessages['zh-CN']
   },
   'zh-TW': {
-    app_title: 'NiuMaNotifier 遠端控制台',
+    app_title: 'NiuMaNotifier 遠端後台',
     login: '登入',
     email: '電子郵件',
     email_placeholder: 'operator@example.com',
@@ -393,7 +393,7 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     ...diagnosticMessages['zh-TW']
   },
   en: {
-    app_title: 'NiuMaNotifier Remote Console',
+    app_title: 'NiuMaNotifier Remote Admin',
     login: 'Sign in',
     email: 'Email',
     email_placeholder: 'operator@example.com',
@@ -475,7 +475,7 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     ...diagnosticMessages.en
   },
   ja: {
-    app_title: 'NiuMaNotifier リモートコンソール',
+    app_title: 'NiuMaNotifier リモート管理',
     login: 'ログイン',
     email: 'メール',
     email_placeholder: 'operator@example.com',
@@ -557,7 +557,7 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     ...diagnosticMessages.ja
   },
   ko: {
-    app_title: 'NiuMaNotifier 원격 콘솔',
+    app_title: 'NiuMaNotifier 원격 관리',
     login: '로그인',
     email: '이메일',
     email_placeholder: 'operator@example.com',
@@ -639,7 +639,7 @@ export const messages: Record<SupportedLanguage, Record<string, string>> = {
     ...diagnosticMessages.ko
   },
   de: {
-    app_title: 'NiuMaNotifier Remote-Konsole',
+    app_title: 'NiuMaNotifier Remote-Admin',
     login: 'Anmelden',
     email: 'E-Mail',
     email_placeholder: 'operator@example.com',

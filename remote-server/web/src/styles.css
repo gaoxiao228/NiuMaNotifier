@@ -186,8 +186,8 @@ select {
 
 .device-row {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) 120px minmax(180px, 1.4fr) 80px;
-  min-width: 640px;
+  grid-template-columns: minmax(180px, 2fr) 120px minmax(180px, 1.4fr);
+  min-width: 560px;
   align-items: center;
   border-top: 1px solid #e2e8f0;
 }
