@@ -376,6 +376,48 @@ fn new_store_with_same_path_starts_with_empty_runtime_state() {
 }
 
 #[test]
+fn remote_device_install_id_is_created_once_and_reused() {
+    let root = test_data_dir("remote_device_install_id_reuse");
+    let path = root.join("state.sqlite");
+    let store = NiumaStore::new(path.clone());
+
+    let first = store.remote_device_install_id().unwrap();
+    let second = NiumaStore::new(path).remote_device_install_id().unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first.to_hex().len(), 64);
+}
+
+#[test]
+fn remote_device_install_id_concurrent_create_returns_same_value() {
+    for attempt in 0..64 {
+        let root = test_data_dir(&format!(
+            "remote_device_install_id_concurrent_create_{attempt}"
+        ));
+        let path = root.join("state.sqlite");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    NiumaStore::new(path).remote_device_install_id().unwrap()
+                })
+            })
+            .collect();
+
+        let values: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        for value in &values[1..] {
+            assert_eq!(value, &values[0]);
+        }
+    }
+}
+
+#[test]
 fn schema_initializes_only_notification_records_table() {
     let path = test_sqlite_path("schema_notification_only");
     let store = NiumaStore::new(path.clone());
@@ -1863,6 +1905,40 @@ fn language_preference_defaults_to_system_and_persists() {
             crate::platform::locale::SystemLanguage::Ja
         )
     );
+}
+
+#[test]
+fn remote_config_defaults_and_persists_without_device_token() {
+    let root = test_data_dir("json_remote_config");
+    let path = root.join("niuma.sqlite");
+    let store = NiumaStore::new(path.clone());
+
+    let default_config = store.remote_config().unwrap();
+    assert_eq!(default_config.server_url, "https://remote.niuma.example");
+    assert!(default_config.remote_access_enabled);
+    assert!(default_config.remote_control_enabled);
+    assert!(default_config.device.is_none());
+
+    let mut saved = default_config;
+    saved.server_url = "https://self-hosted.example.com".to_string();
+    saved.remote_control_enabled = false;
+    saved.user = Some(crate::remote::config::RemoteUserSummary {
+        id: "user_1".to_string(),
+        email: "user@example.com".to_string(),
+        role: "owner".to_string(),
+    });
+    saved.device = Some(crate::remote::config::RemoteDeviceSummary {
+        id: "dev_1".to_string(),
+        name: "NiuMa MacBook".to_string(),
+    });
+
+    store.save_remote_config(&saved).unwrap();
+    let reloaded = NiumaStore::new(path).remote_config().unwrap();
+
+    assert_eq!(reloaded.server_url, "https://self-hosted.example.com");
+    assert!(!reloaded.remote_control_enabled);
+    assert_eq!(reloaded.user.unwrap().email, "user@example.com");
+    assert_eq!(reloaded.device.unwrap().id, "dev_1");
 }
 
 #[test]

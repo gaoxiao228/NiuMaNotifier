@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { RemoteDiagnosticReport } from './remoteDiagnostics'
 
 export type ApiResponse<T> = {
   code: number
@@ -234,6 +235,50 @@ export type TestNotificationResult = {
   plugin_id: string
   test_id: string
   record_id: string
+}
+
+export type RemoteUserSummary = {
+  id: string
+  email: string
+  role: string
+}
+
+export type RemoteDeviceSummary = {
+  id: string
+  name: string
+}
+
+export type RemoteSettingsPayload = {
+  server_url: string
+  remote_access_enabled: boolean
+  remote_control_enabled: boolean
+  user: RemoteUserSummary | null
+  device: RemoteDeviceSummary | null
+  bound: boolean
+  has_credential: boolean
+  last_connected_at: string | null
+}
+
+export type RemoteLoginStartResult = {
+  started: boolean
+  server_url: string
+  request_id: string
+  poll_token: string
+  login_url: string
+  expires_in: number
+}
+
+export type RemoteLoginPollResult = {
+  completed: boolean
+  settings: RemoteSettingsPayload
+}
+
+export type RemoteAgentStatus = {
+  state: string
+  last_error: string | null
+  active_connection_id?: string | null
+  selected_transport?: 'relay' | 'webrtc' | null
+  available_transports?: Array<'relay' | 'webrtc'>
 }
 
 export type NotificationRecordStatus = 'pending' | 'sent' | 'failed' | 'skipped'
@@ -543,6 +588,84 @@ export async function sendTestNotification(pluginId: string) {
     throw new Error(response.message)
   }
   return response.data
+}
+
+export async function getRemoteSettings() {
+  const response = await invoke<ApiResponse<{ settings: RemoteSettingsPayload }>>(
+    'get_remote_settings'
+  )
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.settings
+}
+
+export async function saveRemoteSettings(
+  settings: Pick<
+    RemoteSettingsPayload,
+    'server_url' | 'remote_access_enabled' | 'remote_control_enabled'
+  >
+) {
+  const response = await invoke<
+    ApiResponse<{ saved: boolean; settings: RemoteSettingsPayload }>
+  >('save_remote_settings', {
+    serverUrl: settings.server_url,
+    remoteAccessEnabled: settings.remote_access_enabled,
+    remoteControlEnabled: settings.remote_control_enabled
+  })
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.settings
+}
+
+export async function startRemoteLogin() {
+  const response = await invoke<ApiResponse<RemoteLoginStartResult>>('start_remote_login')
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data
+}
+
+export async function pollRemoteLogin(requestId: string, pollToken: string) {
+  const response = await invoke<ApiResponse<RemoteLoginPollResult>>('poll_remote_login', {
+    requestId,
+    pollToken
+  })
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data
+}
+
+export async function clearRemoteBinding() {
+  const response = await invoke<
+    ApiResponse<{ cleared: boolean; settings: RemoteSettingsPayload }>
+  >('clear_remote_binding')
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.settings
+}
+
+export async function getRemoteAgentStatus() {
+  const response = await invoke<ApiResponse<{ status: RemoteAgentStatus }>>(
+    'get_remote_agent_status'
+  )
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.status
+}
+
+export async function runRemoteAccessDiagnostics() {
+  const response = await invoke<ApiResponse<{ report: RemoteDiagnosticReport }>>(
+    'run_remote_access_diagnostics'
+  )
+  if (response.code !== 0) {
+    throw new Error(response.message)
+  }
+  return response.data.report
 }
 
 export async function getLocalApiUrl() {

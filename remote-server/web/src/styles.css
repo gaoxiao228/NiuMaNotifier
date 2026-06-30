@@ -1,0 +1,650 @@
+:root {
+  color: #18202a;
+  background: #eef1f5;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.console-shell {
+  min-height: 100vh;
+  background: #eef1f5;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #cfd6df;
+  background: #f8fafc;
+}
+
+.brand,
+.language-picker,
+.panel-title,
+.panel-title-label,
+.status {
+  display: inline-flex;
+  align-items: center;
+}
+
+.brand {
+  gap: 10px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.language-picker {
+  gap: 8px;
+}
+
+.language-picker select {
+  height: 32px;
+  border: 1px solid #b8c2ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #18202a;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+.workspace-authenticated {
+  grid-template-columns: 1fr;
+}
+
+.login-panel,
+.device-panel {
+  border: 1px solid #cfd6df;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.panel-title {
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.login-panel label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.login-panel input {
+  height: 36px;
+  border: 1px solid #b8c2ce;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: #18202a;
+}
+
+.login-panel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #0f766e;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.console-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #0f766e;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.device-panel {
+  min-width: 0;
+  padding: 14px;
+}
+
+.device-panel-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-title-label {
+  gap: 8px;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid #b8c2ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #18202a;
+  cursor: pointer;
+}
+
+.state-message {
+  margin: 12px 0 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.state-message-error {
+  color: #b42318;
+}
+
+.device-table {
+  width: 100%;
+  margin-top: 12px;
+  overflow-x: auto;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+}
+
+.device-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) 120px minmax(180px, 1.4fr);
+  min-width: 560px;
+  align-items: center;
+  border-top: 1px solid #e2e8f0;
+}
+
+.device-row:first-child {
+  border-top: 0;
+}
+
+.device-row span {
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.device-row-head {
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 700;
+}
+
+.device-id {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.console-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.console-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.console-summary > div {
+  min-width: 0;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.console-summary strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.summary-label {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.console-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.remote-session-topbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.remote-session-device {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.remote-session-device strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.remote-session-device .status-online,
+.remote-session-device .status-offline {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.remote-session-device .device-id {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.remote-session-connection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.compact-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.compact-status strong {
+  font-size: 11px;
+}
+
+.remote-session-actions {
+  justify-content: flex-end;
+}
+
+.signal-log {
+  min-width: 0;
+}
+
+.relay-log {
+  min-width: 0;
+}
+
+.remote-sessions {
+  min-width: 0;
+}
+
+.remote-sessions-primary {
+  margin-top: 2px;
+}
+
+.diagnostic-report {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.diagnostic-report-passed {
+  border-color: #99d3ca;
+}
+
+.diagnostic-report-degraded {
+  border-color: #facc15;
+}
+
+.diagnostic-report-failed {
+  border-color: #fecaca;
+}
+
+.diagnostic-summary {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+.diagnostic-step-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.diagnostic-step {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid #e2e8f0;
+  padding: 8px 10px;
+}
+
+.diagnostic-step:first-child {
+  border-top: 0;
+}
+
+.diagnostic-step dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.diagnostic-step dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.diagnostic-step dd span {
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-step-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ffffff;
+  font-weight: 700;
+}
+
+.diagnostic-step-status-passed {
+  border-color: #99d3ca;
+  color: #0f766e;
+}
+
+.diagnostic-step-status-failed {
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.diagnostic-step-status-skipped,
+.diagnostic-step-status-running {
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.device-list-remote-sessions {
+  margin-top: 16px;
+}
+
+.remote-session-summary {
+  margin-top: 10px;
+}
+
+.remote-session-groups {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.remote-session-group {
+  min-width: 0;
+  border-top: 1px solid #d7dde5;
+  padding-top: 10px;
+}
+
+.remote-session-group-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote-session-group-heading strong,
+.remote-session-group-heading span,
+.remote-session-main strong,
+.remote-session-main span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.remote-session-group-heading strong {
+  font-size: 14px;
+}
+
+.remote-session-group-heading span,
+.remote-session-main span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.remote-session-list {
+  display: grid;
+  gap: 0;
+  margin-top: 8px;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.remote-session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.remote-session-row:first-child {
+  border-top: 0;
+}
+
+.remote-session-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.remote-session-status {
+  max-width: 140px;
+  overflow-wrap: anywhere;
+  border: 1px solid #99d3ca;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.relay-log .panel-title {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.relay-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.relay-status-open {
+  border-color: #99d3ca;
+  color: #0f766e;
+}
+
+.relay-status-error {
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.rpc-result-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.rpc-result {
+  min-width: 0;
+}
+
+.rpc-result strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.diagnostic-result-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.status {
+  gap: 6px;
+  font-weight: 700;
+}
+
+.status-online {
+  color: #0f766e;
+}
+
+.status-offline {
+  color: #64748b;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #b8c2ce;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f766e;
+  cursor: pointer;
+}
+
+button:disabled,
+.icon-button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.json-preview {
+  margin: 12px 0 0;
+  overflow: auto;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+  color: #18202a;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .topbar,
+  .workspace {
+    padding: 12px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .console-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-session-topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-session-actions {
+    justify-content: flex-start;
+  }
+
+  .rpc-result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-session-row {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostic-step {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-session-status {
+    justify-self: start;
+    max-width: 100%;
+  }
+}

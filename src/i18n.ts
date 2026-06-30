@@ -65,6 +65,39 @@ export type Translation = {
   backToDashboard: string
   pluginManagement: string
   pluginManagementDescription: string
+  remoteAccess: string
+  remoteAccessDescription: string
+  remoteServerUrl: string
+  remoteAccessEnabled: string
+  remoteControlEnabled: string
+  remoteLogin: string
+  remoteLoginOpening: string
+  remoteLoginWaiting: string
+  remoteLoginSuccess: string
+  remoteLogout: string
+  remoteLoggingOut: string
+  remoteLogoutSuccess: string
+  remoteAccount: string
+  remoteDevice: string
+  remoteBindingStatus: string
+  remoteAgentStatus: string
+  remoteAgentState: Record<string, string>
+  remoteActiveConnection: string
+  remoteAvailableTransports: string
+  remoteSelectedTransport: string
+  remoteTransportRelay: string
+  remoteTransportWebrtc: string
+  remoteTransportNone: string
+  remoteNoActiveConnection: string
+  remoteBound: string
+  remoteUnbound: string
+  remoteNotLoggedIn: string
+  remoteNoBoundDevice: string
+  remoteRunDiagnostics: string
+  remoteDiagnosticsRunning: string
+  remoteDiagnostics: string
+  remoteDiagnosticsStatus: Record<string, string>
+  remoteDiagnosticsMessages: Record<string, string>
   pluginConfig: string
   importPlugin: string
   importingPlugin: string
@@ -146,6 +179,156 @@ export type Translation = {
 export const supportedLanguages: LanguageCode[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'de']
 export const languageStorageKey = 'niuma.language'
 
+const remoteDiagnosticTranslations: Record<
+  LanguageCode,
+  Pick<
+    Translation,
+    | 'remoteRunDiagnostics'
+    | 'remoteDiagnosticsRunning'
+    | 'remoteDiagnostics'
+    | 'remoteDiagnosticsStatus'
+    | 'remoteDiagnosticsMessages'
+  >
+> = {
+  'zh-CN': {
+    remoteRunDiagnostics: '一键诊断',
+    remoteDiagnosticsRunning: '诊断中...',
+    remoteDiagnostics: '远程访问诊断',
+    remoteDiagnosticsStatus: { passed: '通过', failed: '失败', skipped: '跳过', running: '检查中' },
+    remoteDiagnosticsMessages: {
+      remoteDiagnosticsSummaryPassed: '远程访问本机组件状态正常',
+      remoteDiagnosticsSummaryDegraded: '远程访问部分可用，但存在需要处理的项目',
+      remoteDiagnosticsSummaryFailed: '远程访问当前不可用',
+      remoteDiagnosticsStepConfig: '远程访问配置',
+      remoteDiagnosticsStepBinding: '账号与设备绑定',
+      remoteDiagnosticsStepCredential: '本机凭据',
+      remoteDiagnosticsStepDeviceSocket: '设备信令连接',
+      remoteDiagnosticsStepRemoteControl: '远程控制开关',
+      remoteDiagnosticsMessageDisabled: '远程访问未启用',
+      remoteDiagnosticsMessageRemoteControlDisabled: '远程控制未启用',
+      remoteDiagnosticsMessageNotBound: '尚未登录并绑定设备',
+      remoteDiagnosticsMessageMissingCredential: '本机缺少设备凭据',
+      remoteDiagnosticsMessageServerUnreachable: '无法连接远程服务端',
+      remoteDiagnosticsMessageReady: '本机已准备好接受外部客户端连接'
+    }
+  },
+  'zh-TW': {
+    remoteRunDiagnostics: '一鍵診斷',
+    remoteDiagnosticsRunning: '診斷中...',
+    remoteDiagnostics: '遠端存取診斷',
+    remoteDiagnosticsStatus: { passed: '通過', failed: '失敗', skipped: '跳過', running: '檢查中' },
+    remoteDiagnosticsMessages: {
+      remoteDiagnosticsSummaryPassed: '遠端存取本機元件狀態正常',
+      remoteDiagnosticsSummaryDegraded: '遠端存取部分可用，但有需要處理的項目',
+      remoteDiagnosticsSummaryFailed: '遠端存取目前不可用',
+      remoteDiagnosticsStepConfig: '遠端存取設定',
+      remoteDiagnosticsStepBinding: '帳號與裝置綁定',
+      remoteDiagnosticsStepCredential: '本機憑據',
+      remoteDiagnosticsStepDeviceSocket: '裝置信令連線',
+      remoteDiagnosticsStepRemoteControl: '遠端控制開關',
+      remoteDiagnosticsMessageDisabled: '遠端存取未啟用',
+      remoteDiagnosticsMessageRemoteControlDisabled: '遠端控制未啟用',
+      remoteDiagnosticsMessageNotBound: '尚未登入並綁定裝置',
+      remoteDiagnosticsMessageMissingCredential: '本機缺少裝置憑據',
+      remoteDiagnosticsMessageServerUnreachable: '無法連接遠端服務端',
+      remoteDiagnosticsMessageReady: '本機已準備好接受外部客戶端連線'
+    }
+  },
+  en: {
+    remoteRunDiagnostics: 'Run diagnostics',
+    remoteDiagnosticsRunning: 'Diagnosing...',
+    remoteDiagnostics: 'Remote access diagnostics',
+    remoteDiagnosticsStatus: { passed: 'Passed', failed: 'Failed', skipped: 'Skipped', running: 'Checking' },
+    remoteDiagnosticsMessages: {
+      remoteDiagnosticsSummaryPassed: 'Local remote-access components look healthy',
+      remoteDiagnosticsSummaryDegraded: 'Remote access is partly available, but some items need attention',
+      remoteDiagnosticsSummaryFailed: 'Remote access is currently unavailable',
+      remoteDiagnosticsStepConfig: 'Remote access configuration',
+      remoteDiagnosticsStepBinding: 'Account and device binding',
+      remoteDiagnosticsStepCredential: 'Local credential',
+      remoteDiagnosticsStepDeviceSocket: 'Device signaling connection',
+      remoteDiagnosticsStepRemoteControl: 'Remote control switch',
+      remoteDiagnosticsMessageDisabled: 'Remote access is disabled',
+      remoteDiagnosticsMessageRemoteControlDisabled: 'Remote control is disabled',
+      remoteDiagnosticsMessageNotBound: 'This device is not signed in and bound',
+      remoteDiagnosticsMessageMissingCredential: 'Local device credential is missing',
+      remoteDiagnosticsMessageServerUnreachable: 'Unable to reach the remote server',
+      remoteDiagnosticsMessageReady: 'This device is ready for external client connections'
+    }
+  },
+  ja: {
+    remoteRunDiagnostics: '診断を実行',
+    remoteDiagnosticsRunning: '診断中...',
+    remoteDiagnostics: 'リモートアクセス診断',
+    remoteDiagnosticsStatus: { passed: '成功', failed: '失敗', skipped: 'スキップ', running: '確認中' },
+    remoteDiagnosticsMessages: {
+      remoteDiagnosticsSummaryPassed: 'ローカルのリモートアクセス構成は正常です',
+      remoteDiagnosticsSummaryDegraded: 'リモートアクセスは一部利用できますが、確認が必要です',
+      remoteDiagnosticsSummaryFailed: 'リモートアクセスは現在利用できません',
+      remoteDiagnosticsStepConfig: 'リモートアクセス設定',
+      remoteDiagnosticsStepBinding: 'アカウントとデバイス連携',
+      remoteDiagnosticsStepCredential: 'ローカル認証情報',
+      remoteDiagnosticsStepDeviceSocket: 'デバイスシグナリング接続',
+      remoteDiagnosticsStepRemoteControl: 'リモート制御スイッチ',
+      remoteDiagnosticsMessageDisabled: 'リモートアクセスが無効です',
+      remoteDiagnosticsMessageRemoteControlDisabled: 'リモート制御が無効です',
+      remoteDiagnosticsMessageNotBound: 'このデバイスはログインおよび連携されていません',
+      remoteDiagnosticsMessageMissingCredential: 'ローカルデバイス認証情報がありません',
+      remoteDiagnosticsMessageServerUnreachable: 'リモートサーバーに接続できません',
+      remoteDiagnosticsMessageReady: 'このデバイスは外部クライアント接続を受け付けられます'
+    }
+  },
+  ko: {
+    remoteRunDiagnostics: '진단 실행',
+    remoteDiagnosticsRunning: '진단 중...',
+    remoteDiagnostics: '원격 액세스 진단',
+    remoteDiagnosticsStatus: { passed: '통과', failed: '실패', skipped: '건너뜀', running: '확인 중' },
+    remoteDiagnosticsMessages: {
+      remoteDiagnosticsSummaryPassed: '로컬 원격 액세스 구성 요소가 정상입니다',
+      remoteDiagnosticsSummaryDegraded: '원격 액세스가 일부 가능하지만 확인이 필요합니다',
+      remoteDiagnosticsSummaryFailed: '현재 원격 액세스를 사용할 수 없습니다',
+      remoteDiagnosticsStepConfig: '원격 액세스 설정',
+      remoteDiagnosticsStepBinding: '계정 및 기기 바인딩',
+      remoteDiagnosticsStepCredential: '로컬 자격 증명',
+      remoteDiagnosticsStepDeviceSocket: '기기 시그널링 연결',
+      remoteDiagnosticsStepRemoteControl: '원격 제어 스위치',
+      remoteDiagnosticsMessageDisabled: '원격 액세스가 비활성화되어 있습니다',
+      remoteDiagnosticsMessageRemoteControlDisabled: '원격 제어가 비활성화되어 있습니다',
+      remoteDiagnosticsMessageNotBound: '이 기기는 로그인 및 바인딩되지 않았습니다',
+      remoteDiagnosticsMessageMissingCredential: '로컬 기기 자격 증명이 없습니다',
+      remoteDiagnosticsMessageServerUnreachable: '원격 서버에 연결할 수 없습니다',
+      remoteDiagnosticsMessageReady: '이 기기는 외부 클라이언트 연결을 받을 준비가 되었습니다'
+    }
+  },
+  de: {
+    remoteRunDiagnostics: 'Diagnose starten',
+    remoteDiagnosticsRunning: 'Diagnose läuft...',
+    remoteDiagnostics: 'Fernzugriff-Diagnose',
+    remoteDiagnosticsStatus: {
+      passed: 'Bestanden',
+      failed: 'Fehlgeschlagen',
+      skipped: 'Übersprungen',
+      running: 'Prüfung läuft'
+    },
+    remoteDiagnosticsMessages: {
+      remoteDiagnosticsSummaryPassed: 'Lokale Fernzugriff-Komponenten sind in Ordnung',
+      remoteDiagnosticsSummaryDegraded: 'Fernzugriff ist teilweise verfügbar, einige Punkte benötigen Aufmerksamkeit',
+      remoteDiagnosticsSummaryFailed: 'Fernzugriff ist derzeit nicht verfügbar',
+      remoteDiagnosticsStepConfig: 'Fernzugriff-Konfiguration',
+      remoteDiagnosticsStepBinding: 'Konto- und Gerätebindung',
+      remoteDiagnosticsStepCredential: 'Lokale Anmeldedaten',
+      remoteDiagnosticsStepDeviceSocket: 'Geräte-Signalisierungsverbindung',
+      remoteDiagnosticsStepRemoteControl: 'Fernsteuerungsschalter',
+      remoteDiagnosticsMessageDisabled: 'Fernzugriff ist deaktiviert',
+      remoteDiagnosticsMessageRemoteControlDisabled: 'Fernsteuerung ist deaktiviert',
+      remoteDiagnosticsMessageNotBound: 'Dieses Gerät ist nicht angemeldet und gebunden',
+      remoteDiagnosticsMessageMissingCredential: 'Lokale Geräteanmeldedaten fehlen',
+      remoteDiagnosticsMessageServerUnreachable: 'Remote-Server ist nicht erreichbar',
+      remoteDiagnosticsMessageReady: 'Dieses Gerät ist bereit für externe Clientverbindungen'
+    }
+  }
+}
+
 export const translations: Record<LanguageCode, Translation> = {
   'zh-CN': {
     languageName: '简体中文',
@@ -212,6 +395,45 @@ export const translations: Record<LanguageCode, Translation> = {
     backToDashboard: '返回主界面',
     pluginManagement: '插件管理',
     pluginManagementDescription: '管理已发现的工具、通知和状态指示插件，启用后插件会按自身能力运行。',
+    remoteAccess: '远程访问',
+    remoteAccessDescription: '配置外网服务端、账号绑定和远程控制开关。',
+    remoteServerUrl: '远程服务地址',
+    remoteAccessEnabled: '启用远程访问',
+    remoteControlEnabled: '启用远程控制',
+    remoteLogin: '登录并绑定',
+    remoteLoginOpening: '正在打开浏览器...',
+    remoteLoginWaiting: '浏览器登录完成后会自动绑定本机设备',
+    remoteLoginSuccess: '已完成登录绑定',
+    remoteLogout: '解除绑定',
+    remoteLoggingOut: '正在解除绑定...',
+    remoteLogoutSuccess: '已解除本机绑定',
+    remoteAccount: '账号',
+    remoteDevice: '设备',
+    remoteBindingStatus: '绑定状态',
+    remoteAgentStatus: '远程状态',
+    remoteAgentState: {
+      disabled: '已关闭',
+      not_configured: '未配置',
+      binding: '绑定中',
+      connecting: '连接中',
+      online: '在线',
+      reconnecting: '重连中',
+      token_revoked: 'Token 已吊销',
+      server_unreachable: '服务不可达',
+      error: '错误'
+    },
+    remoteActiveConnection: '当前远程连接',
+    remoteAvailableTransports: '可用通道',
+    remoteSelectedTransport: '正在使用',
+    remoteTransportRelay: 'Relay',
+    remoteTransportWebrtc: 'WebRTC',
+    remoteTransportNone: '无',
+    remoteNoActiveConnection: '无外部客户端连接',
+    remoteBound: '已绑定',
+    remoteUnbound: '未绑定',
+    remoteNotLoggedIn: '未登录',
+    remoteNoBoundDevice: '未绑定设备',
+    ...remoteDiagnosticTranslations['zh-CN'],
     pluginConfig: '插件配置',
     importPlugin: '导入插件',
     importingPlugin: '正在导入...',
@@ -385,6 +607,45 @@ export const translations: Record<LanguageCode, Translation> = {
     backToDashboard: '返回主畫面',
     pluginManagement: '外掛管理',
     pluginManagementDescription: '管理已發現的工具、通知和狀態指示外掛，啟用後外掛會依自身能力執行。',
+    remoteAccess: '遠端存取',
+    remoteAccessDescription: '設定外網服務端、帳號綁定與遠端控制開關。',
+    remoteServerUrl: '遠端服務地址',
+    remoteAccessEnabled: '啟用遠端存取',
+    remoteControlEnabled: '啟用遠端控制',
+    remoteLogin: '登入並綁定',
+    remoteLoginOpening: '正在開啟瀏覽器...',
+    remoteLoginWaiting: '瀏覽器登入完成後會自動綁定本機裝置',
+    remoteLoginSuccess: '已完成登入綁定',
+    remoteLogout: '解除綁定',
+    remoteLoggingOut: '正在解除綁定...',
+    remoteLogoutSuccess: '已解除本機綁定',
+    remoteAccount: '帳號',
+    remoteDevice: '裝置',
+    remoteBindingStatus: '綁定狀態',
+    remoteAgentStatus: '遠端狀態',
+    remoteAgentState: {
+      disabled: '已關閉',
+      not_configured: '未設定',
+      binding: '綁定中',
+      connecting: '連線中',
+      online: '在線',
+      reconnecting: '重新連線中',
+      token_revoked: 'Token 已撤銷',
+      server_unreachable: '服務不可達',
+      error: '錯誤'
+    },
+    remoteActiveConnection: '目前遠端連線',
+    remoteAvailableTransports: '可用通道',
+    remoteSelectedTransport: '正在使用',
+    remoteTransportRelay: 'Relay',
+    remoteTransportWebrtc: 'WebRTC',
+    remoteTransportNone: '無',
+    remoteNoActiveConnection: '無外部客戶端連線',
+    remoteBound: '已綁定',
+    remoteUnbound: '未綁定',
+    remoteNotLoggedIn: '未登入',
+    remoteNoBoundDevice: '未綁定裝置',
+    ...remoteDiagnosticTranslations['zh-TW'],
     pluginConfig: '外掛設定',
     importPlugin: '匯入外掛',
     importingPlugin: '正在匯入...',
@@ -559,6 +820,45 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: 'Plugin management',
     pluginManagementDescription:
       'Manage discovered tool, notification, and status indicator plugins. Enabled plugins run according to their capabilities.',
+    remoteAccess: 'Remote access',
+    remoteAccessDescription: 'Configure the remote server, account binding, and remote control switches.',
+    remoteServerUrl: 'Remote server URL',
+    remoteAccessEnabled: 'Enable remote access',
+    remoteControlEnabled: 'Enable remote control',
+    remoteLogin: 'Sign in and bind',
+    remoteLoginOpening: 'Opening browser...',
+    remoteLoginWaiting: 'This device will bind automatically after browser sign-in finishes.',
+    remoteLoginSuccess: 'Sign-in binding completed',
+    remoteLogout: 'Unbind',
+    remoteLoggingOut: 'Unbinding...',
+    remoteLogoutSuccess: 'Local binding removed',
+    remoteAccount: 'Account',
+    remoteDevice: 'Device',
+    remoteBindingStatus: 'Binding status',
+    remoteAgentStatus: 'Remote status',
+    remoteAgentState: {
+      disabled: 'Disabled',
+      not_configured: 'Not configured',
+      binding: 'Binding',
+      connecting: 'Connecting',
+      online: 'Online',
+      reconnecting: 'Reconnecting',
+      token_revoked: 'Token revoked',
+      server_unreachable: 'Server unreachable',
+      error: 'Error'
+    },
+    remoteActiveConnection: 'Active remote connection',
+    remoteAvailableTransports: 'Available channels',
+    remoteSelectedTransport: 'Using',
+    remoteTransportRelay: 'Relay',
+    remoteTransportWebrtc: 'WebRTC',
+    remoteTransportNone: 'None',
+    remoteNoActiveConnection: 'No external client connected',
+    remoteBound: 'Bound',
+    remoteUnbound: 'Not bound',
+    remoteNotLoggedIn: 'Not signed in',
+    remoteNoBoundDevice: 'No bound device',
+    ...remoteDiagnosticTranslations.en,
     pluginConfig: 'Plugin config',
     importPlugin: 'Import plugin',
     importingPlugin: 'Importing...',
@@ -733,6 +1033,45 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: 'プラグイン管理',
     pluginManagementDescription:
       '検出されたツール、通知、ステータス表示プラグインを管理します。有効なプラグインはそれぞれの機能に応じて動作します。',
+    remoteAccess: 'リモートアクセス',
+    remoteAccessDescription: 'リモートサーバー、アカウント連携、リモート制御のスイッチを設定します。',
+    remoteServerUrl: 'リモートサーバー URL',
+    remoteAccessEnabled: 'リモートアクセスを有効化',
+    remoteControlEnabled: 'リモート制御を有効化',
+    remoteLogin: 'ログインして連携',
+    remoteLoginOpening: 'ブラウザーを開いています...',
+    remoteLoginWaiting: 'ブラウザーでのログイン完了後、このデバイスは自動的に連携されます。',
+    remoteLoginSuccess: 'ログイン連携が完了しました',
+    remoteLogout: '連携解除',
+    remoteLoggingOut: '連携解除中...',
+    remoteLogoutSuccess: 'ローカル連携を解除しました',
+    remoteAccount: 'アカウント',
+    remoteDevice: 'デバイス',
+    remoteBindingStatus: '連携状態',
+    remoteAgentStatus: 'リモート状態',
+    remoteAgentState: {
+      disabled: '無効',
+      not_configured: '未設定',
+      binding: '連携中',
+      connecting: '接続中',
+      online: 'オンライン',
+      reconnecting: '再接続中',
+      token_revoked: 'Token が取り消されました',
+      server_unreachable: 'サーバーに到達できません',
+      error: 'エラー'
+    },
+    remoteActiveConnection: '現在のリモート接続',
+    remoteAvailableTransports: '利用可能なチャンネル',
+    remoteSelectedTransport: '使用中',
+    remoteTransportRelay: 'Relay',
+    remoteTransportWebrtc: 'WebRTC',
+    remoteTransportNone: 'なし',
+    remoteNoActiveConnection: '外部クライアント未接続',
+    remoteBound: '連携済み',
+    remoteUnbound: '未連携',
+    remoteNotLoggedIn: '未ログイン',
+    remoteNoBoundDevice: '連携済みデバイスなし',
+    ...remoteDiagnosticTranslations.ja,
     pluginConfig: 'プラグイン設定',
     importPlugin: 'プラグインを取り込む',
     importingPlugin: '取り込み中...',
@@ -907,6 +1246,45 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: '플러그인 관리',
     pluginManagementDescription:
       '발견된 도구, 알림 및 상태 표시 플러그인을 관리합니다. 활성화된 플러그인은 각 기능에 따라 실행됩니다.',
+    remoteAccess: '원격 액세스',
+    remoteAccessDescription: '원격 서버, 계정 바인딩, 원격 제어 스위치를 설정합니다.',
+    remoteServerUrl: '원격 서버 URL',
+    remoteAccessEnabled: '원격 액세스 활성화',
+    remoteControlEnabled: '원격 제어 활성화',
+    remoteLogin: '로그인 및 바인딩',
+    remoteLoginOpening: '브라우저를 여는 중...',
+    remoteLoginWaiting: '브라우저 로그인이 끝나면 이 기기가 자동으로 바인딩됩니다.',
+    remoteLoginSuccess: '로그인 바인딩 완료',
+    remoteLogout: '바인딩 해제',
+    remoteLoggingOut: '바인딩 해제 중...',
+    remoteLogoutSuccess: '로컬 바인딩이 해제되었습니다',
+    remoteAccount: '계정',
+    remoteDevice: '기기',
+    remoteBindingStatus: '바인딩 상태',
+    remoteAgentStatus: '원격 상태',
+    remoteAgentState: {
+      disabled: '꺼짐',
+      not_configured: '설정 안 됨',
+      binding: '바인딩 중',
+      connecting: '연결 중',
+      online: '온라인',
+      reconnecting: '재연결 중',
+      token_revoked: 'Token 취소됨',
+      server_unreachable: '서버 연결 불가',
+      error: '오류'
+    },
+    remoteActiveConnection: '현재 원격 연결',
+    remoteAvailableTransports: '사용 가능한 채널',
+    remoteSelectedTransport: '사용 중',
+    remoteTransportRelay: 'Relay',
+    remoteTransportWebrtc: 'WebRTC',
+    remoteTransportNone: '없음',
+    remoteNoActiveConnection: '외부 클라이언트 연결 없음',
+    remoteBound: '바인딩됨',
+    remoteUnbound: '바인딩 안 됨',
+    remoteNotLoggedIn: '로그인 안 됨',
+    remoteNoBoundDevice: '바인딩된 기기 없음',
+    ...remoteDiagnosticTranslations.ko,
     pluginConfig: '플러그인 설정',
     importPlugin: '플러그인 가져오기',
     importingPlugin: '가져오는 중...',
@@ -1081,6 +1459,45 @@ export const translations: Record<LanguageCode, Translation> = {
     pluginManagement: 'Plugin-Verwaltung',
     pluginManagementDescription:
       'Erkannte Tool-, Benachrichtigungs- und Statusanzeige-Plugins verwalten. Aktivierte Plugins laufen entsprechend ihren Fähigkeiten.',
+    remoteAccess: 'Fernzugriff',
+    remoteAccessDescription: 'Remote-Server, Kontobindung und Fernsteuerung konfigurieren.',
+    remoteServerUrl: 'Remote-Server-URL',
+    remoteAccessEnabled: 'Fernzugriff aktivieren',
+    remoteControlEnabled: 'Fernsteuerung aktivieren',
+    remoteLogin: 'Anmelden und binden',
+    remoteLoginOpening: 'Browser wird geöffnet...',
+    remoteLoginWaiting: 'Nach der Browser-Anmeldung wird dieses Gerät automatisch gebunden.',
+    remoteLoginSuccess: 'Anmeldebindung abgeschlossen',
+    remoteLogout: 'Bindung lösen',
+    remoteLoggingOut: 'Bindung wird gelöst...',
+    remoteLogoutSuccess: 'Lokale Bindung entfernt',
+    remoteAccount: 'Konto',
+    remoteDevice: 'Gerät',
+    remoteBindingStatus: 'Bindungsstatus',
+    remoteAgentStatus: 'Remote-Status',
+    remoteAgentState: {
+      disabled: 'Deaktiviert',
+      not_configured: 'Nicht konfiguriert',
+      binding: 'Bindung läuft',
+      connecting: 'Verbindet',
+      online: 'Online',
+      reconnecting: 'Verbindet erneut',
+      token_revoked: 'Token widerrufen',
+      server_unreachable: 'Server nicht erreichbar',
+      error: 'Fehler'
+    },
+    remoteActiveConnection: 'Aktive Remoteverbindung',
+    remoteAvailableTransports: 'Verfügbare Kanäle',
+    remoteSelectedTransport: 'Verwendet',
+    remoteTransportRelay: 'Relay',
+    remoteTransportWebrtc: 'WebRTC',
+    remoteTransportNone: 'Keine',
+    remoteNoActiveConnection: 'Kein externer Client verbunden',
+    remoteBound: 'Gebunden',
+    remoteUnbound: 'Nicht gebunden',
+    remoteNotLoggedIn: 'Nicht angemeldet',
+    remoteNoBoundDevice: 'Kein gebundenes Gerät',
+    ...remoteDiagnosticTranslations.de,
     pluginConfig: 'Plugin-Konfiguration',
     importPlugin: 'Plugin importieren',
     importingPlugin: 'Importiert...',

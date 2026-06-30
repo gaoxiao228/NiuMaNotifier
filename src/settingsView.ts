@@ -1,6 +1,12 @@
-import type { PluginConfigField, PluginManagementItem } from './api'
+import type {
+  PluginConfigField,
+  PluginManagementItem,
+  RemoteAgentStatus,
+  RemoteSettingsPayload
+} from './api'
 import { translations, type LanguageCode } from './i18n'
 import { renderPluginIcon } from './pluginIcon'
+import { renderRemoteDiagnosticReport, type RemoteDiagnosticReport } from './remoteDiagnostics'
 import { escapeHtml } from './viewUtils'
 
 export type SettingsShellRenderOptions = {
@@ -8,7 +14,7 @@ export type SettingsShellRenderOptions = {
   activePanel?: SettingsPanel
 }
 
-export type SettingsPanel = 'plugins' | 'notification-history'
+export type SettingsPanel = 'plugins' | 'notification-history' | 'remote-access'
 
 export type PluginManagementRenderOptions = {
   element: HTMLElement | null
@@ -27,10 +33,20 @@ export type PluginManagementRenderOptions = {
   pluginConfigs: Record<string, Record<string, unknown>>
 }
 
+export type RemoteSettingsRenderOptions = {
+  language: LanguageCode
+  settings: RemoteSettingsPayload | null
+  agentStatus: RemoteAgentStatus | null
+  busyAction: 'save' | 'login' | 'logout' | 'diagnostic' | null
+  resultText: string
+  diagnosticReport?: RemoteDiagnosticReport | null
+}
+
 export function renderSettingsShell(options: SettingsShellRenderOptions) {
   const t = translations[options.language]
   const activePanel = options.activePanel ?? 'plugins'
   const pluginsActive = activePanel === 'plugins'
+  const remoteAccessActive = activePanel === 'remote-access'
   const notificationHistoryActive = activePanel === 'notification-history'
   return `
     <div class="settings-layout">
@@ -41,6 +57,9 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
         <button class="settings-nav-item ${notificationHistoryActive ? 'active' : ''}" type="button" data-settings-panel="notification-history" ${
           notificationHistoryActive ? 'aria-current="page"' : ''
         }>${escapeHtml(t.notificationHistory)}</button>
+        <button class="settings-nav-item ${remoteAccessActive ? 'active' : ''}" type="button" data-settings-panel="remote-access" ${
+          remoteAccessActive ? 'aria-current="page"' : ''
+        }>${escapeHtml(t.remoteAccess)}</button>
       </aside>
       <section class="settings-content">
         <div id="settings-panel-plugins" class="settings-panel plugin-management-panel" ${pluginsActive ? '' : 'hidden'}>
@@ -67,9 +86,142 @@ export function renderSettingsShell(options: SettingsShellRenderOptions) {
           </div>
           <ol id="settings-notification-history" class="notification-history-list"></ol>
         </div>
+        <div id="settings-panel-remote-access" class="settings-panel remote-settings-panel" ${
+          remoteAccessActive ? '' : 'hidden'
+        }>
+          <div id="remote-settings-panel"></div>
+        </div>
       </section>
     </div>
   `
+}
+
+export function renderRemoteSettingsPanel(options: RemoteSettingsRenderOptions) {
+  const t = translations[options.language]
+  const settings = options.settings
+  const saveBusy = options.busyAction === 'save'
+  const loginBusy = options.busyAction === 'login'
+  const logoutBusy = options.busyAction === 'logout'
+  const diagnosticBusy = options.busyAction === 'diagnostic'
+  const serverUrl = settings?.server_url ?? ''
+  const account = settings?.user?.email ?? t.remoteNotLoggedIn
+  const device = settings?.device?.name ?? t.remoteNoBoundDevice
+  const bound = isRemoteBound(settings)
+  const agentStatus = options.agentStatus?.state
+    ? translateRemoteAgentState(options.language, options.agentStatus.state)
+    : t.loading
+  const availableTransports = displayRemoteTransports(
+    options.language,
+    options.agentStatus?.available_transports ?? []
+  )
+  const selectedTransport = options.agentStatus?.selected_transport
+    ? displayRemoteTransport(options.language, options.agentStatus.selected_transport)
+    : t.remoteTransportNone
+  const activeConnectionId = options.agentStatus?.active_connection_id ?? null
+  return `
+    <div class="settings-heading">
+      <div>
+        <h2>${escapeHtml(t.remoteAccess)}</h2>
+        <p>${escapeHtml(t.remoteAccessDescription)}</p>
+      </div>
+      ${
+        bound
+          ? ''
+          : `<button id="remote-login" type="button" ${loginBusy ? 'disabled' : ''}>${escapeHtml(
+              loginBusy ? t.remoteLoginOpening : t.remoteLogin
+            )}</button>`
+      }
+    </div>
+    <form id="remote-settings-form" class="remote-settings-form">
+      <label class="plugin-config-field" for="remote-server-url">
+        <span>${escapeHtml(t.remoteServerUrl)}</span>
+        <input id="remote-server-url" name="server_url" type="url" value="${escapeHtml(serverUrl)}">
+      </label>
+      <label class="plugin-enable-toggle remote-toggle">
+        <span>${escapeHtml(t.remoteAccessEnabled)}</span>
+        <input id="remote-access-enabled" name="remote_access_enabled" type="checkbox" ${
+          settings?.remote_access_enabled !== false ? 'checked' : ''
+        }>
+      </label>
+      <label class="plugin-enable-toggle remote-toggle">
+        <span>${escapeHtml(t.remoteControlEnabled)}</span>
+        <input id="remote-control-enabled" name="remote_control_enabled" type="checkbox" ${
+          settings?.remote_control_enabled !== false ? 'checked' : ''
+        }>
+      </label>
+      <button id="remote-settings-save" type="submit" ${saveBusy ? 'disabled' : ''}>${escapeHtml(
+        saveBusy ? t.saving : t.save
+      )}</button>
+    </form>
+    <dl class="remote-binding-summary">
+      <dt>${escapeHtml(t.remoteAccount)}</dt>
+      <dd>${escapeHtml(account)}</dd>
+      <dt>${escapeHtml(t.remoteDevice)}</dt>
+      <dd>${escapeHtml(device)}</dd>
+      <dt>${escapeHtml(t.remoteBindingStatus)}</dt>
+      <dd>${escapeHtml(bound ? t.remoteBound : t.remoteUnbound)}</dd>
+      <dt>${escapeHtml(t.remoteAgentStatus)}</dt>
+      <dd>${escapeHtml(agentStatus)}</dd>
+      ${
+        options.agentStatus?.last_error
+          ? `<dt>${escapeHtml(t.error)}</dt><dd>${escapeHtml(options.agentStatus.last_error)}</dd>`
+          : ''
+      }
+      ${
+        options.agentStatus
+          ? `<dt>${escapeHtml(t.remoteActiveConnection)}</dt><dd>${escapeHtml(
+              activeConnectionId || t.remoteNoActiveConnection
+            )}</dd>`
+          : ''
+      }
+      ${
+        options.agentStatus && activeConnectionId
+          ? `<dt>${escapeHtml(t.remoteAvailableTransports)}</dt><dd>${escapeHtml(
+              availableTransports || t.remoteTransportNone
+            )}</dd>
+      <dt>${escapeHtml(t.remoteSelectedTransport)}</dt><dd>${escapeHtml(selectedTransport)}</dd>`
+          : ''
+      }
+    </dl>
+    <div class="remote-actions">
+      <button id="remote-logout" type="button" ${logoutBusy || !bound ? 'disabled' : ''}>${escapeHtml(
+        logoutBusy ? t.remoteLoggingOut : t.remoteLogout
+      )}</button>
+      <button id="remote-diagnostics-run" type="button" ${diagnosticBusy ? 'disabled' : ''}>${escapeHtml(
+        diagnosticBusy ? t.remoteDiagnosticsRunning : t.remoteRunDiagnostics
+      )}</button>
+    </div>
+    ${renderRemoteDiagnosticReport({
+      language: options.language,
+      report: options.diagnosticReport ?? null,
+      translations
+    })}
+    ${options.resultText ? `<p id="remote-settings-result" class="settings-result">${escapeHtml(options.resultText)}</p>` : ''}
+  `
+}
+
+function isRemoteBound(settings: RemoteSettingsPayload | null) {
+  // 保存设置后后端可能暂时无法重新判断凭据，但账号和设备摘要仍代表当前绑定对象。
+  return settings?.bound === true || Boolean(settings?.user && settings?.device)
+}
+
+function displayRemoteTransports(language: LanguageCode, transports: string[]) {
+  return transports
+    .map((transport) => displayRemoteTransport(language, transport))
+    .filter(Boolean)
+    .join(' / ')
+}
+
+function displayRemoteTransport(language: LanguageCode, transport: string) {
+  const t = translations[language]
+  if (transport === 'relay') return t.remoteTransportRelay
+  if (transport === 'webrtc') return t.remoteTransportWebrtc
+  return transport
+}
+
+export function translateRemoteAgentState(language: LanguageCode, state: string) {
+  const t = translations[language]
+  return t.remoteAgentState[state] ?? state
 }
 
 export function renderPluginManagement(options: PluginManagementRenderOptions) {

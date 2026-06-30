@@ -18,6 +18,7 @@ pub mod models;
 pub mod notification_store;
 pub mod platform;
 pub mod plugin;
+pub mod remote;
 pub mod runtime_event;
 pub mod state;
 pub mod state_mutation;

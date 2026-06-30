@@ -518,6 +518,23 @@ impl NiumaStore {
         self.config_files().save_plugin_enabled_map(map)
     }
 
+    pub fn remote_config(&self) -> Result<crate::remote::config::RemoteConfig, String> {
+        self.config_files().remote_config()
+    }
+
+    pub fn save_remote_config(
+        &self,
+        config: &crate::remote::config::RemoteConfig,
+    ) -> Result<(), String> {
+        self.config_files().save_remote_config(config)
+    }
+
+    pub fn remote_device_install_id(
+        &self,
+    ) -> Result<crate::remote::device_identity::DeviceInstallId, String> {
+        self.config_files().remote_device_install_id()
+    }
+
     pub fn plugin_config(
         &self,
         plugin_id: &str,
