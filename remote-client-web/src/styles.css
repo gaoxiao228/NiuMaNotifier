@@ -26,6 +26,10 @@ input {
   padding: 32px 20px;
 }
 
+.client-app-shell.app-wide {
+  place-items: start center;
+}
+
 .login-page {
   width: min(960px, 100%);
   display: grid;
@@ -39,6 +43,14 @@ input {
   font-size: clamp(2rem, 4vw, 3.4rem);
   line-height: 1.08;
   letter-spacing: 0;
+}
+
+.login-copy p,
+.page-toolbar p,
+.session-placeholder p {
+  margin: 0;
+  color: #53627a;
+  line-height: 1.6;
 }
 
 .login-form {
@@ -57,8 +69,121 @@ input {
   letter-spacing: 0;
 }
 
+.form-alert {
+  margin-bottom: 18px;
+}
+
 .login-form .ant-btn {
   width: 100%;
+}
+
+.device-page,
+.session-placeholder {
+  width: min(1040px, 100%);
+}
+
+.page-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.page-toolbar h1,
+.session-placeholder h1 {
+  margin: 0 0 8px;
+  font-size: 1.8rem;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.user-email {
+  display: inline-block;
+  margin-top: 10px;
+  color: #31415b;
+  font-weight: 600;
+}
+
+.page-error {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #ffd6d6;
+  border-radius: 8px;
+  color: #a61d24;
+  background: #fff1f0;
+}
+
+.device-list {
+  padding: 8px 20px;
+  border: 1px solid #dfe5f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.device-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 0;
+}
+
+.device-meta div {
+  min-width: 0;
+}
+
+.device-meta dt {
+  color: #6b7890;
+  font-size: 0.78rem;
+}
+
+.device-meta dd {
+  margin: 3px 0 0;
+  color: #253149;
+  overflow-wrap: anywhere;
+}
+
+.session-placeholder {
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+  border: 1px solid #dfe5f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.selected-device-summary {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid #e6ebf5;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.selected-device-summary span {
+  color: #6b7890;
+}
+
+.selected-device-summary code {
+  color: #53627a;
+  overflow-wrap: anywhere;
+}
+
+.placeholder-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.placeholder-actions button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+  cursor: pointer;
 }
 
 @media (max-width: 760px) {
@@ -74,5 +199,13 @@ input {
 
   .login-form {
     padding: 20px;
+  }
+
+  .page-toolbar {
+    display: grid;
+  }
+
+  .device-meta {
+    grid-template-columns: 1fr;
   }
 }
