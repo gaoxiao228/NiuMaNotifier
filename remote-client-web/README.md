@@ -4,6 +4,12 @@
 
 `remote-server` 内置 Web 页面定位为 `remote-admin` 后台管理，不是终端用户外部客户端。除 Web 形态外，iOS、Android、Windows 桌面端等客户端也可以按同一套 HTTP / WebSocket / Relay / WebRTC / RPC 协议实现。
 
+部署时的 CORS、服务端地址、后台管理员初始化和 `remote-admin` / `remote-client-web` 边界说明见：
+
+```text
+../docs/integration/remote-admin-client-deployment_zh.md
+```
+
 ## 本地开发
 
 ```bash
