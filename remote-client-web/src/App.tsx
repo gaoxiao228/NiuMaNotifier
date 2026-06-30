@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { ConfigProvider, theme } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createAuthApi } from './api/authApi.js'
@@ -16,9 +18,8 @@ import { getStableClientId } from './remote/clientId.js'
 import { SessionConsolePage } from './sessions/sessionConsolePage.js'
 import { toDisplayErrorMessage } from './shared/errorMessage.js'
 
-function resolveRemoteServerUrl(): string {
-  const meta = import.meta as ImportMeta & { env?: Record<string, string | undefined> }
-  const envUrl = meta.env?.VITE_REMOTE_SERVER_URL
+export function resolveRemoteServerUrl(): string {
+  const envUrl = import.meta.env.VITE_REMOTE_SERVER_URL
   if (typeof envUrl === 'string' && envUrl.trim()) return envUrl.trim()
   return typeof window !== 'undefined' ? window.location.origin : ''
 }
