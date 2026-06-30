@@ -302,7 +302,7 @@ data: {"version":1,"state":{}}
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `status` | 不过滤 | 可选：`pending`、`allowed`、`denied`、`returned_to_codex`、`resolved_in_tool` |
+| `status` | 不过滤 | 可选：`pending`、`allowed`、`denied`、`returned_to_codex`、`returned_to_tool`、`resolved_in_tool` |
 
 成功响应 `data`：
 

@@ -908,6 +908,7 @@ Content-Type: application/json
 | `approval_requested` | 等待授权，状态为 `waiting_approval`。 |
 | `approval_resolved` | 授权已由某个消费者同意或拒绝，状态恢复为 `running`。 |
 | `approval_returned_to_codex` | Niuma 代处理窗口结束，仍保持 `waiting_approval`，用户需要回到 Codex 操作。 |
+| `approval_returned_to_tool` | Niuma 代处理窗口结束，仍保持 `waiting_approval`，用户需要回到原工具操作。 |
 | `input_requested` | 等待输入，状态为 `waiting_input`。 |
 | `task_failed` | 任务失败，状态为 `error`。 |
 | `assistant_message_completed` | 助手回复完成，状态为 `completed`。 |
@@ -1264,14 +1265,14 @@ GET /api/v1/approval-decisions?request_id=codex:s1:t1:Bash:abc123
 4. 对 SSE 事件和 pending 列表中的 `request_id` 做本地去重。
 5. 展示来自 `approval_requested` 事件的待处理授权；如果启用了启动恢复，也展示启动时恢复到的 pending 列表。
 6. 收到 `approval_resolved` 后移除或禁用本地按钮。
-7. 收到 `approval_returned_to_codex` 后禁用按钮并提示回 Codex 操作。
+7. 收到 `approval_returned_to_codex` 或 `approval_returned_to_tool` 后禁用按钮并提示回原工具操作。
 8. 提交决策后根据 `accepted` 判断是否赢得决策。
 
 处理事件规则：
 
 - 收到 `approval_resolved`：禁用本地同意/拒绝，显示已由 `decided_by` / `decided_source` 处理。
-- 收到 `approval_returned_to_codex`：禁用本地同意/拒绝，提示用户回到 Codex 中操作。
-- 只有 `pending` 授权可以提交决策；`allowed`、`denied`、`returned_to_codex` 都视为已处理。
+- 收到 `approval_returned_to_codex` 或 `approval_returned_to_tool`：禁用本地同意/拒绝，提示用户回到原工具中操作。
+- 只有 `pending` 授权可以提交决策；`allowed`、`denied`、`returned_to_codex`、`returned_to_tool` 都视为已处理。
 
 最小 Node.js 消费者示例：
 

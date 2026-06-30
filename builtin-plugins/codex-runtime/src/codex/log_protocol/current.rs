@@ -49,6 +49,7 @@ pub fn parse_codex_log_row(row: &CodexLogRow, source_path: &str) -> Option<Niuma
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: None,
         project_path: String::new(),
         project_name: "Codex".to_string(),
         event_type: EventType::TaskFailed,

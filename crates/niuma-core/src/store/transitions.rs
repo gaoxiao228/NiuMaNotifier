@@ -76,7 +76,10 @@ pub(super) fn apply_attention_transition(state: &mut StoredState, event: &NiumaE
         state.attention_items.clear();
         return;
     }
-    if matches!(event.event_type, EventType::ApprovalReturnedToCodex) {
+    if matches!(
+        event.event_type,
+        EventType::ApprovalReturnedToCodex | EventType::ApprovalReturnedToTool
+    ) {
         restore_session_attention_status(state, &event.tool, &event.session_id);
         return;
     }
@@ -258,7 +261,9 @@ fn status_from_event(event_type: &EventType) -> RuntimeStateStatus {
         EventType::SessionStarted => RuntimeStateStatus::Running,
         EventType::SessionIdled => RuntimeStateStatus::Idle,
         EventType::ApprovalRequested => RuntimeStateStatus::WaitingApproval,
-        EventType::ApprovalReturnedToCodex => RuntimeStateStatus::WaitingApproval,
+        EventType::ApprovalReturnedToCodex | EventType::ApprovalReturnedToTool => {
+            RuntimeStateStatus::WaitingApproval
+        }
         EventType::ApprovalResolved => RuntimeStateStatus::Running,
         EventType::InputRequested => RuntimeStateStatus::WaitingInput,
         EventType::TaskFailed => RuntimeStateStatus::Error,

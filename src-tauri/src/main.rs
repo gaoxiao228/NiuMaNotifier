@@ -35,6 +35,7 @@ fn main() {
                     eprintln!("NiumaNotifier language preference not restored: {error}");
                 }
                 builtin_plugins::configure_builtin_codex_plugin_command(app);
+                builtin_plugins::configure_builtin_claude_code_plugin_command(app);
                 builtin_plugins::configure_builtin_bark_plugin_command(app);
                 builtin_plugins::configure_builtin_ntfy_plugin_command(app);
                 let _tray = tray::register_tray(

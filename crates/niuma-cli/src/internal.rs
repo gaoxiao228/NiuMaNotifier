@@ -20,11 +20,17 @@ pub(crate) fn run_internal_command(command: InternalRootCommand) {
         }
         InternalCommand::Hook {
             tool: ToolArg::ClaudeCode,
-            ..
-        } => ApiResponse::fail(
-            ApiErrorCode::BusinessValidation,
-            "Claude Code internal hook 尚未实现",
-        ),
+            source,
+        } => {
+            if source.as_deref() != Some("niuma-notifier") {
+                ApiResponse::fail(
+                    ApiErrorCode::BusinessValidation,
+                    "internal hook source 不合法",
+                )
+            } else {
+                hook_runtime::run_claude_code_hook()
+            }
+        }
     };
     // Codex 会把 hook stdout 当成事件专用协议 JSON 解析；Niuma 的调试 envelope 只能写 stderr。
     eprintln!(

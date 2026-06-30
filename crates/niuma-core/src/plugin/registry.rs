@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::claude_hook::read_claude_hook_status;
 use crate::codex_hook::read_codex_hook_status;
 use crate::config::codex_home;
 use crate::listener_config::ListenerConfig;
@@ -14,7 +15,7 @@ use super::{
     builtin_ntfy_manifest, enablement,
     validation::{plugin_capability_id, provider_capabilities},
     PluginCapability, PluginConfigField, PluginKind, PluginManifest, PluginRuntimeState,
-    PluginRuntimeStatus, PluginSource, BUILTIN_CODEX_PLUGIN_ID,
+    PluginRuntimeStatus, PluginSource, BUILTIN_CLAUDE_CODE_PLUGIN_ID, BUILTIN_CODEX_PLUGIN_ID,
 };
 
 // 管理动作只描述插件管理界面上的受控操作，不等同于插件运行时 capability。
@@ -247,9 +248,14 @@ impl PluginRegistry {
 }
 
 fn management_actions_for_manifest(manifest: &PluginManifest) -> Vec<PluginManagementAction> {
-    if manifest.id != BUILTIN_CODEX_PLUGIN_ID {
-        return Vec::new();
+    match manifest.id.as_str() {
+        BUILTIN_CODEX_PLUGIN_ID => codex_hook_management_actions(),
+        BUILTIN_CLAUDE_CODE_PLUGIN_ID => claude_hook_management_actions(),
+        _ => Vec::new(),
     }
+}
+
+fn codex_hook_management_actions() -> Vec<PluginManagementAction> {
     // 插件管理只展示 Niuma 可稳定检测的安装状态；Codex 信任是用户操作提示，不参与状态判断。
     let action = match read_codex_hook_status(&codex_home()) {
         Ok(status) if status.installed => PluginManagementAction {
@@ -279,6 +285,39 @@ fn management_actions_for_manifest(manifest: &PluginManifest) -> Vec<PluginManag
             description:
                 "接收 Codex 权限请求并回传允许/拒绝结果。安装后需在 Codex 中执行 /hooks 信任，信任后才能拦截授权请求。"
                     .to_string(),
+            kind: PluginManagementActionKind::Primary,
+            enabled: true,
+            status_label: Some(format!("Hook 状态读取失败：{error}")),
+            status_level: PluginManagementActionStatusLevel::Error,
+        },
+    };
+    vec![action]
+}
+
+fn claude_hook_management_actions() -> Vec<PluginManagementAction> {
+    let action = match read_claude_hook_status(&crate::config::claude_config_dir()) {
+        Ok(status) if status.installed => PluginManagementAction {
+            id: "claude_hook_uninstall".to_string(),
+            label: "移除 Hook".to_string(),
+            description: "Hook 已安装到 Claude Code 配置，Niuma 将代处理权限请求。".to_string(),
+            kind: PluginManagementActionKind::Danger,
+            enabled: true,
+            status_label: Some("Hook 已安装".to_string()),
+            status_level: PluginManagementActionStatusLevel::Ok,
+        },
+        Ok(_) => PluginManagementAction {
+            id: "claude_hook_install".to_string(),
+            label: "安装 Hook".to_string(),
+            description: "接收 Claude Code 权限请求并回传允许/拒绝结果。".to_string(),
+            kind: PluginManagementActionKind::Primary,
+            enabled: true,
+            status_label: Some("Hook 未安装".to_string()),
+            status_level: PluginManagementActionStatusLevel::Neutral,
+        },
+        Err(error) => PluginManagementAction {
+            id: "claude_hook_install".to_string(),
+            label: "安装 Hook".to_string(),
+            description: "接收 Claude Code 权限请求并回传允许/拒绝结果。".to_string(),
             kind: PluginManagementActionKind::Primary,
             enabled: true,
             status_label: Some(format!("Hook 状态读取失败：{error}")),

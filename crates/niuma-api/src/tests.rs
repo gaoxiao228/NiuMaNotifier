@@ -8,7 +8,7 @@ use niuma_core::codex_managed_session::{
 };
 use niuma_core::listener_config::ListenerConfig;
 use niuma_core::models::{
-    ApprovalControlRef, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus,
+    ApprovalControlRef, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus, CompletionReason,
     EventInteractionDetail, EventInteractionOption, EventInteractionQuestion,
     EventInteractionSchema, EventSessionScope, EventType, NiumaEvent, ToolKind,
 };
@@ -546,6 +546,268 @@ async fn approval_tool_resolved_clears_relay_attention() {
 }
 
 #[tokio::test]
+async fn claude_rejected_tool_result_clears_returned_tool_attention() {
+    let store = NiumaStore::new(test_path("api_claude_returned_tool_rejected"));
+    enable_claude_listener(&store);
+    let router = app(store);
+
+    let mut body = sample_approval_request_body("approval-claude-returned");
+    body["tool"] = serde_json::json!("claude_code");
+    body["tool_name"] = serde_json::json!("WebFetch");
+    body["tool_call_id"] = serde_json::json!("call_00_hTZoACfhXSk7jAKs07Uj5941");
+    post_json(&router, "/api/v1/approval-requests", body).await;
+
+    let returned = post_json(
+        &router,
+        "/api/v1/approval-requests/return",
+        serde_json::json!({
+            "request_id": "approval-claude-returned",
+            "returned_by": "hook-helper",
+            "reason": "10 分钟内未处理，请回到 Claude Code 中操作"
+        }),
+    )
+    .await;
+    assert_eq!(returned["data"]["status"], "returned_to_tool");
+
+    let mut rejected = sample_event_with_type(
+        "claude-rejected-webfetch",
+        "claude-rejected-webfetch",
+        EventType::SessionActivity,
+        Utc::now().timestamp(),
+    );
+    rejected.tool = ToolKind::ClaudeCode;
+    rejected.source = "claude-code-session-file".to_string();
+    rejected.summary = "Claude Code 工具执行出错，任务可能仍在继续：The user doesn't want to proceed with this tool use.".to_string();
+    rejected.tool_call_id = Some("call_00_hTZoACfhXSk7jAKs07Uj5941".to_string());
+
+    let response = post_json(
+        &router,
+        "/api/v1/plugin-events",
+        serde_json::json!({
+            "plugin_id": "builtin-claude-code",
+            "events": [rejected]
+        }),
+    )
+    .await;
+    assert_eq!(response["code"], 0);
+
+    let list = get_json(&router, "/api/v1/approval-requests").await;
+    assert_eq!(list["data"]["list"][0]["status"], "resolved_in_tool");
+
+    let main_state = get_json(&router, "/api/v1/main-state").await;
+    // 普通 Claude watcher tool_result 只负责清理已返回工具端的授权提醒，
+    // SessionActivity 不进入 public events，主状态不应继续暴露可操作授权交互。
+    assert_eq!(main_state["data"]["state"]["status"], "running");
+    assert!(main_state["data"]["state"]["detail"]["interaction"].is_null());
+}
+
+#[tokio::test]
+async fn claude_interrupted_tool_result_resolves_approval_and_finishes_session() {
+    let store = NiumaStore::new(test_path("api_claude_interrupted_tool_result_finishes"));
+    enable_claude_listener(&store);
+    let router = app(store);
+
+    let mut body = sample_approval_request_body("approval-claude-interrupted");
+    body["tool"] = serde_json::json!("claude_code");
+    body["tool_name"] = serde_json::json!("WebFetch");
+    body["tool_call_id"] = serde_json::json!("call-interrupted");
+    post_json(&router, "/api/v1/approval-requests", body).await;
+
+    let mut interrupted = sample_event_with_type(
+        "claude-interrupted-webfetch",
+        "claude-interrupted-webfetch",
+        EventType::AssistantMessageCompleted,
+        Utc::now().timestamp(),
+    );
+    interrupted.tool = ToolKind::ClaudeCode;
+    interrupted.source = "claude-code-session-file".to_string();
+    interrupted.summary = "Claude Code 已中断：用户拒绝了工具授权".to_string();
+    interrupted.completion_reason = Some(CompletionReason::Interrupted);
+    interrupted.tool_call_id = Some("call-interrupted".to_string());
+    interrupted.attention_resolve_key = Some("approval:approval-claude-interrupted".to_string());
+
+    let response = post_json(
+        &router,
+        "/api/v1/plugin-events",
+        serde_json::json!({
+            "plugin_id": "builtin-claude-code",
+            "events": [interrupted]
+        }),
+    )
+    .await;
+    assert_eq!(response["code"], 0);
+
+    let list = get_json(&router, "/api/v1/approval-requests").await;
+    assert_eq!(list["data"]["list"][0]["status"], "resolved_in_tool");
+
+    let main_state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(main_state["data"]["state"]["status"], "completed");
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["completion_reason"],
+        "interrupted"
+    );
+}
+
+#[tokio::test]
+async fn claude_watcher_tool_result_resolves_only_matching_approval_by_tool_call_id() {
+    let store = NiumaStore::new(test_path("api_claude_tool_result_resolves_one"));
+    enable_claude_listener(&store);
+    let router = app(store);
+
+    let mut first = sample_approval_request_body("approval-claude-a");
+    first["tool"] = serde_json::json!("claude_code");
+    first["tool_call_id"] = serde_json::json!("call-a");
+    post_json(&router, "/api/v1/approval-requests", first).await;
+
+    let mut second = sample_approval_request_body("approval-claude-b");
+    second["tool"] = serde_json::json!("claude_code");
+    second["tool_call_id"] = serde_json::json!("call-b");
+    post_json(&router, "/api/v1/approval-requests", second).await;
+
+    let mut result = sample_event_with_type(
+        "claude-tool-result-b",
+        "claude-tool-result-b",
+        EventType::SessionActivity,
+        1_010,
+    );
+    result.tool = ToolKind::ClaudeCode;
+    result.source = "claude-code-session-file".to_string();
+    result.summary = "Claude Code 工具执行完成：ok".to_string();
+    result.tool_call_id = Some("call-b".to_string());
+    let response = post_json(
+        &router,
+        "/api/v1/plugin-events",
+        serde_json::json!({
+            "plugin_id": "builtin-claude-code",
+            "events": [result]
+        }),
+    )
+    .await;
+
+    assert_eq!(response["code"], 0);
+
+    let list = get_json(&router, "/api/v1/approval-requests").await;
+    let approvals = list["data"]["list"].as_array().unwrap();
+    let approval_a = approvals
+        .iter()
+        .find(|item| item["id"] == "approval-claude-a")
+        .unwrap();
+    let approval_b = approvals
+        .iter()
+        .find(|item| item["id"] == "approval-claude-b")
+        .unwrap();
+    assert_eq!(approval_a["status"], "pending");
+    assert_eq!(approval_b["status"], "resolved_in_tool");
+
+    let main_state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(main_state["data"]["state"]["status"], "waiting_approval");
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["interaction"]["request_id"],
+        "approval-claude-a"
+    );
+}
+
+#[tokio::test]
+async fn claude_watcher_tool_result_resolves_parallel_unkeyed_approval_by_request_key() {
+    let store = NiumaStore::new(test_path("api_claude_parallel_unkeyed_request_key"));
+    enable_claude_listener(&store);
+    let router = app(store);
+
+    let mut first =
+        sample_approval_request_body("claude_code:s1:permission_request:WebFetch:93e6a55efc47430b");
+    first["tool"] = serde_json::json!("claude_code");
+    first["turn_id"] = serde_json::json!("permission_request");
+    first["tool_name"] = serde_json::json!("WebFetch");
+    post_json(&router, "/api/v1/approval-requests", first).await;
+
+    let mut second = sample_approval_request_body(
+        "claude_code:s1:permission_request:WebSearch:ed6da74eafd41210",
+    );
+    second["tool"] = serde_json::json!("claude_code");
+    second["turn_id"] = serde_json::json!("permission_request");
+    second["tool_name"] = serde_json::json!("WebSearch");
+    post_json(&router, "/api/v1/approval-requests", second).await;
+
+    let mut result = sample_event_with_type(
+        "claude-tool-result-webfetch",
+        "claude-tool-result-webfetch",
+        EventType::SessionActivity,
+        1_010,
+    );
+    result.tool = ToolKind::ClaudeCode;
+    result.source = "claude-code-session-file".to_string();
+    result.summary =
+        "Claude Code 工具执行出错，任务可能仍在继续：User rejected tool use".to_string();
+    result.tool_call_id = Some("call-webfetch".to_string());
+    result.attention_resolve_key =
+        Some("approval:claude_code:s1:permission_request:WebFetch:93e6a55efc47430b".to_string());
+
+    let response = post_json(
+        &router,
+        "/api/v1/plugin-events",
+        serde_json::json!({
+            "plugin_id": "builtin-claude-code",
+            "events": [result]
+        }),
+    )
+    .await;
+
+    assert_eq!(response["code"], 0);
+
+    let list = get_json(&router, "/api/v1/approval-requests").await;
+    let approvals = list["data"]["list"].as_array().unwrap();
+    let webfetch = approvals
+        .iter()
+        .find(|item| item["id"] == "claude_code:s1:permission_request:WebFetch:93e6a55efc47430b")
+        .unwrap();
+    let websearch = approvals
+        .iter()
+        .find(|item| item["id"] == "claude_code:s1:permission_request:WebSearch:ed6da74eafd41210")
+        .unwrap();
+    assert_eq!(webfetch["status"], "resolved_in_tool");
+    assert_eq!(websearch["status"], "pending");
+}
+
+#[tokio::test]
+async fn claude_watcher_rejected_tool_result_resolves_matching_approval_by_tool_call_id() {
+    let store = NiumaStore::new(test_path("api_claude_rejected_tool_result_resolves"));
+    enable_claude_listener(&store);
+    let router = app(store);
+
+    let mut body = sample_approval_request_body("approval-claude-deny");
+    body["tool"] = serde_json::json!("claude_code");
+    body["tool_call_id"] = serde_json::json!("call-deny");
+    post_json(&router, "/api/v1/approval-requests", body).await;
+
+    let mut result = sample_event_with_type(
+        "claude-tool-result-deny",
+        "claude-tool-result-deny",
+        EventType::TaskFailed,
+        1_011,
+    );
+    result.tool = ToolKind::ClaudeCode;
+    result.source = "claude-code-session-file".to_string();
+    result.summary = "Claude Code 工具执行失败：User rejected tool use".to_string();
+    result.error_message = Some("User rejected tool use".to_string());
+    result.tool_call_id = Some("call-deny".to_string());
+
+    let response = post_json(
+        &router,
+        "/api/v1/plugin-events",
+        serde_json::json!({
+            "plugin_id": "builtin-claude-code",
+            "events": [result]
+        }),
+    )
+    .await;
+
+    assert_eq!(response["code"], 0);
+
+    let list = get_json(&router, "/api/v1/approval-requests").await;
+    assert_eq!(list["data"]["list"][0]["status"], "resolved_in_tool");
+}
+
+#[tokio::test]
 async fn approval_proxy_watchdog_returns_stale_request_to_codex() {
     let store = NiumaStore::new(test_path("api_approval_watchdog"));
     enable_codex_listener(&store);
@@ -556,6 +818,7 @@ async fn approval_proxy_watchdog_returns_stale_request_to_codex() {
         session_id: "s1".to_string(),
         turn_id: "turn-1".to_string(),
         tool_name: "Bash".to_string(),
+        tool_call_id: None,
         command: Some("cargo test".to_string()),
         description: Some("运行测试".to_string()),
         project_path: "/tmp/demo".to_string(),
@@ -616,6 +879,64 @@ async fn approval_proxy_watchdog_returns_stale_request_to_codex() {
     assert_eq!(
         main_state["data"]["state"]["detail"]["interaction"]["actionable"],
         false
+    );
+}
+
+#[tokio::test]
+async fn approval_proxy_watchdog_keeps_recent_hook_request_actionable() {
+    let store = NiumaStore::new(test_path("api_approval_watchdog_keeps_recent"));
+    enable_codex_listener(&store);
+    let heartbeat_at = Utc::now() - chrono::Duration::seconds(9);
+    let request = ApprovalRequest {
+        id: "approval-recent".to_string(),
+        tool: ToolKind::Codex,
+        session_id: "s1".to_string(),
+        turn_id: "turn-1".to_string(),
+        tool_name: "Bash".to_string(),
+        tool_call_id: None,
+        command: Some("cargo test".to_string()),
+        description: Some("运行测试".to_string()),
+        project_path: "/tmp/demo".to_string(),
+        project_name: "demo".to_string(),
+        status: ApprovalStatus::Pending,
+        decided_by: None,
+        decided_source: None,
+        reason: None,
+        created_at: heartbeat_at,
+        updated_at: heartbeat_at,
+        proxy_timeout_seconds: 600,
+        proxy_status: ApprovalProxyStatus::Active,
+        last_heartbeat_at: Some(heartbeat_at),
+        proxy_lost_at: None,
+        channel: niuma_core::models::ApprovalChannel::HookProxy,
+        control_ref: None,
+    };
+    store.upsert_approval_request(request.clone()).unwrap();
+    store
+        .append_event(crate::handlers::approval_event_for_internal(
+            &request,
+            EventType::ApprovalRequested,
+            "urgent",
+            "approval-api",
+        ))
+        .unwrap();
+
+    let bus = RuntimeEventBus::new();
+    let mutation_service = StateMutationService::new(store.clone(), bus.clone());
+    let swept =
+        crate::approval_proxy_watchdog::sweep_approval_proxy_watchdog(&store, &mutation_service)
+            .unwrap();
+
+    assert_eq!(swept, 0);
+    let router = app_with_bus(store, bus);
+    let main_state = get_json(&router, "/api/v1/main-state").await;
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["interaction"]["actionable"],
+        true
+    );
+    assert_eq!(
+        main_state["data"]["state"]["detail"]["interaction"]["request_id"],
+        "approval-recent"
     );
 }
 
@@ -4246,6 +4567,15 @@ fn enable_codex_listener(store: &NiumaStore) {
         .unwrap();
 }
 
+fn enable_claude_listener(store: &NiumaStore) {
+    store
+        .save_listener_config(&ListenerConfig {
+            claude_code_listening_enabled: true,
+            ..ListenerConfig::default()
+        })
+        .unwrap();
+}
+
 fn sample_event_with_type(
     id: &str,
     dedupe_key: &str,
@@ -4263,6 +4593,7 @@ fn sample_event_with_type(
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: None,
         project_path: "/tmp/demo".to_string(),
         project_name: "demo".to_string(),
         event_type,

@@ -17,6 +17,20 @@ pub struct CodexPermissionRequest {
     pub session_id: String,
     pub turn_id: String,
     pub tool_name: String,
+    pub tool_call_id: Option<String>,
+    pub command: Option<String>,
+    pub description: Option<String>,
+    pub project_path: String,
+    pub project_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaudePermissionRequest {
+    pub id: String,
+    pub session_id: String,
+    pub turn_id: String,
+    pub tool_name: String,
+    pub tool_call_id: Option<String>,
     pub command: Option<String>,
     pub description: Option<String>,
     pub project_path: String,
@@ -58,17 +72,18 @@ impl HookPayloadParser {
                 }
                 Ok(Some(event))
             }
-            (HookToolHint::ClaudeCode, "PreToolUse") => {
+            (HookToolHint::ClaudeCode, "PermissionRequest") => {
                 let tool_name =
                     string_field(&payload, "tool_name").unwrap_or_else(|| "Tool".into());
                 let command = tool_input_summary(&payload)
                     .unwrap_or_else(|| "Claude Code 正在等待批准".into());
-                let mut event = build_event(
+                let mut event = build_event_with_turn_fallback(
                     &payload,
                     tool,
                     EventType::ApprovalRequested,
                     "urgent",
                     format!("{tool_name}: {command}"),
+                    "permission_request",
                     now,
                 );
                 event.interaction = Some(EventInteractionDetail::tool_approval(
@@ -99,6 +114,28 @@ pub fn codex_permission_request_from_payload(
         .unwrap_or_else(|_| codex_permission_request_from_value_lossy(&payload)))
 }
 
+pub fn claude_permission_request_from_payload(
+    data: &[u8],
+) -> Result<ClaudePermissionRequest, serde_json::Error> {
+    let payload: Value = serde_json::from_slice(data)?;
+    Ok(claude_permission_request_from_value(&payload)
+        .unwrap_or_else(|_| claude_permission_request_from_value_lossy(&payload)))
+}
+
+pub fn claude_permission_request_id_from_tool_use(
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+) -> String {
+    permission_request_id(
+        "claude_code",
+        session_id,
+        "permission_request",
+        tool_name,
+        tool_input,
+    )
+}
+
 fn codex_permission_request_from_value(payload: &Value) -> Result<CodexPermissionRequest, String> {
     let event_name = string_field(payload, "hook_event_name").unwrap_or_default();
     if event_name != "PermissionRequest" {
@@ -116,21 +153,49 @@ fn codex_permission_request_from_value_lossy(payload: &Value) -> CodexPermission
     let project_name =
         project_name_from_path(&project_path).unwrap_or_else(|| "unknown-project".into());
     let tool_input = payload.get("tool_input").unwrap_or(&Value::Null);
-    let tool_input_hash = stable_hash(&serde_json::to_string(tool_input).unwrap_or_default());
-    // request id 必须跨 hook 重试稳定，避免同一次 Codex 授权请求创建多个待处理项。
-    let id = format!(
-        "codex:{}:{}:{}:{}",
-        stable_id_part(&session_id),
-        stable_id_part(&turn_id),
-        stable_id_part(&tool_name),
-        tool_input_hash
-    );
+    let id = permission_request_id("codex", &session_id, &turn_id, &tool_name, tool_input);
 
     CodexPermissionRequest {
         id,
         session_id,
         turn_id,
         tool_name,
+        tool_call_id: tool_call_id_from_payload(payload),
+        command: tool_input_string(tool_input, "command")
+            .or_else(|| tool_input_string(tool_input, "cmd")),
+        description: tool_input_string(tool_input, "description"),
+        project_path,
+        project_name,
+    }
+}
+
+fn claude_permission_request_from_value(
+    payload: &Value,
+) -> Result<ClaudePermissionRequest, String> {
+    let event_name = string_field(payload, "hook_event_name").unwrap_or_default();
+    if event_name != "PermissionRequest" {
+        return Err("不是 Claude Code PermissionRequest payload".to_string());
+    }
+    Ok(claude_permission_request_from_value_lossy(payload))
+}
+
+fn claude_permission_request_from_value_lossy(payload: &Value) -> ClaudePermissionRequest {
+    let session_id =
+        string_field(payload, "session_id").unwrap_or_else(|| "unknown-session".into());
+    let turn_id = string_field(payload, "turn_id").unwrap_or_else(|| "permission_request".into());
+    let tool_name = string_field(payload, "tool_name").unwrap_or_else(|| "Tool".into());
+    let project_path = string_field(payload, "cwd").unwrap_or_default();
+    let project_name =
+        project_name_from_path(&project_path).unwrap_or_else(|| "unknown-project".into());
+    let tool_input = payload.get("tool_input").unwrap_or(&Value::Null);
+    let id = permission_request_id("claude_code", &session_id, &turn_id, &tool_name, tool_input);
+
+    ClaudePermissionRequest {
+        id,
+        session_id,
+        turn_id,
+        tool_name,
+        tool_call_id: tool_call_id_from_payload(payload),
         command: tool_input_string(tool_input, "command")
             .or_else(|| tool_input_string(tool_input, "cmd")),
         description: tool_input_string(tool_input, "description"),
@@ -166,9 +231,29 @@ fn build_event(
     summary: String,
     now: DateTime<Utc>,
 ) -> NiumaEvent {
+    build_event_with_turn_fallback(
+        payload,
+        tool,
+        event_type,
+        severity,
+        summary,
+        "unknown-turn",
+        now,
+    )
+}
+
+fn build_event_with_turn_fallback(
+    payload: &Value,
+    tool: ToolKind,
+    event_type: EventType,
+    severity: &str,
+    summary: String,
+    fallback_turn_id: &str,
+    now: DateTime<Utc>,
+) -> NiumaEvent {
     let session_id =
         string_field(payload, "session_id").unwrap_or_else(|| "unknown-session".into());
-    let turn_id = string_field(payload, "turn_id").unwrap_or_else(|| "unknown-turn".into());
+    let turn_id = string_field(payload, "turn_id").unwrap_or_else(|| fallback_turn_id.into());
     let project_path = string_field(payload, "cwd").unwrap_or_default();
     let project_name =
         project_name_from_path(&project_path).unwrap_or_else(|| "unknown-project".into());
@@ -189,6 +274,7 @@ fn build_event(
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: None,
         project_path,
         project_name,
         event_type,
@@ -240,6 +326,21 @@ fn tool_input_string(tool_input: &Value, key: &str) -> Option<String> {
     }
 }
 
+fn tool_call_id_from_payload(payload: &Value) -> Option<String> {
+    for key in ["tool_use_id", "toolUseID", "tool_call_id"] {
+        if let Some(value) = string_field(payload, key) {
+            return Some(value);
+        }
+    }
+    let tool_input = payload.get("tool_input")?;
+    for key in ["tool_use_id", "toolUseID", "tool_call_id"] {
+        if let Some(value) = tool_input_string(tool_input, key) {
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn project_name_from_path(path: &str) -> Option<String> {
     path.trim_end_matches('/')
         .rsplit('/')
@@ -263,6 +364,7 @@ fn event_type_key(event_type: &EventType) -> &'static str {
         EventType::ApprovalRequested => "permission_request",
         EventType::ApprovalResolved => "approval_resolved",
         EventType::ApprovalReturnedToCodex => "approval_returned_to_codex",
+        EventType::ApprovalReturnedToTool => "approval_returned_to_tool",
         EventType::InputRequested => "input_requested",
         EventType::TaskFailed => "task_failed",
         EventType::AssistantMessageCompleted => "assistant_message_completed",
@@ -300,6 +402,25 @@ fn stable_id_part(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn permission_request_id(
+    tool_key: &str,
+    session_id: &str,
+    turn_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+) -> String {
+    let tool_input_hash = stable_hash(&serde_json::to_string(tool_input).unwrap_or_default());
+    // request id 必须跨 hook 重试稳定，watcher 也依赖同一规则反查并行授权。
+    format!(
+        "{}:{}:{}:{}:{}",
+        tool_key,
+        stable_id_part(session_id),
+        stable_id_part(turn_id),
+        stable_id_part(tool_name),
+        tool_input_hash
+    )
 }
 
 #[cfg(test)]

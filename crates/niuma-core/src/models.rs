@@ -110,6 +110,7 @@ pub enum ApprovalStatus {
     Allowed,
     Denied,
     ReturnedToCodex,
+    ReturnedToTool,
     ResolvedInTool,
 }
 
@@ -171,6 +172,9 @@ pub struct ApprovalRequest {
     pub session_id: String,
     pub turn_id: String,
     pub tool_name: String,
+    // 工具侧调用 ID，用于把 watcher 结果精确匹配回对应授权请求。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,6 +255,7 @@ pub enum EventType {
     ApprovalRequested,
     ApprovalResolved,
     ApprovalReturnedToCodex,
+    ApprovalReturnedToTool,
     InputRequested,
     TaskFailed,
     AssistantMessageCompleted,
@@ -433,6 +438,9 @@ pub struct NiumaEvent {
     pub agent_nickname: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_role: Option<String>,
+    // 工具侧调用 ID，支持一次多个授权时按调用粒度结算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     pub project_path: String,
     pub project_name: String,
     pub event_type: EventType,

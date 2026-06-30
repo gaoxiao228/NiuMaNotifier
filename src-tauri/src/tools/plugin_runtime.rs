@@ -25,7 +25,8 @@ use niuma_core::tool_session_rpc::{
 };
 
 const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
-const SESSION_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+// 首次 snapshot 会扫描本机历史 session；历史较多时 5 秒会误判 provider 启动失败。
+const SESSION_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(20);
 const SESSION_DETAIL_TIMEOUT: Duration = Duration::from_secs(10);
 const PARENT_PID_ENV: &str = "NIUMA_PARENT_PID";
 static NEXT_SESSION_PROVIDER_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);

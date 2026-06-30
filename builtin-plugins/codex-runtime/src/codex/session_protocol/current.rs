@@ -260,6 +260,7 @@ impl CodexJsonlParser {
             session_scope: Some(identity.session_scope.as_event_scope()),
             agent_nickname: identity.agent_nickname,
             agent_role: identity.agent_role,
+            tool_call_id: None,
             project_path,
             project_name,
             event_type: event_type.clone(),

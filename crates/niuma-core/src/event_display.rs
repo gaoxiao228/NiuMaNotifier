@@ -74,9 +74,9 @@ pub(crate) fn status_for_event_type(event_type: &EventType) -> RuntimeStateStatu
         EventType::SessionStarted | EventType::SessionActivity | EventType::ApprovalResolved => {
             RuntimeStateStatus::Running
         }
-        EventType::ApprovalRequested | EventType::ApprovalReturnedToCodex => {
-            RuntimeStateStatus::WaitingApproval
-        }
+        EventType::ApprovalRequested
+        | EventType::ApprovalReturnedToCodex
+        | EventType::ApprovalReturnedToTool => RuntimeStateStatus::WaitingApproval,
         EventType::InputRequested => RuntimeStateStatus::WaitingInput,
         EventType::TaskFailed => RuntimeStateStatus::Error,
         EventType::AssistantMessageCompleted | EventType::ManualDismissed => {
@@ -94,6 +94,7 @@ pub(crate) fn event_type_name(event_type: &EventType) -> &'static str {
         EventType::ApprovalRequested => "approval_requested",
         EventType::ApprovalResolved => "approval_resolved",
         EventType::ApprovalReturnedToCodex => "approval_returned_to_codex",
+        EventType::ApprovalReturnedToTool => "approval_returned_to_tool",
         EventType::InputRequested => "input_requested",
         EventType::TaskFailed => "task_failed",
         EventType::AssistantMessageCompleted => "assistant_message_completed",

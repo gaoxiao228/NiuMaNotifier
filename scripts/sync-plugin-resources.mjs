@@ -10,6 +10,7 @@ const exeSuffix = process.platform === "win32" ? ".exe" : "";
 // 这里必须覆盖所有内置插件二进制，确保 Tauri 打包资源与构建脚本保持一致。
 const plugins = [
   "niuma-codex-plugin",
+  "niuma-claude-code-plugin",
   "niuma-plugin-bark",
   "niuma-plugin-ntfy",
 ];

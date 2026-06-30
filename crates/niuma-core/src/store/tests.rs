@@ -22,6 +22,10 @@ fn approval_status_serializes_as_snake_case() {
         serde_json::to_value(ApprovalStatus::ReturnedToCodex).unwrap(),
         serde_json::json!("returned_to_codex")
     );
+    assert_eq!(
+        serde_json::to_value(ApprovalStatus::ReturnedToTool).unwrap(),
+        serde_json::json!("returned_to_tool")
+    );
 }
 
 #[test]
@@ -2318,6 +2322,7 @@ fn sample_approval_request(id: &str) -> ApprovalRequest {
         session_id: "session-approval".to_string(),
         turn_id: "turn-approval".to_string(),
         tool_name: "Bash".to_string(),
+        tool_call_id: None,
         command: Some("cargo test".to_string()),
         description: Some("运行测试".to_string()),
         project_path: "/tmp/demo".to_string(),
@@ -2402,6 +2407,7 @@ fn sample_session_event(
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: None,
         project_path: "/tmp/demo".to_string(),
         project_name: "demo".to_string(),
         event_type,

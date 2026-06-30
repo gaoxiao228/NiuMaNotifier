@@ -9,8 +9,8 @@ use niuma_core::approval_arbitration::{
 use niuma_core::codex_managed_session::{read_registry, wrapper_session_id_from_channel_id};
 use niuma_core::models::{
     ApprovalChannel, ApprovalControlRef, ApprovalDecisionKind, ApprovalProxyStatus,
-    ApprovalRequest, ApprovalStatus, EventInteractionDetail, EventType, NiumaEvent,
-    RuntimeStateStatus, ToolId,
+    ApprovalRequest, ApprovalStatus, CompletionReason, EventInteractionDetail, EventType,
+    NiumaEvent, RuntimeStateStatus, ToolId,
 };
 use niuma_core::platform::paths::codex_managed_registry_path;
 use serde::Deserialize;
@@ -29,6 +29,7 @@ pub(crate) struct ApprovalRequestBody {
     session_id: String,
     turn_id: String,
     tool_name: String,
+    tool_call_id: Option<String>,
     command: Option<String>,
     description: Option<String>,
     project_path: String,
@@ -231,6 +232,103 @@ pub(super) fn cancel_codex_watcher_approval_if_resolved(
         .cancel_pending_by_attention_resolve_key(resolve_key)
 }
 
+pub(super) fn resolve_claude_watcher_approval_if_tool_continued(
+    state: &AppState,
+    event: &NiumaEvent,
+) -> Result<Option<NiumaEvent>, String> {
+    if event.tool != ToolId::ClaudeCode
+        || event.source != "claude-code-session-file"
+        || !is_claude_tool_continued_or_interrupted_event(event)
+    {
+        return Ok(None);
+    }
+    let Some(request) = claude_watcher_resolution_candidate(state, event)? else {
+        return Ok(None);
+    };
+    let result = state.store.resolve_approval_in_tool(
+        &request.id,
+        "claude-code-session-file",
+        Some("tool_result".to_string()),
+        Utc::now(),
+    )?;
+    if !result.accepted {
+        return Ok(None);
+    }
+    Ok(Some(approval_event(
+        &result.request,
+        EventType::ApprovalResolved,
+        "info",
+        "approval-api",
+    )))
+}
+
+fn is_claude_tool_continued_or_interrupted_event(event: &NiumaEvent) -> bool {
+    matches!(
+        event.event_type,
+        EventType::SessionActivity | EventType::TaskFailed
+    ) || (event.event_type == EventType::AssistantMessageCompleted
+        && event.completion_reason == Some(CompletionReason::Interrupted))
+}
+
+fn claude_watcher_resolution_candidate(
+    state: &AppState,
+    event: &NiumaEvent,
+) -> Result<Option<ApprovalRequest>, String> {
+    let candidates = state
+        .store
+        .approval_requests()?
+        .into_iter()
+        .filter(|request| {
+            request.tool == ToolId::ClaudeCode
+                && request.session_id == event.session_id
+                && matches!(
+                    request.status,
+                    ApprovalStatus::Pending
+                        | ApprovalStatus::ReturnedToCodex
+                        | ApprovalStatus::ReturnedToTool
+                )
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(request_id) =
+        approval_request_id_from_resolve_key(event.attention_resolve_key.as_deref())
+    {
+        return Ok(candidates
+            .into_iter()
+            .find(|request| request.id == request_id));
+    }
+
+    if let Some(tool_call_id) = event.tool_call_id.as_deref() {
+        let exact = candidates
+            .iter()
+            .filter(|request| request.tool_call_id.as_deref() == Some(tool_call_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if exact.len() == 1 {
+            return Ok(exact.into_iter().next());
+        }
+        if exact.len() > 1 {
+            return Ok(None);
+        }
+
+        let unkeyed = candidates
+            .iter()
+            .filter(|request| request.tool_call_id.is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        return Ok((unkeyed.len() == 1).then(|| unkeyed[0].clone()));
+    }
+
+    Ok((candidates.len() == 1).then(|| candidates[0].clone()))
+}
+
+fn approval_request_id_from_resolve_key(resolve_key: Option<&str>) -> Option<&str> {
+    resolve_key?.strip_prefix("approval:")
+}
+
 fn watcher_approval_fingerprint(event: &NiumaEvent) -> Option<ApprovalFingerprint> {
     let content = event.content.as_deref().unwrap_or(event.summary.as_str());
     let command = content.strip_prefix("exec_command: ").unwrap_or(content);
@@ -315,6 +413,7 @@ fn watcher_fallback_resolved_event(
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: request.tool_call_id.clone(),
         project_path: request.project_path.clone(),
         project_name: request.project_name.clone(),
         event_type: EventType::ApprovalResolved,
@@ -737,7 +836,7 @@ pub(crate) async fn post_approval_return_to_codex(
             if result.accepted {
                 let event = approval_event(
                     &result.request,
-                    EventType::ApprovalReturnedToCodex,
+                    returned_event_type_for_request(&result.request),
                     "info",
                     "approval-api",
                 );
@@ -964,6 +1063,7 @@ fn build_approval_request(body: ApprovalRequestBody) -> Result<ApprovalRequest, 
         session_id: required_trimmed(&body.session_id, "session_id")?,
         turn_id: required_trimmed(&body.turn_id, "turn_id")?,
         tool_name: required_trimmed(&body.tool_name, "tool_name")?,
+        tool_call_id: shared::trim_optional_string(body.tool_call_id),
         command: shared::trim_optional_string(body.command),
         description: shared::trim_optional_string(body.description),
         project_path: required_trimmed(&body.project_path, "project_path")?,
@@ -1005,20 +1105,28 @@ fn approval_event(
             interaction.control_ref = request.control_ref.clone();
             Some(interaction)
         }
-        EventType::ApprovalReturnedToCodex => Some(EventInteractionDetail::tool_approval(
-            "请回到 Codex 中同意或拒绝",
-        )),
+        EventType::ApprovalReturnedToCodex | EventType::ApprovalReturnedToTool => {
+            Some(EventInteractionDetail::tool_approval(format!(
+                "请回到 {} 中同意或拒绝",
+                approval_tool_display_name(&request.tool)
+            )))
+        }
         EventType::ApprovalResolved => match request.status {
-            ApprovalStatus::Allowed => Some(EventInteractionDetail::tool_approval(
-                "已同意，等待 Codex 继续",
-            )),
-            ApprovalStatus::Denied => Some(EventInteractionDetail::tool_approval(
-                "已拒绝，等待 Codex 继续",
-            )),
-            ApprovalStatus::ResolvedInTool => {
-                Some(EventInteractionDetail::tool_approval("已在 Codex 中处理"))
-            }
-            ApprovalStatus::Pending | ApprovalStatus::ReturnedToCodex => None,
+            ApprovalStatus::Allowed => Some(EventInteractionDetail::tool_approval(format!(
+                "已同意，等待 {} 继续",
+                approval_tool_display_name(&request.tool)
+            ))),
+            ApprovalStatus::Denied => Some(EventInteractionDetail::tool_approval(format!(
+                "已拒绝，等待 {} 继续",
+                approval_tool_display_name(&request.tool)
+            ))),
+            ApprovalStatus::ResolvedInTool => Some(EventInteractionDetail::tool_approval(format!(
+                "已在 {} 中处理",
+                approval_tool_display_name(&request.tool)
+            ))),
+            ApprovalStatus::Pending
+            | ApprovalStatus::ReturnedToCodex
+            | ApprovalStatus::ReturnedToTool => None,
         },
         _ => None,
     };
@@ -1038,6 +1146,7 @@ fn approval_event(
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: request.tool_call_id.clone(),
         project_path: request.project_path.clone(),
         project_name: request.project_name.clone(),
         event_type,
@@ -1067,6 +1176,14 @@ pub(crate) fn approval_event_for_internal(
     approval_event(request, event_type, severity, source)
 }
 
+fn approval_tool_display_name(tool: &ToolId) -> &str {
+    match tool {
+        ToolId::Codex => "Codex",
+        ToolId::ClaudeCode => "Claude Code",
+        ToolId::Custom(value) => value.as_str(),
+    }
+}
+
 fn approval_response(request: &ApprovalRequest, accepted: Option<bool>) -> serde_json::Value {
     let mut value = json!({
         "request_id": request.id,
@@ -1089,6 +1206,7 @@ fn decision_value_for_status(status: &ApprovalStatus) -> serde_json::Value {
         ApprovalStatus::Denied => json!("deny"),
         ApprovalStatus::Pending
         | ApprovalStatus::ReturnedToCodex
+        | ApprovalStatus::ReturnedToTool
         | ApprovalStatus::ResolvedInTool => serde_json::Value::Null,
     }
 }
@@ -1107,9 +1225,10 @@ fn parse_approval_status(value: &str) -> Result<ApprovalStatus, String> {
         "allowed" => Ok(ApprovalStatus::Allowed),
         "denied" => Ok(ApprovalStatus::Denied),
         "returned_to_codex" => Ok(ApprovalStatus::ReturnedToCodex),
+        "returned_to_tool" => Ok(ApprovalStatus::ReturnedToTool),
         "resolved_in_tool" => Ok(ApprovalStatus::ResolvedInTool),
         _ => Err(
-            "status 仅支持 pending、allowed、denied、returned_to_codex 或 resolved_in_tool"
+            "status 仅支持 pending、allowed、denied、returned_to_codex、returned_to_tool 或 resolved_in_tool"
                 .to_string(),
         ),
     }
@@ -1144,7 +1263,15 @@ fn event_type_key(event_type: &EventType) -> &'static str {
         EventType::ApprovalRequested => "approval_requested",
         EventType::ApprovalResolved => "approval_resolved",
         EventType::ApprovalReturnedToCodex => "approval_returned_to_codex",
+        EventType::ApprovalReturnedToTool => "approval_returned_to_tool",
         _ => "approval_event",
+    }
+}
+
+fn returned_event_type_for_request(request: &ApprovalRequest) -> EventType {
+    match request.status {
+        ApprovalStatus::ReturnedToTool => EventType::ApprovalReturnedToTool,
+        _ => EventType::ApprovalReturnedToCodex,
     }
 }
 

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 const CODEX_PLUGIN_BINARY_NAME: &str = "niuma-codex-plugin";
+const CLAUDE_CODE_PLUGIN_BINARY_NAME: &str = "niuma-claude-code-plugin";
 const BARK_PLUGIN_BINARY_NAME: &str = "niuma-plugin-bark";
 const NTFY_PLUGIN_BINARY_NAME: &str = "niuma-plugin-ntfy";
 
@@ -10,6 +11,14 @@ pub fn configure_builtin_codex_plugin_command(app: &tauri::App) {
         app,
         niuma_core::plugin::CODEX_PLUGIN_COMMAND_ENV,
         CODEX_PLUGIN_BINARY_NAME,
+    );
+}
+
+pub fn configure_builtin_claude_code_plugin_command(app: &tauri::App) {
+    configure_builtin_plugin_command(
+        app,
+        niuma_core::plugin::CLAUDE_CODE_PLUGIN_COMMAND_ENV,
+        CLAUDE_CODE_PLUGIN_BINARY_NAME,
     );
 }
 
@@ -104,6 +113,26 @@ mod tests {
 
         let command =
             resolve_builtin_plugin_command(NTFY_PLUGIN_BINARY_NAME, Some(&resource_dir), None);
+
+        assert_eq!(command.as_deref(), Some(resource_binary.as_path()));
+    }
+
+    #[test]
+    fn builtin_claude_code_plugin_command_prefers_resource_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let resource_dir = temp.path().join("resources");
+        let resource_bin_dir = resource_dir.join("bin");
+        std::fs::create_dir_all(&resource_bin_dir).unwrap();
+        let executable_name =
+            niuma_core::platform::executable::executable_name(CLAUDE_CODE_PLUGIN_BINARY_NAME);
+        let resource_binary = resource_bin_dir.join(&executable_name);
+        std::fs::write(&resource_binary, "").unwrap();
+
+        let command = resolve_builtin_plugin_command(
+            CLAUDE_CODE_PLUGIN_BINARY_NAME,
+            Some(&resource_dir),
+            None,
+        );
 
         assert_eq!(command.as_deref(), Some(resource_binary.as_path()));
     }

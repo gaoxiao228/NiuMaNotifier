@@ -408,6 +408,7 @@ fn append_answer_input_resolved_event(
         session_scope: None,
         agent_nickname: None,
         agent_role: None,
+        tool_call_id: None,
         project_path: String::new(),
         project_name: String::new(),
         event_type: EventType::SessionActivity,

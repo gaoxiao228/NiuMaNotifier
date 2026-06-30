@@ -3,6 +3,7 @@ pub mod approval;
 pub mod approval_arbitration;
 pub mod claude_code_managed_control;
 pub mod claude_code_managed_session;
+pub mod claude_hook;
 pub mod codex_hook;
 pub mod codex_managed_control;
 pub mod codex_managed_session;

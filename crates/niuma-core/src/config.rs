@@ -42,6 +42,20 @@ pub fn codex_home_from_env(codex_home: Option<&str>, home: Option<&str>) -> Path
     crate::platform::paths::codex_home_from_env(codex_home, home)
 }
 
+pub fn claude_config_dir() -> PathBuf {
+    claude_config_dir_from_env(
+        std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+pub fn claude_config_dir_from_env(claude_config_dir: Option<&str>, home: Option<&str>) -> PathBuf {
+    claude_config_dir
+        .map(PathBuf::from)
+        .or_else(|| home.map(|value| PathBuf::from(value).join(".claude")))
+        .unwrap_or_else(|| PathBuf::from(".claude"))
+}
+
 pub fn watcher_debug_enabled() -> bool {
     env_flag_enabled(std::env::var("NIUMA_CODEX_WATCHER_DEBUG").ok().as_deref())
 }
@@ -107,6 +121,22 @@ mod tests {
             PathBuf::from("/Users/demo").join(".codex")
         );
         assert_eq!(codex_home_from_env(None, None), PathBuf::from(".codex"));
+    }
+
+    #[test]
+    fn claude_config_dir_uses_override_home_or_relative_fallback() {
+        assert_eq!(
+            claude_config_dir_from_env(Some("/tmp/claude"), Some("/Users/demo")),
+            PathBuf::from("/tmp/claude")
+        );
+        assert_eq!(
+            claude_config_dir_from_env(None, Some("/Users/demo")),
+            PathBuf::from("/Users/demo").join(".claude")
+        );
+        assert_eq!(
+            claude_config_dir_from_env(None, None),
+            PathBuf::from(".claude")
+        );
     }
 
     #[test]

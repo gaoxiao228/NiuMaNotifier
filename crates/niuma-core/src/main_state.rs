@@ -342,18 +342,32 @@ fn interaction_from_approval_request(request: &ApprovalRequest) -> EventInteract
             interaction.control_ref = request.control_ref.clone();
             interaction
         }
-        crate::models::ApprovalStatus::Allowed => {
-            EventInteractionDetail::tool_approval("已同意，等待 Codex 继续")
+        crate::models::ApprovalStatus::Allowed => EventInteractionDetail::tool_approval(format!(
+            "已同意，等待 {} 继续",
+            approval_tool_display_name(&request.tool)
+        )),
+        crate::models::ApprovalStatus::Denied => EventInteractionDetail::tool_approval(format!(
+            "已拒绝，等待 {} 继续",
+            approval_tool_display_name(&request.tool)
+        )),
+        crate::models::ApprovalStatus::ReturnedToCodex
+        | crate::models::ApprovalStatus::ReturnedToTool => {
+            EventInteractionDetail::tool_approval(format!(
+                "Niuma 已停止代处理，请回到 {} 中同意或拒绝",
+                approval_tool_display_name(&request.tool)
+            ))
         }
-        crate::models::ApprovalStatus::Denied => {
-            EventInteractionDetail::tool_approval("已拒绝，等待 Codex 继续")
-        }
-        crate::models::ApprovalStatus::ReturnedToCodex => {
-            EventInteractionDetail::tool_approval("Niuma 已停止代处理，请回到 Codex 中同意或拒绝")
-        }
-        crate::models::ApprovalStatus::ResolvedInTool => {
-            EventInteractionDetail::tool_approval("已在 Codex 中处理")
-        }
+        crate::models::ApprovalStatus::ResolvedInTool => EventInteractionDetail::tool_approval(
+            format!("已在 {} 中处理", approval_tool_display_name(&request.tool)),
+        ),
+    }
+}
+
+fn approval_tool_display_name(tool: &ToolKind) -> &str {
+    match tool {
+        ToolKind::Codex => "Codex",
+        ToolKind::ClaudeCode => "Claude Code",
+        ToolKind::Custom(value) => value.as_str(),
     }
 }
 
@@ -506,6 +520,47 @@ mod tests {
         assert_eq!(
             interaction.message.as_deref(),
             Some("Niuma 已停止代处理，请回到 Codex 中同意或拒绝")
+        );
+    }
+
+    #[test]
+    fn returned_to_claude_code_uses_claude_tool_message() {
+        let store = NiumaStore::new(test_sqlite_path("returned_claude_approval_actions"));
+        enable_claude_listener(&store);
+        let mut request = sample_approval_request("approval-claude", ApprovalStatus::Pending);
+        request.tool = ToolKind::ClaudeCode;
+        request.session_id = "claude-session".to_string();
+        store.upsert_approval_request(request).unwrap();
+        let mut event = sample_tool_event(
+            ToolKind::ClaudeCode,
+            "approval-claude-event",
+            EventType::ApprovalRequested,
+            "Bash: cargo test",
+            1_000,
+        );
+        event.session_id = "claude-session".to_string();
+        event.payload_ref = Some("approval:approval-claude".to_string());
+        event.attention_resolve_key = Some("approval:approval-claude".to_string());
+        store.append_event(event).unwrap();
+        let result = store
+            .return_approval_to_codex(
+                "approval-claude",
+                "hook-helper",
+                "timeout",
+                "10 分钟内未处理，请回到 Claude Code 中操作",
+                at(1_600),
+            )
+            .unwrap();
+        assert_eq!(result.request.status, ApprovalStatus::ReturnedToTool);
+
+        let state = MainStateService::new(store)
+            .current_state(at(1_601))
+            .unwrap();
+
+        let interaction = state.detail.unwrap().interaction.unwrap();
+        assert_eq!(
+            interaction.message.as_deref(),
+            Some("Niuma 已停止代处理，请回到 Claude Code 中同意或拒绝")
         );
     }
 
@@ -710,6 +765,7 @@ mod tests {
             session_scope: None,
             agent_nickname: None,
             agent_role: None,
+            tool_call_id: None,
             project_path: "/tmp/demo".to_string(),
             project_name: "demo".to_string(),
             event_type,
@@ -745,6 +801,7 @@ mod tests {
             session_id: "s1".to_string(),
             turn_id: "turn-1".to_string(),
             tool_name: "Bash".to_string(),
+            tool_call_id: None,
             command: Some("cargo test".to_string()),
             description: Some("运行测试".to_string()),
             project_path: "/tmp/demo".to_string(),
@@ -772,6 +829,15 @@ mod tests {
         store
             .save_listener_config(&ListenerConfig {
                 codex_listening_enabled: true,
+                ..ListenerConfig::default()
+            })
+            .unwrap();
+    }
+
+    fn enable_claude_listener(store: &NiumaStore) {
+        store
+            .save_listener_config(&ListenerConfig {
+                claude_code_listening_enabled: true,
                 ..ListenerConfig::default()
             })
             .unwrap();

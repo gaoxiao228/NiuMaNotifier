@@ -906,6 +906,7 @@ Supported `event_type` values:
 | `approval_requested` | Waiting for approval. State becomes `waiting_approval`. |
 | `approval_resolved` | Approval was allowed or denied by a consumer. State returns to `running`. |
 | `approval_returned_to_codex` | Niuma's proxy window ended. State remains `waiting_approval`, and the user must handle it in Codex. |
+| `approval_returned_to_tool` | Niuma's proxy window ended. State remains `waiting_approval`, and the user must handle it in the original tool. |
 | `input_requested` | Waiting for input. State becomes `waiting_input`. |
 | `task_failed` | Task failed. State becomes `error`. |
 | `assistant_message_completed` | Assistant message completed. State becomes `completed`. |
@@ -1262,14 +1263,14 @@ Recommended recovery flow:
 4. Locally dedupe `request_id` values from SSE events and the pending list.
 5. Present pending approval actions from `approval_requested` events and, if enabled, the startup pending list.
 6. On `approval_resolved`, remove or disable the local action.
-7. On `approval_returned_to_codex`, disable the action and tell the user to handle it in Codex.
+7. On `approval_returned_to_codex` or `approval_returned_to_tool`, disable the action and tell the user to handle it in the original tool.
 8. After submitting a decision, use `accepted` to decide whether this consumer won the decision.
 
 Event handling rules:
 
 - On `approval_resolved`: disable local Allow/Deny actions and show the `decided_by` / `decided_source` handler.
-- On `approval_returned_to_codex`: disable local Allow/Deny actions and tell the user to handle the request in Codex.
-- Only `pending` approvals can be decided. Treat `allowed`, `denied`, and `returned_to_codex` as already handled.
+- On `approval_returned_to_codex` or `approval_returned_to_tool`: disable local Allow/Deny actions and tell the user to handle the request in the original tool.
+- Only `pending` approvals can be decided. Treat `allowed`, `denied`, `returned_to_codex`, and `returned_to_tool` as already handled.
 
 Minimal Node.js consumer example:
 

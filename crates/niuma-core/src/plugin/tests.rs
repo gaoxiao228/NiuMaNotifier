@@ -1,4 +1,5 @@
 use super::*;
+use crate::claude_hook::{install_claude_hook, ClaudeHookCommand};
 use crate::codex_hook::{
     codex_config_file, codex_hooks_file, install_codex_hook, CodexHookCommand,
 };
@@ -806,6 +807,72 @@ fn builtin_codex_management_item_declares_remove_hook_action_when_installed() {
 }
 
 #[test]
+fn builtin_claude_management_item_declares_install_hook_action_when_uninstalled() {
+    let _guard = env_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let previous_claude_config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    std::env::set_var("CLAUDE_CONFIG_DIR", temp.path());
+    let registry = PluginRegistry::with_builtin_plugins();
+
+    let items = registry.management_items(
+        &ListenerConfig::default(),
+        &BTreeMap::new(),
+        &HashMap::new(),
+    );
+
+    let claude = items
+        .iter()
+        .find(|plugin| plugin.id == "builtin-claude-code")
+        .unwrap();
+    let action_ids = claude
+        .management_actions
+        .iter()
+        .map(|action| action.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(action_ids, vec!["claude_hook_install"]);
+    assert_eq!(claude.management_actions[0].label, "安装 Hook");
+    assert_eq!(
+        claude.management_actions[0].status_label.as_deref(),
+        Some("Hook 未安装")
+    );
+
+    restore_claude_config_dir(previous_claude_config_dir);
+}
+
+#[test]
+fn builtin_claude_management_item_declares_remove_hook_action_when_installed() {
+    let _guard = env_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let previous_claude_config_dir = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    std::env::set_var("CLAUDE_CONFIG_DIR", temp.path());
+
+    install_claude_hook(temp.path(), ClaudeHookCommand::Installed).unwrap();
+    let registry = PluginRegistry::with_builtin_plugins();
+    let items = registry.management_items(
+        &ListenerConfig::default(),
+        &BTreeMap::new(),
+        &HashMap::new(),
+    );
+
+    let claude = items
+        .iter()
+        .find(|plugin| plugin.id == "builtin-claude-code")
+        .unwrap();
+    assert_eq!(claude.management_actions.len(), 1);
+    let remove_action = &claude.management_actions[0];
+
+    assert_eq!(remove_action.id, "claude_hook_uninstall");
+    assert_eq!(remove_action.label, "移除 Hook");
+    assert_eq!(remove_action.status_label.as_deref(), Some("Hook 已安装"));
+    assert_eq!(
+        remove_action.status_level,
+        PluginManagementActionStatusLevel::Ok
+    );
+
+    restore_claude_config_dir(previous_claude_config_dir);
+}
+
+#[test]
 fn imports_external_plugin_dir_into_destination_root() {
     let source = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();
@@ -1054,6 +1121,14 @@ fn restore_codex_home(previous_codex_home: Option<String>) {
         std::env::set_var("CODEX_HOME", value);
     } else {
         std::env::remove_var("CODEX_HOME");
+    }
+}
+
+fn restore_claude_config_dir(previous_claude_config_dir: Option<String>) {
+    if let Some(value) = previous_claude_config_dir {
+        std::env::set_var("CLAUDE_CONFIG_DIR", value);
+    } else {
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
 }
 

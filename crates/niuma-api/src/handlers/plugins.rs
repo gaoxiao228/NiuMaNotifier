@@ -3,16 +3,19 @@ use axum::extract::{Query, State};
 use axum::response::Response;
 use chrono::Utc;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
+use niuma_core::claude_hook::{
+    install_claude_hook, uninstall_claude_hook, ClaudeHookCommand, ClaudeHookStatus,
+};
 use niuma_core::codex_hook::{
     install_codex_hook, uninstall_codex_hook, CodexHookCommand, CodexHookStatus,
 };
-use niuma_core::config::codex_home;
+use niuma_core::config::{claude_config_dir, codex_home};
 use niuma_core::models::EventType;
 use niuma_core::notification_store::{NotificationRecordStatus, PluginNotificationResult};
 use niuma_core::plugin::{
     import_external_plugin_dir, listener_config_after_plugin_removed, plugin_uses_listener_config,
     remove_external_plugin, save_plugin_enabled_state, validate_plugin_config, PluginKind,
-    PluginRegistry, PluginSource, BUILTIN_CODEX_PLUGIN_ID,
+    PluginRegistry, PluginSource, BUILTIN_CLAUDE_CODE_PLUGIN_ID, BUILTIN_CODEX_PLUGIN_ID,
 };
 use niuma_core::runtime_event::StateChangeReason;
 use serde::Deserialize;
@@ -555,7 +558,7 @@ pub(crate) async fn run_plugin_action(State(state): State<AppState>, body: Bytes
             ),
         );
     };
-    if plugin.id != BUILTIN_CODEX_PLUGIN_ID {
+    if plugin.id != BUILTIN_CODEX_PLUGIN_ID && plugin.id != BUILTIN_CLAUDE_CODE_PLUGIN_ID {
         return json_response(
             200,
             ApiResponse::fail(
@@ -571,13 +574,18 @@ pub(crate) async fn run_plugin_action(State(state): State<AppState>, body: Bytes
             install_codex_hook(&codex_home(), codex_hook_command_mode()).map(|status| {
                 (
                     "Hook 已安装，请在 Codex 中执行 /hooks 信任 Niuma Hook",
-                    status,
+                    codex_hook_status_json(status),
                 )
             })
         }
-        "codex_hook_uninstall" => {
-            uninstall_codex_hook(&codex_home()).map(|status| ("Hook 已移除", status))
+        "codex_hook_uninstall" => uninstall_codex_hook(&codex_home())
+            .map(|status| ("Hook 已移除", codex_hook_status_json(status))),
+        "claude_hook_install" => {
+            install_claude_hook(&claude_config_dir(), claude_hook_command_mode())
+                .map(|status| ("Claude Code Hook 已安装", claude_hook_status_json(status)))
         }
+        "claude_hook_uninstall" => uninstall_claude_hook(&claude_config_dir())
+            .map(|status| ("Hook 已移除", claude_hook_status_json(status))),
         _ => Err(format!(
             "未知插件动作：{} / {}",
             request.plugin_id, request.action_id
@@ -587,7 +595,9 @@ pub(crate) async fn run_plugin_action(State(state): State<AppState>, body: Bytes
         Ok(result) => result,
         Err(error)
             if request.action_id != "codex_hook_install"
-                && request.action_id != "codex_hook_uninstall" =>
+                && request.action_id != "codex_hook_uninstall"
+                && request.action_id != "claude_hook_install"
+                && request.action_id != "claude_hook_uninstall" =>
         {
             return json_response(
                 200,
@@ -603,7 +613,7 @@ pub(crate) async fn run_plugin_action(State(state): State<AppState>, body: Bytes
                 "plugin_id": request.plugin_id,
                 "action_id": request.action_id,
                 "message": message,
-                "status": codex_hook_status_json(status),
+                "status": status,
                 "plugins": plugins
             })),
         ),
@@ -642,11 +652,25 @@ fn codex_hook_status_json(status: CodexHookStatus) -> serde_json::Value {
     json!(status)
 }
 
+fn claude_hook_status_json(status: ClaudeHookStatus) -> serde_json::Value {
+    json!(status)
+}
+
 fn codex_hook_command_mode() -> CodexHookCommand {
     if niuma_core::platform::executable::command_on_path("niuma") {
         CodexHookCommand::Installed
     } else {
         CodexHookCommand::Dev {
+            manifest_path: repo_manifest_path(),
+        }
+    }
+}
+
+fn claude_hook_command_mode() -> ClaudeHookCommand {
+    if niuma_core::platform::executable::command_on_path("niuma") {
+        ClaudeHookCommand::Installed
+    } else {
+        ClaudeHookCommand::Dev {
             manifest_path: repo_manifest_path(),
         }
     }

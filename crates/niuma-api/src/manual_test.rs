@@ -113,6 +113,7 @@ fn manual_test_events(request: ManualTestScenarioRequest) -> Result<Vec<NiumaEve
                 session_scope: None,
                 agent_nickname: None,
                 agent_role: None,
+                tool_call_id: None,
                 project_path,
                 project_name,
                 event_type,

@@ -6,7 +6,8 @@ use chrono::Utc;
 use niuma_api::local_api_addr;
 use niuma_core::api_response::{ApiErrorCode, ApiResponse};
 use niuma_core::hook_payload::{
-    codex_permission_request_from_payload, CodexPermissionRequest, HookPayloadParser, HookToolHint,
+    claude_permission_request_from_payload, codex_permission_request_from_payload,
+    ClaudePermissionRequest, CodexPermissionRequest, HookPayloadParser, HookToolHint,
 };
 use niuma_core::local_api_client::{get_local_api, post_local_api, submit_event_to_local_api};
 use niuma_core::models::{ApprovalDecisionKind, ApprovalStatus, NiumaEvent, ToolKind};
@@ -19,6 +20,10 @@ const CODEX_APPROVAL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 
 pub fn run_codex_hook() -> ApiResponse<serde_json::Value> {
     run_hook(HookToolHint::Codex)
+}
+
+pub fn run_claude_code_hook() -> ApiResponse<serde_json::Value> {
+    run_hook(HookToolHint::ClaudeCode)
 }
 
 pub fn run_hook(tool_hint: HookToolHint) -> ApiResponse<serde_json::Value> {
@@ -40,6 +45,16 @@ pub fn run_hook(tool_hint: HookToolHint) -> ApiResponse<serde_json::Value> {
             CODEX_APPROVAL_POLL_INTERVAL,
         );
     }
+    if tool_hint == HookToolHint::ClaudeCode && is_hook_event(&input, "PermissionRequest") {
+        let store = NiumaStore::new(NiumaStore::default_path());
+        return run_claude_permission_proxy(
+            &store,
+            &local_api_addr(),
+            &input,
+            CODEX_APPROVAL_PROXY_TIMEOUT,
+            CODEX_APPROVAL_POLL_INTERVAL,
+        );
+    }
 
     match HookPayloadParser::parse(&input, tool_hint, Utc::now()) {
         Ok(Some(event)) => {
@@ -51,6 +66,95 @@ pub fn run_hook(tool_hint: HookToolHint) -> ApiResponse<serde_json::Value> {
             ApiErrorCode::ParameterFormat,
             format!("JSON 解析失败：{error}"),
         ),
+    }
+}
+
+fn run_claude_permission_proxy(
+    store: &NiumaStore,
+    local_api_addr: &str,
+    input: &[u8],
+    timeout: Duration,
+    poll_interval: Duration,
+) -> ApiResponse<serde_json::Value> {
+    let request = match claude_permission_request_from_payload(input) {
+        Ok(request) => request,
+        Err(error) => {
+            return ApiResponse::fail(
+                ApiErrorCode::ParameterFormat,
+                format!("JSON 解析失败：{error}"),
+            );
+        }
+    };
+    match store.listener_config() {
+        Ok(config) if !config.is_tool_enabled(&ToolKind::ClaudeCode) => {
+            return ApiResponse::ok(json!({
+                "request_id": request.id,
+                "submitted": false,
+                "reason": tool_listening_disabled_reason(&ToolKind::ClaudeCode)
+            }));
+        }
+        Ok(_) => {}
+        Err(error) => return ApiResponse::fail(ApiErrorCode::System, error),
+    }
+
+    let create_result = match create_claude_approval_request(local_api_addr, &request, timeout) {
+        Ok(value) => value,
+        Err(error) => return ApiResponse::fail(ApiErrorCode::ServiceUnavailable, error),
+    };
+    if approval_create_returned_to_tool(&create_result) {
+        return ApiResponse::ok(json!({
+            "request_id": request.id,
+            "returned_to_tool": true,
+            "tool": "claude_code",
+            "reason": "already_fallback_to_tool"
+        }));
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_heartbeat = std::time::Instant::now();
+    while std::time::Instant::now() < deadline {
+        if last_heartbeat.elapsed() >= CODEX_APPROVAL_HEARTBEAT_INTERVAL {
+            if let Err(error) = heartbeat_approval_proxy(local_api_addr, &request.id) {
+                eprintln!(
+                    "NiumaNotifier approval heartbeat failed request_id={}: {}",
+                    request.id, error
+                );
+            }
+            last_heartbeat = std::time::Instant::now();
+        }
+        match approval_decision(local_api_addr, &request.id) {
+            Ok(Some(ApprovalDecisionKind::Allow)) => {
+                print_claude_decision(ApprovalDecisionKind::Allow, None);
+                return ApiResponse::ok(json!({
+                    "request_id": request.id,
+                    "decision": "allow",
+                    "submitted": true
+                }));
+            }
+            Ok(Some(ApprovalDecisionKind::Deny)) => {
+                print_claude_decision(
+                    ApprovalDecisionKind::Deny,
+                    Some("用户在 NiuMa 中拒绝了本次权限请求".to_string()),
+                );
+                return ApiResponse::ok(json!({
+                    "request_id": request.id,
+                    "decision": "deny",
+                    "submitted": true
+                }));
+            }
+            Ok(None) => thread::sleep(poll_interval),
+            Err(error) => return ApiResponse::fail(ApiErrorCode::ServiceUnavailable, error),
+        }
+    }
+
+    match return_approval_to_tool(local_api_addr, &request.id, "Claude Code") {
+        Ok(value) => ApiResponse::ok(json!({
+            "request_id": request.id,
+            "returned_to_tool": true,
+            "tool": "claude_code",
+            "local_api": value
+        })),
+        Err(error) => ApiResponse::fail(ApiErrorCode::ServiceUnavailable, error),
     }
 }
 
@@ -86,7 +190,7 @@ fn run_codex_permission_proxy(
         Ok(value) => value,
         Err(error) => return ApiResponse::fail(ApiErrorCode::ServiceUnavailable, error),
     };
-    if approval_create_returned_to_codex(&create_result) {
+    if approval_create_returned_to_tool(&create_result) {
         return ApiResponse::ok(json!({
             "request_id": request.id,
             "returned_to_codex": true,
@@ -201,24 +305,83 @@ fn print_codex_decision(decision: ApprovalDecisionKind, message: Option<String>)
     );
 }
 
+pub(crate) fn claude_permission_decision_stdout(
+    decision: ApprovalDecisionKind,
+    message: Option<String>,
+) -> serde_json::Value {
+    codex_permission_decision_stdout(decision, message)
+}
+
+fn print_claude_decision(decision: ApprovalDecisionKind, message: Option<String>) {
+    let value = claude_permission_decision_stdout(decision, message);
+    println!(
+        "{}",
+        serde_json::to_string(&value).expect("Claude Code hook 输出必须可序列化")
+    );
+}
+
 fn create_approval_request(
     local_api_addr: &str,
     request: &CodexPermissionRequest,
     timeout: Duration,
 ) -> Result<serde_json::Value, String> {
-    let body = json!({
+    post_json_envelope(
+        local_api_addr,
+        "/api/v1/approval-requests",
+        codex_approval_request_body(request, timeout),
+    )
+}
+
+fn codex_approval_request_body(
+    request: &CodexPermissionRequest,
+    timeout: Duration,
+) -> serde_json::Value {
+    json!({
         "request_id": request.id,
         "tool": "codex",
         "session_id": request.session_id,
         "turn_id": request.turn_id,
         "tool_name": request.tool_name,
+        "tool_call_id": request.tool_call_id,
         "command": request.command,
         "description": request.description,
         "project_path": request.project_path,
         "project_name": request.project_name,
-        "timeout_seconds": timeout.as_secs()
-    });
-    post_json_envelope(local_api_addr, "/api/v1/approval-requests", body)
+        "timeout_seconds": timeout.as_secs(),
+        "channel": "hook_proxy"
+    })
+}
+
+fn create_claude_approval_request(
+    local_api_addr: &str,
+    request: &ClaudePermissionRequest,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    post_json_envelope(
+        local_api_addr,
+        "/api/v1/approval-requests",
+        claude_approval_request_body(request, timeout),
+    )
+}
+
+fn claude_approval_request_body(
+    request: &ClaudePermissionRequest,
+    timeout: Duration,
+) -> serde_json::Value {
+    json!({
+        "request_id": request.id,
+        "tool": "claude_code",
+        "session_id": request.session_id,
+        "turn_id": request.turn_id,
+        "tool_name": request.tool_name,
+        "tool_call_id": request.tool_call_id,
+        "command": request.command,
+        "description": request.description,
+        "project_path": request.project_path,
+        "project_name": request.project_name,
+        "timeout_seconds": timeout.as_secs(),
+        "channel": "hook_proxy"
+    })
 }
 
 fn approval_decision(
@@ -235,6 +398,7 @@ fn approval_decision(
         ApprovalStatus::Denied => Ok(Some(ApprovalDecisionKind::Deny)),
         ApprovalStatus::Pending
         | ApprovalStatus::ReturnedToCodex
+        | ApprovalStatus::ReturnedToTool
         | ApprovalStatus::ResolvedInTool => Ok(None),
     }
 }
@@ -243,13 +407,21 @@ fn return_approval_to_codex(
     local_api_addr: &str,
     request_id: &str,
 ) -> Result<serde_json::Value, String> {
+    return_approval_to_tool(local_api_addr, request_id, "Codex")
+}
+
+fn return_approval_to_tool(
+    local_api_addr: &str,
+    request_id: &str,
+    tool_name: &str,
+) -> Result<serde_json::Value, String> {
     post_json_envelope(
         local_api_addr,
         "/api/v1/approval-requests/return",
         json!({
             "request_id": request_id,
             "returned_by": "hook-helper",
-            "reason": "10 分钟内未处理，请回到 Codex 中操作"
+            "reason": format!("10 分钟内未处理，请回到 {tool_name} 中操作")
         }),
     )
 }
@@ -304,14 +476,18 @@ fn approval_status_from_value(value: &serde_json::Value) -> Result<ApprovalStatu
         "allowed" => Ok(ApprovalStatus::Allowed),
         "denied" => Ok(ApprovalStatus::Denied),
         "returned_to_codex" => Ok(ApprovalStatus::ReturnedToCodex),
+        "returned_to_tool" => Ok(ApprovalStatus::ReturnedToTool),
         "resolved_in_tool" => Ok(ApprovalStatus::ResolvedInTool),
         other => Err(format!("未知授权状态：{other}")),
     }
 }
 
-fn approval_create_returned_to_codex(value: &serde_json::Value) -> bool {
+fn approval_create_returned_to_tool(value: &serde_json::Value) -> bool {
     value.get("accepted").and_then(serde_json::Value::as_bool) == Some(false)
-        && value.get("hook_action").and_then(serde_json::Value::as_str) == Some("return_to_codex")
+        && matches!(
+            value.get("hook_action").and_then(serde_json::Value::as_str),
+            Some("return_to_codex" | "return_to_tool")
+        )
 }
 
 fn is_hook_event(input: &[u8], expected: &str) -> bool {
@@ -373,16 +549,57 @@ mod tests {
     }
 
     #[test]
-    fn approval_create_response_return_to_codex_is_detected() {
+    fn claude_allow_decision_stdout_matches_permission_request_schema() {
+        let value = claude_permission_decision_stdout(ApprovalDecisionKind::Allow, None);
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": { "behavior": "allow" }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn claude_approval_request_body_uses_claude_code_tool() {
+        let request = niuma_core::hook_payload::ClaudePermissionRequest {
+            id: "claude-request-1".to_string(),
+            session_id: "claude-session-1".to_string(),
+            turn_id: "permission_request".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_call_id: Some("call-1".to_string()),
+            command: Some("cargo test".to_string()),
+            description: Some("运行测试".to_string()),
+            project_path: "/tmp/demo".to_string(),
+            project_name: "demo".to_string(),
+        };
+
+        let body = claude_approval_request_body(&request, Duration::from_secs(600));
+
+        assert_eq!(body["request_id"], "claude-request-1");
+        assert_eq!(body["tool"], "claude_code");
+        assert_eq!(body["channel"], "hook_proxy");
+        assert_eq!(body["session_id"], "claude-session-1");
+        assert_eq!(body["turn_id"], "permission_request");
+        assert_eq!(body["tool_call_id"], "call-1");
+        assert_eq!(body["command"], "cargo test");
+        assert_eq!(body["description"], "运行测试");
+    }
+
+    #[test]
+    fn approval_create_response_return_to_tool_is_detected() {
         let value = serde_json::json!({
             "request_id": "approval-1",
             "accepted": false,
             "ownership": "watcher_fallback",
-            "hook_action": "return_to_codex",
+            "hook_action": "return_to_tool",
             "status": "already_fallback"
         });
 
-        assert!(approval_create_returned_to_codex(&value));
+        assert!(approval_create_returned_to_tool(&value));
     }
 
     #[test]
@@ -448,6 +665,7 @@ mod tests {
             session_scope: None,
             agent_nickname: None,
             agent_role: None,
+            tool_call_id: None,
             project_path: "/tmp/hook".to_string(),
             project_name: "hook".to_string(),
             event_type: EventType::SessionStarted,

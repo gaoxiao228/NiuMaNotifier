@@ -372,6 +372,7 @@ mod tests {
             session_scope: None,
             agent_nickname: None,
             agent_role: None,
+            tool_call_id: None,
             project_path: "/tmp/demo".to_string(),
             project_name: "demo".to_string(),
             event_type: crate::models::EventType::ApprovalRequested,

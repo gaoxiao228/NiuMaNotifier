@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 
 use crate::models::{
     ApprovalChannel, ApprovalDecisionKind, ApprovalProxyStatus, ApprovalRequest, ApprovalStatus,
+    ToolKind,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,7 +31,10 @@ pub fn decide(
     now: DateTime<Utc>,
 ) -> Result<ApprovalMutationResult, String> {
     let request = find_request_mut(requests, request_id)?;
-    if request.status != ApprovalStatus::Pending {
+    if !matches!(
+        request.status,
+        ApprovalStatus::Pending | ApprovalStatus::ReturnedToCodex | ApprovalStatus::ReturnedToTool
+    ) {
         return Ok(ApprovalMutationResult {
             accepted: false,
             request: request.clone(),
@@ -68,7 +72,7 @@ pub fn return_to_codex(
         });
     }
 
-    request.status = ApprovalStatus::ReturnedToCodex;
+    request.status = returned_status_for_tool(&request.tool);
     request.decided_by = Some(returned_by.to_string());
     request.decided_source = Some(returned_source.to_string());
     request.reason = Some(reason.to_string());
@@ -88,7 +92,10 @@ pub fn resolve_in_tool(
     now: DateTime<Utc>,
 ) -> Result<ApprovalMutationResult, String> {
     let request = find_request_mut(requests, request_id)?;
-    if request.status != ApprovalStatus::Pending {
+    if !matches!(
+        request.status,
+        ApprovalStatus::Pending | ApprovalStatus::ReturnedToCodex | ApprovalStatus::ReturnedToTool
+    ) {
         return Ok(ApprovalMutationResult {
             accepted: false,
             request: request.clone(),
@@ -153,13 +160,16 @@ pub fn return_stale_proxies_to_codex(
                 return None;
             }
 
-            // hook 代理失联后，NiuMa UI 不能再承诺把决策回传给 Codex。
-            request.status = ApprovalStatus::ReturnedToCodex;
+            // hook 代理失联后，NiuMa UI 不能再承诺把决策回传给原工具。
+            request.status = returned_status_for_tool(&request.tool);
             request.proxy_status = ApprovalProxyStatus::Lost;
             request.proxy_lost_at = Some(now);
             request.decided_by = Some("hook-helper".to_string());
             request.decided_source = Some("proxy_lost".to_string());
-            request.reason = Some("hook 代理已失联，请回到 Codex 中操作".to_string());
+            request.reason = Some(format!(
+                "hook 代理已失联，请回到 {} 中操作",
+                approval_tool_display_name(&request.tool)
+            ));
             request.updated_at = now;
 
             Some(ApprovalMutationResult {
@@ -168,6 +178,21 @@ pub fn return_stale_proxies_to_codex(
             })
         })
         .collect()
+}
+
+fn returned_status_for_tool(tool: &ToolKind) -> ApprovalStatus {
+    match tool {
+        ToolKind::Codex => ApprovalStatus::ReturnedToCodex,
+        ToolKind::ClaudeCode | ToolKind::Custom(_) => ApprovalStatus::ReturnedToTool,
+    }
+}
+
+fn approval_tool_display_name(tool: &ToolKind) -> &str {
+    match tool {
+        ToolKind::Codex => "Codex",
+        ToolKind::ClaudeCode => "Claude Code",
+        ToolKind::Custom(value) => value.as_str(),
+    }
 }
 
 fn find_request_mut<'a>(

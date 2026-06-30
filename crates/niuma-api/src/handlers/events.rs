@@ -23,7 +23,11 @@ pub(crate) async fn post_event(State(state): State<AppState>, body: Bytes) -> Re
                 return approval::handle_watcher_approval_event(state, event).await;
             }
             approval::cancel_codex_watcher_approval_if_resolved(&state, &event);
-            append_events_response(&state, vec![event])
+            match approval::resolve_claude_watcher_approval_if_tool_continued(&state, &event) {
+                Ok(Some(resolved)) => append_events_response(&state, vec![resolved, event]),
+                Ok(None) => append_events_response(&state, vec![event]),
+                Err(error) => json_response(500, ApiResponse::fail(ApiErrorCode::System, error)),
+            }
         }
         Err(error) => json_response(
             400,
@@ -98,7 +102,22 @@ pub(crate) async fn post_plugin_events(State(state): State<AppState>, body: Byte
             }
         } else {
             approval::cancel_codex_watcher_approval_if_resolved(&state, &event);
-            immediate_events.push(event);
+            match approval::resolve_claude_watcher_approval_if_tool_continued(&state, &event) {
+                Ok(Some(resolved)) => {
+                    immediate_events.push(resolved);
+                    immediate_events.push(event.clone());
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return json_response(500, ApiResponse::fail(ApiErrorCode::System, error));
+                }
+            }
+            if !immediate_events
+                .iter()
+                .any(|item| item.id == event.id && item.dedupe_key == event.dedupe_key)
+            {
+                immediate_events.push(event);
+            }
         }
     }
 

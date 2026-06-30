@@ -214,6 +214,7 @@ mod tests {
             session_scope: None,
             agent_nickname: None,
             agent_role: None,
+            tool_call_id: None,
             project_path: "/tmp/runtime".to_string(),
             project_name: "runtime".to_string(),
             event_type: EventType::ApprovalRequested,
