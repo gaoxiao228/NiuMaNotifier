@@ -1380,7 +1380,14 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let short_name = name.chars().take(8).collect::<String>();
-        std::path::PathBuf::from("/tmp").join(format!("na-{short_name}-{nanos}"))
+        let safe_name = name
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>();
+        // 并发测试会清理各自目录，目录名必须包含完整用例名，避免 relay socket 用例互删。
+        std::path::PathBuf::from("/tmp").join(format!(
+            "na-{safe_name}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 }
